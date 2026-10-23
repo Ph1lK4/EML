@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EML.App/EML.App.csproj" />
+    <Project Path="src/EML.Core/EML.Core.csproj" />
+    <Project Path="src/EML.Infrastructure/EML.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EML.Tests/EML.Tests.csproj" />
+  </Folder>
+</Solution>
