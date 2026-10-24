@@ -1,0 +1,22 @@
+name: build-and-test
+
+on:
+  push:
+    branches: [ feature/p0-2-launch-command, master ]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build
+        run: dotnet build EML.slnx -c Release
+
+      - name: Test
+        run: dotnet test EML.slnx -c Release --no-build
