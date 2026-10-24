@@ -1,0 +1,90 @@
+<Window x:Class="Launcher.Gui.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GTNH 启动器（C#）" Height="660" Width="1040"
+        FontSize="13" WindowStartupLocation="CenterScreen">
+    <Grid Margin="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="380" />
+            <ColumnDefinition Width="12" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <GroupBox Header="实例">
+                    <StackPanel>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="浏览…" Width="64" Margin="6,0,0,0" Click="BrowseInstance" />
+                            <TextBox x:Name="InstanceBox" VerticalContentAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,6,0,0">
+                            <Button DockPanel.Dock="Right" Content="刷新" Width="64" Margin="6,0,0,0" Click="RefreshVersionsClick" />
+                            <ComboBox x:Name="VersionBox" />
+                        </DockPanel>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Java" Margin="0,10,0,0">
+                    <StackPanel>
+                        <ComboBox x:Name="JavaBox" SelectionChanged="JavaChanged" />
+                        <DockPanel Margin="0,6,0,0">
+                            <Button DockPanel.Dock="Right" Content="重新检测" Width="84" Margin="6,0,0,0" Click="DetectJava" />
+                            <TextBox x:Name="JavaPathBox" VerticalContentAlignment="Center" />
+                        </DockPanel>
+                        <TextBlock Text="GTNH 用 Java 8 或 17-25 两个变体；挑了哪个就按哪个启动。" FontSize="11"
+                                   Foreground="#777" TextWrapping="Wrap" Margin="0,6,0,0" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="启动参数" Margin="0,10,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="80" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Text="内存 (MB)" VerticalAlignment="Center" />
+                        <TextBox x:Name="MemoryBox" Grid.Column="1" Text="6144" Margin="0,0,0,6" />
+                        <TextBlock Grid.Row="1" Text="玩家名" VerticalAlignment="Center" />
+                        <TextBox x:Name="PlayerBox" Grid.Row="1" Grid.Column="1" Text="Steve" />
+                    </Grid>
+                </GroupBox>
+
+                <GroupBox Header="操作" Margin="0,10,0,0">
+                    <StackPanel>
+                        <Button x:Name="ForgeButton" Content="安装 Forge…" Click="InstallForge" Margin="0,0,0,6" Padding="0,4" />
+                        <Button x:Name="DownloadButton" Content="下载 / 修复文件" Click="DownloadFiles" Margin="0,0,0,6" Padding="0,4" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="84" />
+                            </Grid.ColumnDefinitions>
+                            <Button x:Name="StartButton" Content="启动游戏" Click="StartGame" Padding="0,6"
+                                    Background="#2E7D32" Foreground="White" FontWeight="Bold" />
+                            <Button x:Name="StopButton" Grid.Column="1" Content="停止" Click="StopGame"
+                                    Margin="6,0,0,0" IsEnabled="False" />
+                        </Grid>
+                    </StackPanel>
+                </GroupBox>
+
+                <ProgressBar x:Name="ProgressBarControl" Height="6" Margin="0,10,0,0" />
+                <TextBlock x:Name="Status" Text="就绪" TextWrapping="Wrap" Foreground="#555" Margin="0,6,0,0" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <DockPanel Grid.Column="2">
+            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                <Button DockPanel.Dock="Right" Content="清空" Click="ClearLog" Width="64" />
+                <TextBlock Text="日志" FontWeight="Bold" VerticalAlignment="Center" />
+            </DockPanel>
+            <TextBox x:Name="LogBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                     FontFamily="Consolas" FontSize="12" Background="#111" Foreground="#DADADA" />
+        </DockPanel>
+    </Grid>
+</Window>

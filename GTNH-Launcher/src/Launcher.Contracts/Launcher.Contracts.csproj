@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 跨模块契约：零依赖，任何人加接口都加在这里 -->
+</Project>

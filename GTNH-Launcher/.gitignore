@@ -1,0 +1,18 @@
+# 构建产物
+bin/
+obj/
+
+# 本机工具缓存（项目的受限环境绕行会在这建这几个目录）
+.tmp/
+.dotnet-home/
+.appdata/
+.nuget/
+.dotnet/
+
+# IDE
+.vs/
+.idea/
+*.user
+
+# 测试临时目录
+tests/**/tmp-*/

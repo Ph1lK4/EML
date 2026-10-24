@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>Launcher.Gui</RootNamespace>
+    <AssemblyName>GTNH-Launcher</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Launcher.Contracts\Launcher.Contracts.csproj" />
+    <ProjectReference Include="..\Launcher.Metadata\Launcher.Metadata.csproj" />
+    <ProjectReference Include="..\Launcher.Runtime\Launcher.Runtime.csproj" />
+    <ProjectReference Include="..\Launcher.Download\Launcher.Download.csproj" />
+    <ProjectReference Include="..\Launcher.Forge\Launcher.Forge.csproj" />
+    <ProjectReference Include="..\Launcher.Prism\Launcher.Prism.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\data\1.7.10.json" Link="data\1.7.10.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Launcher.Contracts\Launcher.Contracts.csproj" />
+    <ProjectReference Include="..\Launcher.Metadata\Launcher.Metadata.csproj" />
+  </ItemGroup>
+
+</Project>

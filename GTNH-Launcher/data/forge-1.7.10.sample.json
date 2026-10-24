@@ -1,0 +1,32 @@
+{
+  "id": "1.7.10-Forge10.13.4.1614",
+  "inheritsFrom": "1.7.10",
+  "type": "release",
+  "mainClass": "net.minecraft.launchwrapper.Launch",
+  "minecraftArguments": "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --accessToken ${auth_access_token} --userProperties ${user_properties} --userType ${user_type} --tweakClass cpw.mods.fml.common.launcher.FMLTweaker",
+  "libraries": [
+    {
+      "name": "net.minecraftforge:forge:1.7.10-10.13.4.1614",
+      "downloads": {
+        "artifact": {
+          "path": "net/minecraftforge/forge/1.7.10-10.13.4.1614/forge-1.7.10-10.13.4.1614-universal.jar",
+          "url": "https://example.invalid/forge-universal.jar",
+          "size": 0
+        }
+      }
+    },
+    {
+      "name": "net.minecraft:launchwrapper:1.12",
+      "downloads": {
+        "artifact": {
+          "path": "net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar",
+          "url": "https://example.invalid/launchwrapper-1.12.jar",
+          "size": 0
+        }
+      }
+    },
+    {
+      "name": "net.sf.jopt-simple:jopt-simple:5.0.1"
+    }
+  ]
+}

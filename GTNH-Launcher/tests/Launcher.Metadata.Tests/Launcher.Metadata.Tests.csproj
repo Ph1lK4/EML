@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Launcher.Metadata\Launcher.Metadata.csproj" />
+    <ProjectReference Include="..\..\src\Launcher.Contracts\Launcher.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\Launcher.Runtime\Launcher.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Launcher.Download\Launcher.Download.csproj" />
+    <ProjectReference Include="..\..\src\Launcher.Forge\Launcher.Forge.csproj" />
+    <ProjectReference Include="..\..\src\Launcher.Prism\Launcher.Prism.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\data\1.7.10.json" Link="data\1.7.10.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\data\forge-1.7.10.sample.json" Link="data\forge-1.7.10.sample.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
