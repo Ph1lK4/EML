@@ -1,5 +1,10 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    EML.Tests：单元测试项目（xUnit）。
+    测试「纯逻辑」的部分：启动命令拼接、后面的下载/校验也放这里。
+    界面行为不在这里测，界面靠人工点（窗口、按钮、状态栏）。
+  -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -18,8 +23,13 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!--
+    引用 Core 测接口与模型，引用 Infrastructure 测具体实现
+    （VanillaLaunchPlanner 在 Infrastructure 里）。
+  -->
   <ItemGroup>
     <ProjectReference Include="..\..\src\EML.Core\EML.Core.csproj" />
+    <ProjectReference Include="..\..\src\EML.Infrastructure\EML.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

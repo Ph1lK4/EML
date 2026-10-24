@@ -1,28 +1,39 @@
-﻿using System.Text;
+// ════════════════════════════════════════════════════════════════════
+//  文件：MainWindow.xaml.cs
+//  位置：src\EML.App
+//  作用：主窗口的「接线」—— 只做一件事：把 MainViewModel 挂到窗口上。
+//
+//  这里故意不写业务：
+//    窗口不 new 具体实现之外的任何东西，也不读写文件；
+//    所有逻辑都在 ViewModel 和 Core/Infrastructure 里。
+//  这样以后换界面（WinUI / Avalonia）时，这一层可以整块丢掉。
+// ════════════════════════════════════════════════════════════════════
+
 using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
 using EML.App.ViewModels;
 using EML.Infrastructure.Java;
-
+using EML.Infrastructure.Launch;
 
 namespace EML.App;
 
 /// <summary>
-/// Interaction logic for MainWindow.xaml
+/// 主窗口：数据都来自 <see cref="MainViewModel"/>，窗口本身不碰业务。
+///
+/// 依赖装配放在这里，而不是 ViewModel 里：
+///   ViewModel 只依赖 Core 的接口（IJavaLocator / ILaunchPlanner），
+///   具体用哪个实现，由最外层的窗口决定。
 /// </summary>
 public partial class MainWindow : Window
 {
     public MainWindow()
     {
         InitializeComponent();
-        DataContext = new JavaSettingsViewModel(
-            new WindowsJavaLocator());
+
+        // 一个窗口只挂一个 DataContext：
+        //   Java.*   → Java 环境检测块
+        //   Launch.* → 启动命令块
+        DataContext = new MainViewModel(
+            new WindowsJavaLocator(),
+            new VanillaLaunchPlanner());
     }
 }

@@ -1,6 +1,13 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    EML.Infrastructure：具体实现层。
+    分区：
+      Java/       → Java 环境检测（WindowsJavaLocator，原有功能）
+      Launch/     → 启动命令拼接（VanillaLaunchPlanner，这一步新增）
+  -->
   <ItemGroup>
+    <!-- 实现层只依赖 Core 的接口与模型，不反向依赖 App -->
     <ProjectReference Include="..\EML.Core\EML.Core.csproj" />
   </ItemGroup>
 
