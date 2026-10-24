@@ -20,7 +20,7 @@ namespace EML.App.ViewModels;
 ///
 /// 现在的分区：
 ///   Java   —— Java 环境检测（原有功能，阿淦写的 IJavaLocator）
-///   Launch —— 生成 1.7.10 启动命令（这一步新增）
+///   Launch —— 生成启动命令 + 直接启动 1.7.10（这一步新增）
 ///
 /// 以后加「实例」「下载」「账号」时，在这里各加一个子 VM 即可，
 /// 窗口和现有绑定都不用动。
@@ -30,7 +30,7 @@ public sealed class MainViewModel
     /// <summary>Java 环境检测块。</summary>
     public JavaSettingsViewModel Java { get; }
 
-    /// <summary>启动命令块。</summary>
+    /// <summary>启动块（生成命令 / 启动 / 停止 / 日志）。</summary>
     public LaunchViewModel Launch { get; }
 
     /// <summary>
@@ -39,9 +39,15 @@ public sealed class MainViewModel
     /// </summary>
     /// <param name="javaLocator">Java 检测实现（Infrastructure 的 WindowsJavaLocator）。</param>
     /// <param name="launchPlanner">启动命令实现（Infrastructure 的 VanillaLaunchPlanner）。</param>
-    public MainViewModel(IJavaLocator javaLocator, ILaunchPlanner launchPlanner)
+    /// <param name="gameLauncher">进程启动实现（Infrastructure 的 GameLauncher）。</param>
+    /// <param name="nativesExtractor">本机库解压实现（Infrastructure 的 NativesExtractor）。</param>
+    public MainViewModel(
+        IJavaLocator javaLocator,
+        ILaunchPlanner launchPlanner,
+        IGameLauncher gameLauncher,
+        INativesExtractor nativesExtractor)
     {
         Java = new JavaSettingsViewModel(javaLocator);
-        Launch = new LaunchViewModel(launchPlanner);
+        Launch = new LaunchViewModel(launchPlanner, gameLauncher, nativesExtractor);
     }
 }
