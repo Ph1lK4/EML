@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\EML.Core\EML.Core.csproj" />
+    <ProjectReference Include="..\..\src\EML.Infrastructure\EML.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

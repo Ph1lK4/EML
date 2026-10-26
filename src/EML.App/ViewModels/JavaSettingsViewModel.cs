@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EML.Core.Java;
@@ -18,12 +18,14 @@ public partial class JavaSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string statusText = "尚未检测 Java";
 
+    /// <summary>接收 Java 检测接口，让界面无需了解注册表或磁盘搜索的具体实现。</summary>
     public JavaSettingsViewModel(IJavaLocator javaLocator)
     {
         _javaLocator = javaLocator;
     }
 
     [RelayCommand]
+    /// <summary>执行 Java 检测，更新可绑定的列表与状态，默认选中首项；异常转为界面提示。RelayCommand 会生成 DetectJavaCommand。</summary>
     private async Task DetectJavaAsync()
     {
         try

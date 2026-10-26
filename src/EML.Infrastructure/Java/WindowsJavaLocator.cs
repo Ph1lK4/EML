@@ -16,11 +16,13 @@ public sealed class WindowsJavaLocator : IJavaLocator
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
 
     // 便携 Java 可由设置页传入额外目录；原来的无参构造方式仍然可用。
+    /// <summary>保存可选的额外搜索目录，例如用户指定的便携 Java 文件夹；不传参数仍可自动发现常规安装。</summary>
     public WindowsJavaLocator(IEnumerable<string>? additionalSearchRoots = null)
     {
         _additionalSearchRoots = additionalSearchRoots?.ToArray() ?? [];
     }
 
+    /// <summary>总入口：后台收集候选路径，最多并行验证四个 Java，按实际运行时路径去重，最后按主版本降序返回。</summary>
     public async Task<IReadOnlyList<JavaInstallation>> FindAllAsync(
         CancellationToken cancellationToken = default)
     {
@@ -54,6 +56,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
     }
 
     [SupportedOSPlatform("windows")]
+    /// <summary>从环境变量、注册表、系统标准位置和额外目录发现候选；这里只寻找 java.exe，不代表它已经可以运行。</summary>
     private string[] Discover(CancellationToken token)
     {
         var executables = new HashSet<string>(PathComparer);
@@ -105,6 +108,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         return executables.OrderBy(path => path, PathComparer).ToArray();
     }
 
+    /// <summary>用队列由浅到深搜索一个根目录；限制深度、目录数量和时间，跳过不可访问目录与链接子目录。</summary>
     private static void ScanRoot(string root, int maxDepth,
         HashSet<string> executables, CancellationToken token)
     {
@@ -140,6 +144,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         }
     }
 
+    /// <summary>检查指定目录中是否存在 java.exe，并加入不区分路径大小写的集合；不重复添加相同路径。</summary>
     private static void AddExecutable(string? directory, HashSet<string> paths)
     {
         var normalized = Normalize(directory);
@@ -150,6 +155,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
     }
 
     [SupportedOSPlatform("windows")]
+    /// <summary>读取用户/系统及 32/64 位注册表中的 JavaHome 和软件 InstallLocation，支持非默认盘符安装。</summary>
     private static IReadOnlyList<string> RegistryLocations(CancellationToken token)
     {
         var locations = new List<string>();
@@ -183,6 +189,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
     }
 
     [SupportedOSPlatform("windows")]
+    /// <summary>有限深度递归读取 JavaSoft 子键中的 JavaHome；遇到权限或读写问题跳过，取消请求则继续抛出。</summary>
     private static void ReadJavaKeys(RegistryKey key, int remainingDepth,
         List<string> locations, CancellationToken token)
     {
@@ -205,6 +212,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         catch (Exception ex) when (IsExpected(ex)) { }
     }
 
+    /// <summary>执行 Java 查询属性，同时读取两路输出；单项超时为五秒，失败返回 null，退出时尝试清理仍运行的检测进程。</summary>
     private static async Task<JavaInstallation?> InspectAsync(string path, CancellationToken token)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -252,6 +260,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         }
     }
 
+    /// <summary>将 Java 输出转为路径、版本与架构；优先使用 java.home 下的真实入口，帮助合并快捷入口和 PATH 的重复结果。</summary>
     internal static JavaInstallation? ParseInstallation(string path, string output)
     {
         var version = ReadProperty(output, "java.version");
@@ -273,16 +282,19 @@ public sealed class WindowsJavaLocator : IJavaLocator
         return new JavaInstallation(canonical, version, display);
     }
 
+    /// <summary>按属性名匹配 Java 输出的一整行并去掉首尾空白；未匹配到时返回空字符串。</summary>
     private static string ReadProperty(string output, string name) =>
         Regex.Match(output, @"^\s*" + Regex.Escape(name) + @"\s*=\s*([^\r\n]+)",
             RegexOptions.Multiline).Groups[1].Value.Trim();
 
+    /// <summary>提取用于排序的主版本，例如 1.8.0_501 得到 8、21.0.1 得到 21；解析失败返回 0。</summary>
     private static int MajorVersion(string version)
     {
         var match = Regex.Match(version, @"^(?:1\.)?(\d+)");
         return int.TryParse(match.Groups[1].Value, out var major) ? major : 0;
     }
 
+    /// <summary>展开环境变量、移除路径外层引号并规范化绝对路径；空值、相对路径或非法路径返回 null。</summary>
     private static string? Normalize(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
@@ -294,6 +306,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         catch (Exception ex) when (IsExpected(ex)) { return null; }
     }
 
+    /// <summary>限定可以跳过的文件、权限和路径异常；其余异常继续上报，避免把所有程序问题都吞掉。</summary>
     private static bool IsExpected(Exception ex) =>
         ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException;
 }
