@@ -23,11 +23,13 @@
           <!-- 写入操作期间禁用选择和其他命令；取消导出始终由异步命令管理。 -->
           <WrapPanel Grid.Row="1" Margin="0,12">
             <Button Content="刷新实例" Command="{Binding RefreshCommand}" Padding="12,6" Margin="0,0,8,4"/>
+            <Button Content="导入实例" Command="{Binding ImportCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="支持 Prism ZIP、Modrinth mrpack、CurseForge ZIP 和通用游戏目录 ZIP"/>
             <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" Width="180" MaxLength="128" IsEnabled="{Binding CanInteract}" ToolTip="新的实例名称，同时修改文件夹名称" Margin="0,0,8,4" VerticalContentAlignment="Center"/>
             <Button Content="重命名" Command="{Binding RenameCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="删除实例" Command="{Binding DeleteCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="导出 ZIP" Command="{Binding ExportCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="完整备份实例目录；请先关闭游戏。不包含实例外的共享依赖。"/>
             <Button Content="取消导出" Command="{Binding ExportCancelCommand}" Padding="12,6" Margin="0,0,0,4"/>
+            <Button Content="取消导入" Command="{Binding ImportCancelCommand}" Padding="12,6" Margin="8,0,0,4"/>
           </WrapPanel>
           <DataGrid Grid.Row="2" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" IsEnabled="{Binding CanInteract}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single">
             <DataGrid.Columns>
@@ -56,8 +58,8 @@
             </StackPanel>
           </ScrollViewer>
           <StackPanel Grid.Row="4" Margin="0,12,0,0">
-            <ProgressBar Value="{Binding ExportPercent}" Minimum="0" Maximum="100" Height="6"/>
-            <TextBlock Text="{Binding ExportStatus}" TextTrimming="CharacterEllipsis"/>
+            <ProgressBar Value="{Binding TransferPercent}" Minimum="0" Maximum="100" Height="6"/>
+            <TextBlock Text="{Binding TransferStatus}" TextTrimming="CharacterEllipsis"/>
             <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
           </StackPanel>
         </Grid>

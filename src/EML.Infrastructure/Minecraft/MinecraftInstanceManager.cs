@@ -27,7 +27,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         _recycleDirectory = recycleDirectory;
     }
 
-    /// <summary>串行执行回收：先核验目标与内部链接，再请求系统回收，不添加永久删除的回退代码。</summary>
+    /// <summary>校验实例及内部链接后请求系统回收，同一服务的写入操作依次执行。</summary>
     public async Task DeleteAsync(string instancePath, CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
@@ -53,7 +53,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         finally { _operationLock.Release(); }
     }
 
-    /// <summary>导出先写同目录临时文件；全部成功才改成目标文件名，失败或取消不会留下伪完整 ZIP。</summary>
+    /// <summary>先导出到临时 ZIP，全部成功才发布目标文件，支持取消和进度。</summary>
     public async Task ExportAsync(string instancePath, string destinationZip,
         IProgress<InstanceExportProgress>? progress = null, CancellationToken cancellationToken = default)
     {
@@ -62,7 +62,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         finally { _operationLock.Release(); }
     }
 
-    /// <summary>检查直接父目录、存在性与实例标记；绝不允许把 instances 本身或外部目录当作实例。</summary>
+    /// <summary>确认目标是 instances 下的直接子实例，并返回规范化路径。</summary>
     private string ValidateInstance(string instancePath)
     {
         var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(instancePath));
@@ -78,7 +78,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         return path;
     }
 
-    /// <summary>校验 Windows 文件夹名称，拒绝路径穿越、保留设备名和系统会隐式修剪的末尾字符。</summary>
+    /// <summary>校验新名称，拒绝路径分隔符、非法字符及 Windows 保留名称。</summary>
     private static void ValidateName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name != name.Trim() ||
@@ -90,7 +90,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
             throw new ArgumentException("名称不能使用 Windows 保留设备名，例如 CON、NUL、COM1。");
     }
 
-    /// <summary>准备 Prism 配置后移动文件夹，再原子替换配置；大小写变更通过唯一中间目录完成。</summary>
+    /// <summary>移动实例目录并更新 Prism 名称，失败时尝试恢复原目录。</summary>
     private string Rename(string instancePath, string newName, CancellationToken token)
     {
         ValidateName(newName);
@@ -194,7 +194,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         return string.Join(newline, lines);
     }
 
-    /// <summary>读取目录快照，不忽略隐藏文件与空目录；任何链接直接拒绝，避免导出实例外内容。</summary>
+    /// <summary>收集包含隐藏文件和空目录的快照；发现链接时拒绝操作。</summary>
     private static List<(string Path, bool IsDirectory, long Length)> EnumerateContents(string source, CancellationToken token)
     {
         var entries = new List<(string, bool, long)>();
@@ -219,7 +219,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         return entries;
     }
 
-    /// <summary>把实例内容放到 ZIP 根层，包含存档和配置；目标必须在实例目录外且不能覆盖已有文件。</summary>
+    /// <summary>将实例内容写入 ZIP 根层；禁止写入实例内部或覆盖已有文件。</summary>
     private async Task ExportCoreAsync(string instancePath, string destinationZip,
         IProgress<InstanceExportProgress>? progress, CancellationToken token)
     {

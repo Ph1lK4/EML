@@ -15,14 +15,13 @@ public sealed class WindowsJavaLocator : IJavaLocator
     private readonly string[] _additionalSearchRoots;
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
 
-    // 便携 Java 可由设置页传入额外目录；原来的无参构造方式仍然可用。
-    /// <summary>保存可选的额外搜索目录，例如用户指定的便携 Java 文件夹；不传参数仍可自动发现常规安装。</summary>
+    /// <summary>保存可选的额外搜索目录；不传参数时使用默认发现规则。</summary>
     public WindowsJavaLocator(IEnumerable<string>? additionalSearchRoots = null)
     {
         _additionalSearchRoots = additionalSearchRoots?.ToArray() ?? [];
     }
 
-    /// <summary>总入口：后台收集候选路径，最多并行验证四个 Java，按实际运行时路径去重，最后按主版本降序返回。</summary>
+    /// <summary>后台发现并验证 Java，去重后按主版本降序返回；最多同时验证四项。</summary>
     public async Task<IReadOnlyList<JavaInstallation>> FindAllAsync(
         CancellationToken cancellationToken = default)
     {
@@ -55,13 +54,14 @@ public sealed class WindowsJavaLocator : IJavaLocator
             .ToArray();
     }
 
+    /// <summary>从环境变量、注册表和常见目录收集候选 java.exe，尚不验证能否运行。</summary>
     [SupportedOSPlatform("windows")]
-    /// <summary>从环境变量、注册表、系统标准位置和额外目录发现候选；这里只寻找 java.exe，不代表它已经可以运行。</summary>
     private string[] Discover(CancellationToken token)
     {
         var executables = new HashSet<string>(PathComparer);
         var roots = new Dictionary<string, int>(PathComparer);
 
+        // 合并有效搜索目录；同一路径重复出现时保留较大的搜索深度。
         void AddRoot(string? path, int depth)
         {
             var normalized = Normalize(path);
@@ -108,7 +108,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         return executables.OrderBy(path => path, PathComparer).ToArray();
     }
 
-    /// <summary>用队列由浅到深搜索一个根目录；限制深度、目录数量和时间，跳过不可访问目录与链接子目录。</summary>
+    /// <summary>按深度和时间限制搜索目录，跳过无法访问的位置及链接子目录。</summary>
     private static void ScanRoot(string root, int maxDepth,
         HashSet<string> executables, CancellationToken token)
     {
@@ -144,7 +144,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         }
     }
 
-    /// <summary>检查指定目录中是否存在 java.exe，并加入不区分路径大小写的集合；不重复添加相同路径。</summary>
+    /// <summary>将指定目录里存在的 java.exe 加入去重集合。</summary>
     private static void AddExecutable(string? directory, HashSet<string> paths)
     {
         var normalized = Normalize(directory);
@@ -154,8 +154,8 @@ public sealed class WindowsJavaLocator : IJavaLocator
         if (File.Exists(executable)) paths.Add(executable);
     }
 
+    /// <summary>从用户和系统的 32/64 位注册表收集 JavaHome 与软件安装目录。</summary>
     [SupportedOSPlatform("windows")]
-    /// <summary>读取用户/系统及 32/64 位注册表中的 JavaHome 和软件 InstallLocation，支持非默认盘符安装。</summary>
     private static IReadOnlyList<string> RegistryLocations(CancellationToken token)
     {
         var locations = new List<string>();
@@ -188,8 +188,8 @@ public sealed class WindowsJavaLocator : IJavaLocator
         return locations;
     }
 
+    /// <summary>在限定深度内递归读取 JavaSoft 的 JavaHome，跳过无法读取的子键。</summary>
     [SupportedOSPlatform("windows")]
-    /// <summary>有限深度递归读取 JavaSoft 子键中的 JavaHome；遇到权限或读写问题跳过，取消请求则继续抛出。</summary>
     private static void ReadJavaKeys(RegistryKey key, int remainingDepth,
         List<string> locations, CancellationToken token)
     {
@@ -212,7 +212,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         catch (Exception ex) when (IsExpected(ex)) { }
     }
 
-    /// <summary>执行 Java 查询属性，同时读取两路输出；单项超时为五秒，失败返回 null，退出时尝试清理仍运行的检测进程。</summary>
+    /// <summary>运行 Java 查询版本与架构；失败或超过五秒返回 null，并清理检测进程。</summary>
     private static async Task<JavaInstallation?> InspectAsync(string path, CancellationToken token)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -260,7 +260,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         }
     }
 
-    /// <summary>将 Java 输出转为路径、版本与架构；优先使用 java.home 下的真实入口，帮助合并快捷入口和 PATH 的重复结果。</summary>
+    /// <summary>解析 Java 输出，优先用 java.home 下的入口合并重复检测结果。</summary>
     internal static JavaInstallation? ParseInstallation(string path, string output)
     {
         var version = ReadProperty(output, "java.version");
@@ -282,19 +282,19 @@ public sealed class WindowsJavaLocator : IJavaLocator
         return new JavaInstallation(canonical, version, display);
     }
 
-    /// <summary>按属性名匹配 Java 输出的一整行并去掉首尾空白；未匹配到时返回空字符串。</summary>
+    /// <summary>按属性名读取 Java 输出；找不到时返回空字符串。</summary>
     private static string ReadProperty(string output, string name) =>
         Regex.Match(output, @"^\s*" + Regex.Escape(name) + @"\s*=\s*([^\r\n]+)",
             RegexOptions.Multiline).Groups[1].Value.Trim();
 
-    /// <summary>提取用于排序的主版本，例如 1.8.0_501 得到 8、21.0.1 得到 21；解析失败返回 0。</summary>
+    /// <summary>提取排序用的主版本，例如 1.8 得到 8；解析失败返回 0。</summary>
     private static int MajorVersion(string version)
     {
         var match = Regex.Match(version, @"^(?:1\.)?(\d+)");
         return int.TryParse(match.Groups[1].Value, out var major) ? major : 0;
     }
 
-    /// <summary>展开环境变量、移除路径外层引号并规范化绝对路径；空值、相对路径或非法路径返回 null。</summary>
+    /// <summary>展开环境变量并规范化绝对路径；空值、相对路径或非法路径返回 null。</summary>
     private static string? Normalize(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;

@@ -7,9 +7,10 @@ using EML.Infrastructure.Minecraft;
 
 namespace EML.App;
 
+/// <summary>组装页面依赖，并在窗口首次显示时自动检测 Java 和实例。</summary>
 public partial class MainWindow : Window
 {
-    /// <summary>初始化窗口，组装 Java 与实例检测服务并设置数据来源；注册首次显示事件，稍后自动扫描。</summary>
+    /// <summary>创建页面依赖、设置绑定对象，并注册首次显示事件。</summary>
     public MainWindow()
     {
         InitializeComponent();
@@ -18,11 +19,11 @@ public partial class MainWindow : Window
         DataContext = new MainViewModel(
             new JavaSettingsViewModel(new WindowsJavaLocator()),
             new InstancesViewModel(locator, new MinecraftInstanceManager(launcherRoot),
-                new InstanceDialogs(this), locator.InstancesRoot));
+                new MinecraftInstanceImporter(launcherRoot), new InstanceDialogs(this), locator.InstancesRoot));
         ContentRendered += OnFirstContentRendered;
     }
 
-    /// <summary>窗口内容首次显示后并行触发两项扫描；先取消订阅确保只运行一次。async void 仅用于这个事件处理器。</summary>
+    /// <summary>首次显示时并行检测 Java 和实例；已有检测任务则等待它完成。</summary>
     private async void OnFirstContentRendered(object? sender, EventArgs e)
     {
         // 先显示窗口，再自动检测；取消订阅确保切换标签、重新显示窗口不会重复触发。

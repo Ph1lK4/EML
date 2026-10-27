@@ -1,29 +1,32 @@
 using System.Security;
 using System.Text.Json;
 using EML.Core.Minecraft;
+using EML.Infrastructure.Minecraft.Importing;
 
 namespace EML.Infrastructure.Minecraft;
 
 /// <summary>只枚举指定根目录下 instances 的直接子目录，不修改游戏文件。</summary>
 public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLocator
 {
+    /// <summary>只扫描此目录的直接子目录，每个子目录视作一个候选实例。</summary>
     public string InstancesRoot { get; }
 
-    /// <summary>构造扫描器：将启动器根目录转为绝对路径并拼接 instances；不传参数时使用 EXE 所在目录。</summary>
+    /// <summary>设置启动器旁的 instances 扫描目录；默认使用 EXE 所在目录。</summary>
     public LauncherRootMinecraftInstanceLocator(string? launcherRoot = null)
     {
         InstancesRoot = Path.Combine(Path.GetFullPath(launcherRoot ?? AppContext.BaseDirectory), "instances");
     }
 
-    /// <summary>对外扫描入口：把磁盘读取放到后台执行，返回实例列表；取消请求继续向调用方传播。</summary>
+    /// <summary>在后台扫描并返回实例列表，支持取消。</summary>
     public Task<IReadOnlyList<MinecraftInstance>> FindAllAsync(CancellationToken cancellationToken = default) =>
         Task.Run<IReadOnlyList<MinecraftInstance>>(() => Scan(cancellationToken), cancellationToken);
 
-    /// <summary>只检查 instances 的直接子目录，根据清单选择标准或 Prism 解析器；单个实例损坏会记录提示，不影响其他实例。</summary>
+    /// <summary>按目录格式选择解析器；单个实例读取失败只记录提示，不中断其他实例。</summary>
     private IReadOnlyList<MinecraftInstance> Scan(CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (!Directory.Exists(InstancesRoot)) return [];
+        InstanceImportPaths.EnsureNoLinks(InstancesRoot);
         var instances = new List<MinecraftInstance>();
         // 根目录无法访问时交由界面报告；单个实例损坏不会中止其他实例。
         foreach (var directory in Directory.GetDirectories(InstancesRoot).Order(StringComparer.OrdinalIgnoreCase))
@@ -32,6 +35,11 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
             try
             {
                 if (IsLink(directory)) continue;
+                if (File.Exists(Path.Combine(directory, InstanceImportManifest.FileName)))
+                {
+                    instances.Add(ReadImported(directory, token));
+                    continue;
+                }
                 var prism = File.Exists(Path.Combine(directory, "mmc-pack.json"));
                 var game = Path.Combine(directory, ".minecraft");
                 if (!Directory.Exists(game) && prism) game = Path.Combine(directory, "minecraft");
@@ -67,14 +75,87 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         return instances;
     }
 
-    /// <summary>统一构造结果：规范化实例和游戏目录路径，并从详细版本信息生成兼容原接口的 VersionIds。</summary>
+    /// <summary>读取导入实例，优先使用实际版本信息，缺少时回退到清单声明。</summary>
+    private static MinecraftInstance ReadImported(string directory, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var manifestPath = Path.Combine(directory, InstanceImportManifest.FileName);
+        var manifest = InstanceManifestStore.Read(manifestPath);
+        var game = manifest.GameDirectory == "." ? directory : InstanceImportPaths.Within(directory, manifest.GameDirectory);
+        // 校验整个祖先链，避免自定义游戏目录通过中间目录联接指向实例外部。
+        InstanceImportPaths.EnsureNoLinks(game);
+        var warnings = new List<string>();
+        var prism = File.Exists(Path.Combine(directory, "mmc-pack.json"));
+        IReadOnlyList<MinecraftVersionInfo> versions = [];
+        if (!Directory.Exists(game)) warnings.Add("导入清单指定的游戏目录不存在。");
+        if (prism) versions = ReadPrism(directory, warnings, token);
+        else if (Directory.Exists(Path.Combine(game, "versions"))) versions = ReadStandard(game, warnings, token);
+        // Modrinth / CurseForge 正常只提供安装清单，缺少 versions 不能直接判定为导入损坏。
+        if (versions.Count == 0) versions = ReadImportedVersions(manifest, manifestPath);
+        if (versions.Count == 0)
+            warnings.Add(manifest.SourceFormat == "Zip"
+                ? "通用 ZIP 未提供可识别的 Minecraft 版本信息，版本和加载器尚无法确认。"
+                : "导入清单未提供可识别的 Minecraft 版本信息。");
+        warnings.Add("导入完成，完整性尚未检查。");
+        var directFiles = manifest.Files.Count(file => file.Source == InstanceFileSource.DirectDownload);
+        var unresolvedFiles = manifest.Files.Count(file => file.Source == InstanceFileSource.CurseForge && file.Path is null);
+        if (directFiles > 0) warnings.Add($"清单声明 {directFiles} 个可直接下载的文件；是否缺失尚未检查。");
+        if (unresolvedFiles > 0) warnings.Add($"清单声明 {unresolvedFiles} 个 CurseForge 文件引用待解析；尚不能确定文件名及是否缺失。");
+        warnings.AddRange(manifest.Notes.Where(note => !string.IsNullOrWhiteSpace(note)));
+        var name = Path.GetFileName(directory);
+        if (prism || manifest.SourceFormat == "Prism")
+        {
+            try { name = ReadPrismName(directory) ?? name; }
+            catch (Exception ex) when (IsDataError(ex)) { warnings.Add("无法读取实例名称：" + ex.Message); }
+        }
+        var format = manifest.SourceFormat switch
+        {
+            "Modrinth" => "Modrinth",
+            "CurseForge" => "CurseForge",
+            "Prism" => "Prism",
+            "Zip" => "通用 ZIP",
+            _ => manifest.SourceFormat
+        };
+        // Name 是导入时的快照，之后重命名无需改写它；界面始终读取当前目录或 Prism 配置名称。
+        return Create(directory, game, format, versions, warnings.Distinct().ToArray()) with { Name = name };
+    }
+
+    /// <summary>把组件声明转换为版本和加载器显示文本，不代表已经安装。</summary>
+    private static IReadOnlyList<MinecraftVersionInfo> ReadImportedVersions(InstanceImportManifest manifest, string manifestPath)
+    {
+        var minecraft = manifest.MinecraftVersion ?? manifest.Components
+            .FirstOrDefault(component => component.Id is "minecraft" or "net.minecraft")?.Version;
+        if (string.IsNullOrWhiteSpace(minecraft)) return [];
+        var loaders = new List<string>();
+        foreach (var component in manifest.Components)
+        {
+            var loader = LoaderName(component.Id);
+            var version = component.Version;
+            // CurseForge 也允许保留 forge-47.3.0 等完整加载器 ID，展示时才拆分已知前缀。
+            if (loader is null)
+            {
+                foreach (var prefix in new[] { "forge", "neoforge", "fabric", "quilt" })
+                {
+                    if (!component.Id.StartsWith(prefix + "-", StringComparison.OrdinalIgnoreCase)) continue;
+                    loader = LoaderName(prefix);
+                    version = component.Id[(prefix.Length + 1)..];
+                    break;
+                }
+            }
+            if (loader is not null) loaders.Add(loader + " " + version);
+        }
+        return [new(minecraft, minecraft, loaders.Count == 0 ? "未声明加载器" :
+            string.Join(" + ", loaders.Distinct()), manifestPath)];
+    }
+
+    /// <summary>统一构造扫描结果，规范化路径并汇总版本 ID。</summary>
     private static MinecraftInstance Create(string directory, string game, string format,
         IReadOnlyList<MinecraftVersionInfo> versions, IReadOnlyList<string> warnings) =>
         new(Path.GetFileName(directory), Path.GetFullPath(directory), Path.GetFullPath(game),
             versions.Select(v => v.VersionId).ToArray())
         { Format = format, Versions = versions, Warnings = warnings };
 
-    /// <summary>读取 mmc-pack.json 的 net.minecraft 和已知加载器组件；优先 version，其次 cachedVersion；损坏时返回空列表并记录提示。</summary>
+    /// <summary>读取 mmc-pack.json 中启用的 net.minecraft 和已知加载器组件；优先 version，其次 cachedVersion；损坏时返回空列表并记录提示。</summary>
     private static IReadOnlyList<MinecraftVersionInfo> ReadPrism(string directory, List<string> warnings, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
@@ -85,7 +166,9 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
             if (root.TryGetProperty("formatVersion", out var format) &&
                 (format.ValueKind != JsonValueKind.Number || !format.TryGetInt32(out var number) || number != 1))
                 throw new InvalidDataException("不支持的 Prism 清单格式版本。");
-            var components = Array(root, "components").ToArray();
+            // 与导入器一致：禁用组件保留在原清单中，但不作为当前实例的游戏版本或加载器显示。
+            var components = Array(root, "components").Where(component => component.ValueKind == JsonValueKind.Object &&
+                (!component.TryGetProperty("disabled", out var disabled) || disabled.ValueKind != JsonValueKind.True)).ToArray();
             var minecraft = components.FirstOrDefault(c => Text(c, "uid") == "net.minecraft");
             var version = Text(minecraft, "version") ?? Text(minecraft, "cachedVersion");
             if (version is null) throw new InvalidDataException("Prism 清单缺少 net.minecraft 版本。");
@@ -105,7 +188,7 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         }
     }
 
-    /// <summary>先读取 versions 下各文件夹的同名 JSON，再解析版本和加载器；分两步是为了支持引用其他父版本。</summary>
+    /// <summary>读取各版本 JSON，再解析继承关系和加载器，支持引用同目录中的父版本。</summary>
     private static IReadOnlyList<MinecraftVersionInfo> ReadStandard(string game, List<string> warnings, CancellationToken token)
     {
         var root = Path.Combine(game, "versions");
@@ -141,7 +224,7 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         return result;
     }
 
-    /// <summary>按 game 补丁、clientVersion、继承关系、旧 Forge 坐标、原版 ID 的顺序解析游戏版本；visited 防止循环，无法确认则返回 null。</summary>
+    /// <summary>从补丁、继承关系或库坐标解析游戏本体版本；防止循环，无法确认时返回 null。</summary>
     private static string? ResolveVersion(string id,
         Dictionary<string, (JsonElement Json, string Path)> metadata, HashSet<string> visited, List<string> warnings)
     {
@@ -171,7 +254,7 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         return Text(json, "mainClass") == "net.minecraft.client.main.Main" ? Text(json, "id") : null;
     }
 
-    /// <summary>提取当前清单的加载器及组件：先读取 patches，再用 libraries 补充；同名组件优先保留补丁中的版本。</summary>
+    /// <summary>从 patches 和 libraries 提取加载器，同名项优先采用补丁版本。</summary>
     private static List<string> GetLoaders(JsonElement json)
     {
         var loaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -204,14 +287,14 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
     {
         "forge" or "net.minecraftforge" => "Forge",
         "neoforge" or "net.neoforged" => "NeoForge",
-        "fabric" or "net.fabricmc.fabric-loader" => "Fabric",
-        "quilt" or "org.quiltmc.quilt-loader" => "Quilt",
+        "fabric" or "fabric-loader" or "net.fabricmc.fabric-loader" => "Fabric",
+        "quilt" or "quilt-loader" or "org.quiltmc.quilt-loader" => "Quilt",
         "liteloader" or "com.mumfrey.liteloader" => "LiteLoader",
         "optifine" => "OptiFine",
         _ => null
     };
 
-    /// <summary>读取 instance.cfg 中 [General] 节的 name；缺失时返回 null，由调用方退回文件夹名称；只按第一个等号切分。</summary>
+    /// <summary>读取 Prism 配置的 General/name；缺失时返回 null，由调用方使用文件夹名。</summary>
     private static string? ReadPrismName(string directory)
     {
         var path = Path.Combine(directory, "instance.cfg");
@@ -234,7 +317,7 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         return null;
     }
 
-    /// <summary>限制清单大小和 JSON 深度，要求根节点为对象；Clone 返回独立数据，避免 using 释放文档后节点失效。</summary>
+    /// <summary>验证大小与结构后读取 JSON，并返回不依赖原文档生命周期的副本。</summary>
     private static JsonElement ReadJson(string path)
     {
         if (IsLink(path)) throw new InvalidDataException("跳过链接形式的元数据文件。");
@@ -244,16 +327,16 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         if (document.RootElement.ValueKind != JsonValueKind.Object) throw new InvalidDataException("清单必须是 JSON 对象。");
         return document.RootElement.Clone();
     }
-    /// <summary>安全读取非空字符串属性；对象、字段或字段类型不符合要求时返回 null。</summary>
+    /// <summary>读取非空字符串字段；缺失或类型不符时返回 null。</summary>
     private static string? Text(JsonElement json, string name) =>
         json.ValueKind == JsonValueKind.Object && json.TryGetProperty(name, out var value) &&
         value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()) ? value.GetString() : null;
-    /// <summary>安全读取数组属性；缺少字段或字段不是数组时返回空集合，便于调用方直接遍历。</summary>
+    /// <summary>读取数组字段；缺失或类型不符时返回空集合。</summary>
     private static IEnumerable<JsonElement> Array(JsonElement json, string name) =>
         json.ValueKind == JsonValueKind.Object && json.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
             ? value.EnumerateArray().ToArray() : [];
-    /// <summary>检查路径是否属于符号链接或目录联接等重解析点，供扫描器决定是否跳过，避免沿链接扫描其他位置。</summary>
+    /// <summary>判断路径是否为符号链接或目录联接，供扫描器跳过。</summary>
     private static bool IsLink(string path) => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
-    /// <summary>筛选可作为数据问题处理的异常；不包含取消异常，因此取消操作不会被误当成损坏清单。</summary>
+    /// <summary>筛选可记录为实例读取提示的异常；取消异常仍向外传播。</summary>
     private static bool IsDataError(Exception ex) => ex is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or SecurityException;
 }

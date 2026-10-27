@@ -17,5 +17,6 @@ public interface IMinecraftInstanceManager
 /// <summary>当前导出文件、已复制字节、总字节；空文件包完成时进度为 100%。</summary>
 public sealed record InstanceExportProgress(string FileName, long BytesCopied, long TotalBytes)
 {
+    /// <summary>按原始文件字节计算导出进度；总大小为零时返回 100。</summary>
     public double Percent => TotalBytes == 0 ? 100 : Math.Clamp(100.0 * BytesCopied / TotalBytes, 0, 100);
 }

@@ -9,4 +9,8 @@ public interface IInstanceDialogs
     bool ConfirmDelete(MinecraftInstance instance);
     /// <summary>选择新的 ZIP 文件位置；取消时返回 null。</summary>
     string? ChooseExportPath(MinecraftInstance instance);
+    /// <summary>选择本地 ZIP 或 mrpack；取消返回 null。</summary>
+    string? ChooseImportPath();
+    /// <summary>展示只读分析结果并让用户指定新实例名称；取消返回 null。</summary>
+    string? ConfirmImport(InstanceImportPreview preview);
 }

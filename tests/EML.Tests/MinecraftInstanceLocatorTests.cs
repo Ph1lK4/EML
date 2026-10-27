@@ -20,8 +20,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
     private Task<IReadOnlyList<EML.Core.Minecraft.MinecraftInstance>> Scan(CancellationToken token = default) =>
         new LauncherRootMinecraftInstanceLocator(_root).FindAllAsync(token);
 
-    [Fact]
     /// <summary>验证中文和空格名称、原版版本识别，以及返回的实例路径和游戏目录都是正确的绝对路径。</summary>
+    [Fact]
     public async Task VanillaUsesMetadataAndAbsolutePaths()
     {
         Write("中文 测试/.minecraft/versions/custom/custom.json", """{"id":"1.7.10","mainClass":"net.minecraft.client.main.Main"}""");
@@ -34,8 +34,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.Empty(instance.Warnings);
     }
 
-    [Fact]
     /// <summary>验证合并 Forge 清单从 game 补丁获取本体版本，不把资源索引或自定义 ID 当成游戏版本。</summary>
+    [Fact]
     public async Task MergedForgeReadsGamePatchNotAssetIndexOrFolderName()
     {
         Write("pack/.minecraft/versions/custom/custom.json", """
@@ -48,8 +48,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.Equal("Forge 10.13.4.1614", instance.LoaderDisplay);
     }
 
-    [Fact]
     /// <summary>验证缺少补丁列表时，仍可从旧版 Forge 的 Maven 坐标读取 Minecraft 版本。</summary>
+    [Fact]
     public async Task ForgeCoordinateWorksWithoutPatches()
     {
         Write("pack/.minecraft/versions/custom/custom.json", """
@@ -60,8 +60,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.StartsWith("Forge ", instance.LoaderDisplay);
     }
 
-    [Fact]
     /// <summary>验证 Prism 无需 versions；名称只取 General 节，且支持名称中的等号与组件 cachedVersion 回退。</summary>
+    [Fact]
     public async Task PrismReadsGeneralNameAndComponentsWithoutVersionsFolder()
     {
         Game("renamed");
@@ -78,8 +78,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.Equal("Forge 10.13.4.1614", instance.LoaderDisplay);
     }
 
-    [Fact]
     /// <summary>验证 JSON 损坏或根类型错误时保留提示，并继续识别其他实例和正常版本。</summary>
+    [Fact]
     public async Task BrokenMetadataDoesNotHideOtherInstancesOrVersions()
     {
         Write("broken/.minecraft/versions/broken/broken.json", "{");
@@ -91,8 +91,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.Equal("1.20.1", result.Single(i => i.Name == "good").MinecraftVersionDisplay);
     }
 
-    [Fact]
     /// <summary>验证正常父版本继承，同时检查循环继承不会无限递归，而是产生未知版本与提示。</summary>
+    [Fact]
     public async Task InheritedVersionAndCycleAreHandled()
     {
         Write("pack/.minecraft/versions/base/base.json", """{"id":"1.20.1","mainClass":"net.minecraft.client.main.Main"}""");
@@ -106,8 +106,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.All(result.Single(i => i.Name == "cycle").Versions, v => Assert.Equal("未知", v.MinecraftVersion));
     }
 
-    [Fact]
     /// <summary>验证不存在的实例目录返回空列表，已取消的请求抛出取消异常。</summary>
+    [Fact]
     public async Task MissingRootIsEmptyAndCancellationPropagates()
     {
         Assert.Empty(await Scan());
@@ -116,16 +116,16 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Scan(cancellation.Token));
     }
 
-    [Fact]
     /// <summary>验证不会递归把实例目录内部的嵌套整合包当成另一个实例。</summary>
+    [Fact]
     public async Task OnlyDirectChildrenAreScanned()
     {
         Write("container/nested/.minecraft/versions/v/v.json", """{"id":"1.7.10","mainClass":"net.minecraft.client.main.Main"}""");
         Assert.Empty(await Scan());
     }
 
-    [Fact]
     /// <summary>验证证据不足时显示未知，不根据看似版本号的目录名称或资源索引猜测。</summary>
+    [Fact]
     public async Task UnknownVersionIsNotGuessedFromFolderOrAssets()
     {
         Write("1.99.99/.minecraft/versions/custom/custom.json", """{"id":"custom","assetIndex":{"id":"1.7.10"}}""");
@@ -134,8 +134,8 @@ public sealed class MinecraftInstanceLocatorTests : IDisposable
         Assert.NotEmpty(instance.Warnings);
     }
 
-    [Fact]
     /// <summary>验证 Prism 的 minecraft 目录别名，以及错误格式版本的容错提示。</summary>
+    [Fact]
     public async Task PrismAlternativeGameFolderAndInvalidFormat()
     {
         Directory.CreateDirectory(Path.Combine(_root, "instances", "prism", "minecraft"));

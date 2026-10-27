@@ -5,6 +5,7 @@ using EML.Core.Java;
 
 namespace EML.App.ViewModels;
 
+/// <summary>提供 Java 列表、当前选择和检测命令，供 WPF 页面绑定。</summary>
 public partial class JavaSettingsViewModel : ObservableObject
 {
     private readonly IJavaLocator _javaLocator;
@@ -24,8 +25,9 @@ public partial class JavaSettingsViewModel : ObservableObject
         _javaLocator = javaLocator;
     }
 
+    /// <summary>检测 Java 并更新列表，默认选中首项；失败时显示原因。</summary>
+    // 生成供按钮和启动扫描调用的 DetectJavaCommand。
     [RelayCommand]
-    /// <summary>执行 Java 检测，更新可绑定的列表与状态，默认选中首项；异常转为界面提示。RelayCommand 会生成 DetectJavaCommand。</summary>
     private async Task DetectJavaAsync()
     {
         try

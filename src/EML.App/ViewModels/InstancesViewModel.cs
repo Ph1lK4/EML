@@ -11,8 +11,13 @@ public partial class InstancesViewModel : ObservableObject
 {
     private readonly IMinecraftInstanceLocator _locator;
     private readonly IMinecraftInstanceManager _manager;
+    private readonly IMinecraftInstanceImporter _importer;
     private readonly IInstanceDialogs _dialogs;
+    // 区分本次和上一次任务，避免迟到的进度事件改写当前界面。
+    private int _transferRevision;
+    /// <summary>页面上显示的实例扫描根目录。</summary>
     public string InstancesRoot { get; }
+    /// <summary>供列表绑定的扫描结果；增删会通知界面刷新。</summary>
     public ObservableCollection<MinecraftInstance> Instances { get; } = [];
 
     [ObservableProperty]
@@ -20,30 +25,32 @@ public partial class InstancesViewModel : ObservableObject
     private MinecraftInstance? selectedInstance;
     [ObservableProperty] private string statusText = "正在准备检测本地实例。";
     [ObservableProperty] private string newName = "";
-    [ObservableProperty] private double exportPercent;
-    [ObservableProperty] private string exportStatus = "";
+    [ObservableProperty] private double transferPercent;
+    [ObservableProperty] private string transferStatus = "";
     [ObservableProperty] private bool isExporting;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanInteract))]
-    [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand))]
     private bool isBusy;
+    /// <summary>没有实例操作正在执行时，允许修改输入和列表选择。</summary>
     public bool CanInteract => !IsBusy;
 
     /// <summary>接收依赖，构造时不扫描磁盘；首次扫描由窗口显示事件触发。</summary>
     public InstancesViewModel(IMinecraftInstanceLocator locator, IMinecraftInstanceManager manager,
-        IInstanceDialogs dialogs, string instancesRoot)
+        IMinecraftInstanceImporter importer, IInstanceDialogs dialogs, string instancesRoot)
     {
         _locator = locator;
         _manager = manager;
+        _importer = importer;
         _dialogs = dialogs;
         InstancesRoot = instancesRoot;
     }
 
     /// <summary>切换实例后，将当前显示名称填入重命名输入框。</summary>
     partial void OnSelectedInstanceChanged(MinecraftInstance? value) => NewName = value?.Name ?? "";
-    /// <summary>写入操作要求已选择实例且没有其他操作正在执行。</summary>
+    /// <summary>判断当前是否允许重命名、删除或导出选中的实例。</summary>
     private bool CanManage() => !IsBusy && SelectedInstance is not null;
-    /// <summary>扫描期间和写入期间禁止重复刷新。</summary>
+    /// <summary>判断是否空闲，供刷新和导入命令决定能否执行。</summary>
     private bool CanRefresh() => !IsBusy;
 
     /// <summary>刷新列表并保留选择；异常显示在状态栏。</summary>
@@ -97,7 +104,7 @@ public partial class InstancesViewModel : ObservableObject
         finally { IsBusy = false; }
     }
 
-    /// <summary>选择目标并导出完整 ZIP，异步命令生成取消按钮，进度回到 UI 线程更新。</summary>
+    /// <summary>选择保存位置并导出 ZIP，更新进度并处理取消或失败。</summary>
     [RelayCommand(CanExecute = nameof(CanManage), IncludeCancelCommand = true)]
     private async Task ExportAsync(CancellationToken token)
     {
@@ -109,24 +116,61 @@ public partial class InstancesViewModel : ObservableObject
             var path = _dialogs.ChooseExportPath(instance);
             if (path is null) return;
             IsExporting = true;
-            ExportPercent = 0;
-            ExportStatus = "正在整理实例文件……";
+            TransferPercent = 0;
+            TransferStatus = "正在整理实例文件……";
+            var revision = ++_transferRevision;
             StatusText = "正在导出，请勿修改实例文件。";
             var progress = new Progress<InstanceExportProgress>(p =>
             {
                 // 忽略任务结束后才到达 UI 队列的进度事件。
-                if (!IsExporting) return;
-                ExportPercent = p.Percent;
-                ExportStatus = $"{p.Percent:F1}%  {p.FileName}";
+                if (!IsExporting || revision != _transferRevision) return;
+                TransferPercent = p.Percent;
+                TransferStatus = $"{p.Percent:F1}%  {p.FileName}";
             });
             await _manager.ExportAsync(instance.InstancePath, path, progress, token);
-            ExportPercent = 100;
-            ExportStatus = "导出完成";
+            TransferPercent = 100;
+            TransferStatus = "导出完成";
             StatusText = $"已导出：{path}。仅包含实例内文件，不包含外部共享依赖。";
         }
-        catch (OperationCanceledException) { ExportStatus = "已取消导出"; StatusText = "未生成目标 ZIP。"; }
-        catch (Exception ex) { ExportStatus = "导出失败"; StatusText = ex.Message; }
-        finally { IsExporting = false; IsBusy = false; }
+        catch (OperationCanceledException) { TransferStatus = "已取消导出"; StatusText = "未生成目标 ZIP。"; }
+        catch (Exception ex) { TransferStatus = "导出失败"; StatusText = ex.Message; }
+        finally { ++_transferRevision; IsExporting = false; IsBusy = false; }
+    }
+
+    /// <summary>先只读预览，再导入到新目录；取消或失败时不发布半成品实例。</summary>
+    [RelayCommand(CanExecute = nameof(CanRefresh), IncludeCancelCommand = true)]
+    private async Task ImportAsync(CancellationToken token)
+    {
+        if (IsBusy) return;
+        IsBusy = true;
+        var revision = ++_transferRevision;
+        try
+        {
+            var archive = _dialogs.ChooseImportPath();
+            if (archive is null) return;
+            TransferPercent = 0;
+            TransferStatus = "正在分析整合包……";
+            var preview = await _importer.InspectAsync(archive, token);
+            token.ThrowIfCancellationRequested();
+            var name = _dialogs.ConfirmImport(preview);
+            if (name is null) { TransferStatus = "已取消导入"; return; }
+            StatusText = "正在导入包内文件……";
+            var progress = new Progress<InstanceImportProgress>(p =>
+            {
+                // 只接收当前任务的进度；已结束任务排队中的回调直接忽略。
+                if (revision != _transferRevision || !IsBusy) return;
+                TransferPercent = p.Percent;
+                TransferStatus = $"{p.Percent:F1}%  {p.FileName}";
+            });
+            var result = await _importer.ImportAsync(archive, name, progress, token);
+            ++_transferRevision;
+            TransferPercent = 100;
+            TransferStatus = "导入完成";
+            await ReloadAfterChangeAsync(result.InstancePath, "实例文件已导入，完整性尚未检查；后续可根据依赖清单补全下载。");
+        }
+        catch (OperationCanceledException) { TransferStatus = "已取消导入"; StatusText = "没有新增实例。"; }
+        catch (Exception ex) { TransferStatus = "导入失败"; StatusText = ex.Message; }
+        finally { ++_transferRevision; IsBusy = false; }
     }
 
     /// <summary>扫描完成后一次性替换集合，避免扫描失败时破坏当前列表。</summary>

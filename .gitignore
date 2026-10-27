@@ -364,3 +364,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# EML 实例导入的临时文件；失败清理时可能保留，不能提交游戏内容。
+.eml-imports/
