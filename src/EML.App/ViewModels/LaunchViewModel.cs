@@ -59,6 +59,9 @@ public partial class LaunchViewModel : ObservableObject
     /// <summary>解压本机库（.dll）用的接口。</summary>
     private readonly INativesExtractor _nativesExtractor;
 
+    /// <summary>启动前检查文件用的接口。</summary>
+    private readonly ILaunchPreflight _preflight;
+
     /// <summary>当前正在跑的游戏进程；没在跑时是 null。</summary>
     private IGameProcess? _process;
 
@@ -116,14 +119,17 @@ public partial class LaunchViewModel : ObservableObject
     /// <param name="launchPlanner">拼命令用的实现（窗口里传 VanillaLaunchPlanner）。</param>
     /// <param name="gameLauncher">启动进程用的实现（窗口里传 GameLauncher）。</param>
     /// <param name="nativesExtractor">解压本机库用的实现（窗口里传 NativesExtractor）。</param>
+    /// <param name="preflight">启动前检查实现（窗口里传 VanillaPreflight）。</param>
     public LaunchViewModel(
         ILaunchPlanner launchPlanner,
         IGameLauncher gameLauncher,
-        INativesExtractor nativesExtractor)
+        INativesExtractor nativesExtractor,
+        ILaunchPreflight preflight)
     {
         _launchPlanner = launchPlanner;
         _gameLauncher = gameLauncher;
         _nativesExtractor = nativesExtractor;
+        _preflight = preflight;
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -193,6 +199,30 @@ public partial class LaunchViewModel : ObservableObject
         try
         {
             var request = CreateRequest(java);
+
+            // ① 启动前检查：缺文件先说清楚，不让他对着 Java 的异常去猜
+            var preflight = _preflight.Check(request);
+
+            if (!preflight.IsReady)
+            {
+                ResetLog();
+                AppendLog($"启动前检查：查了 {preflight.Checked} 个文件，缺 {preflight.Missing.Count} 个");
+                AppendLog(string.Empty);
+
+                foreach (var item in preflight.Missing.Take(30))
+                {
+                    AppendLog($"  缺 {item.Kind}：{item.Path}");
+                }
+
+                if (preflight.Missing.Count > 30)
+                {
+                    AppendLog($"  …还有 {preflight.Missing.Count - 30} 个（大多是同类的资源文件）");
+                }
+
+                StatusText = $"启动前检查没通过：缺 {preflight.Missing.Count} 个文件（见日志）";
+                return;
+            }
+
             var plan = _launchPlanner.Build(request);
 
             // ① 解压本机库；没有本机库时返回空串
@@ -210,6 +240,7 @@ public partial class LaunchViewModel : ObservableObject
 
             // ③ 启动
             ResetLog();
+            AppendLog($"启动前检查：查了 {preflight.Checked} 个文件，齐全");
             _stopRequested = false;
             IsRunning = true;
             StatusText = "正在启动游戏…";
