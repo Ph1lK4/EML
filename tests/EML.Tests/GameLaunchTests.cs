@@ -10,6 +10,7 @@
 //    测完在 Dispose 里删掉临时目录。
 // ════════════════════════════════════════════════════════════════════
 
+using System.Globalization;
 using System.IO.Compression;
 using System.Text;
 using EML.Core.Launch;
@@ -147,6 +148,50 @@ public sealed class GameLaunchTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Contains(lines, line => line.Contains("hello-from-eml"));
+    }
+
+    /// <summary>
+    /// 中文输出不乱码：Java 8 在中文 Windows 上按 GBK（代码页 936）写控制台，
+    /// GameLauncher 必须按系统 OEM 代码页解码，不能硬用 UTF-8。
+    ///
+    /// 只在 OEM 代码页是 936 的机器上验证（英文 Windows / CI 上没有 GBK，直接跳过）。
+    /// </summary>
+    [Fact]
+    public async Task GameLauncher_中文输出按系统代码页解码()
+    {
+        if (CultureInfo.CurrentCulture.TextInfo.OEMCodePage != 936)
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(root);
+
+        // chcp 936 让 cmd 用 GBK 输出，再回显一行中文
+        var plan = new LaunchPlan(
+            "cmd.exe",
+            "/d /c chcp 936 >nul & echo 中文报错测试",
+            root);
+
+        var lines = new List<string>();
+
+        using var process = new GameLauncher().Start(plan);
+        process.OutputReceived += (_, line) =>
+        {
+            lock (lines)
+            {
+                lines.Add(line);
+            }
+        };
+
+        await process.WaitForExitAsync();
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline && !lines.Any(line => line.Contains("中文")))
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Contains(lines, line => line.Contains("中文报错测试"));
     }
 
     /// <summary>往 zip 里写一个文本条目。</summary>
