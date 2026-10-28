@@ -3,12 +3,13 @@
 //  位置：src\EML.App\ViewModels
 //  作用：启动页的 ViewModel —— 窗口上「启动 1.7.10」那一块的所有逻辑。
 //
-//  现在它做三件事：
-//    ① 生成命令：拿到「选中的 Java + 游戏目录 + 玩家名 + 内存」
+//  现在它做四件事：
+//    ① 生成命令：拿到「选中的 Java + 游戏目录 + 玩家名 + 内存 + 额外参数」
 //       → 调 ILaunchPlanner → 把命令行放到界面上（方便复制/核对）；
 //    ② 启动游戏：把命令里再补上 -Djava.library.path（先解压 natives）
 //       → 调 IGameLauncher 真跑起来 → 日志实时收进界面；
-//    ③ 停止游戏：结束整个进程树。
+//    ③ 停止游戏：结束整个进程树；
+//    ④ 运行状态：每秒刷新「PID + 已运行多久」，退出时给出退出码和运行时长。
 //
 //  它不负责：检测 Java（用 JavaSettingsViewModel）、拼命令行（ILaunchPlanner）、
 //            解压 natives 的细节（INativesExtractor）、进程细节（IGameLauncher）。
@@ -17,6 +18,7 @@
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EML.Core.Java;
@@ -71,6 +73,18 @@ public partial class LaunchViewModel : ObservableObject
     /// <summary>日志缓冲。界面只是把它整串显示出来。</summary>
     private readonly StringBuilder _log = new();
 
+    /// <summary>
+    /// 每秒刷新一次「运行中（PID / 已运行多久）」。
+    /// 用 DispatcherTimer 而不是后台循环：它本来就在 UI 线程回调，改属性不用切线程。
+    /// </summary>
+    private readonly DispatcherTimer _statusTimer;
+
+    /// <summary>本次启动的时刻，用来算运行时长。</summary>
+    private DateTime _startedAt;
+
+    /// <summary>本次启动的进程号，启动后记下来（退出后 Process.Id 就读不到了）。</summary>
+    private int _processId;
+
     // ────────────────────────────────────────────────────────────────
     // 二、输入属性
     //     这些字段带 [ObservableProperty]，CommunityToolkit 会自动生成
@@ -90,6 +104,20 @@ public partial class LaunchViewModel : ObservableObject
     [ObservableProperty]
     private int maxMemoryMb = 2048;
 
+    /// <summary>
+    /// 额外 JVM 参数（可空），例如 <c>-XX:+UseG1GC</c>。
+    /// 原样交给 ILaunchPlanner 拼进 JVM 部分；填错了由 Java 自己报错。
+    /// </summary>
+    [ObservableProperty]
+    private string extraJvmArguments = string.Empty;
+
+    /// <summary>
+    /// 额外游戏参数（可空），例如 <c>--width 1280 --height 720</c>。
+    /// 追加在 --username 这些游戏参数的最后。
+    /// </summary>
+    [ObservableProperty]
+    private string extraGameArguments = string.Empty;
+
     // ────────────────────────────────────────────────────────────────
     // 三、输出属性
     // ────────────────────────────────────────────────────────────────
@@ -105,6 +133,13 @@ public partial class LaunchViewModel : ObservableObject
     /// <summary>游戏日志（stdout + stderr 逐行追加）。</summary>
     [ObservableProperty]
     private string logText = string.Empty;
+
+    /// <summary>
+    /// 只看错误和警告：勾上后日志框只显示含 ERROR / WARN / Exception 的行。
+    /// 日志本身不丢，随时可以取消勾选看全部。
+    /// </summary>
+    [ObservableProperty]
+    private bool showErrorsOnly;
 
     /// <summary>游戏是否正在运行；控制「启动/停止」按钮的状态文字。</summary>
     [ObservableProperty]
@@ -124,6 +159,10 @@ public partial class LaunchViewModel : ObservableObject
         _launchPlanner = launchPlanner;
         _gameLauncher = gameLauncher;
         _nativesExtractor = nativesExtractor;
+
+        // 状态计时器：只在游戏运行期间启动，退出时停掉
+        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _statusTimer.Tick += (_, _) => UpdateRunningStatus();
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -217,22 +256,31 @@ public partial class LaunchViewModel : ObservableObject
             process = _gameLauncher.Start(finalPlan);
             process.OutputReceived += (_, line) => AppendLog(line);
             _process = process;
+            _processId = process.Id;
+            _startedAt = DateTime.Now;
 
             CommandLine = finalPlan.CommandLine;
-            StatusText = "游戏已启动，日志在下面实时显示（点「停止」结束进程）";
+            UpdateRunningStatus();
+            _statusTimer.Start();
 
             // ④ 等退出（不阻塞界面）
             var exitCode = await process.WaitForExitAsync();
 
+            _statusTimer.Stop();
             IsRunning = false;
+
+            var elapsed = FormatDuration(DateTime.Now - _startedAt);
+            var pid = _processId;
+
             StatusText = _stopRequested
-                ? "游戏已停止"
+                ? $"游戏已停止（PID {pid}，运行了 {elapsed}）"
                 : exitCode == 0
-                    ? "游戏已正常退出"
-                    : $"游戏退出了，退出码 {exitCode}（非 0 一般是崩溃，日志最后几行是线索）";
+                    ? $"游戏已正常退出（PID {pid}，运行了 {elapsed}）"
+                    : $"游戏异常退出：退出码 {exitCode}，运行了 {elapsed}（日志最后几行是线索）";
         }
         catch (Exception exception)
         {
+            _statusTimer.Stop();
             IsRunning = false;
             StatusText = "启动失败：" + exception.Message;
         }
@@ -291,7 +339,9 @@ public partial class LaunchViewModel : ObservableObject
             GameDirectory,
             VersionName,
             string.IsNullOrWhiteSpace(PlayerName) ? "Steve" : PlayerName.Trim(),
-            Math.Clamp(MaxMemoryMb, 512, 32768));
+            Math.Clamp(MaxMemoryMb, 512, 32768),
+            string.IsNullOrWhiteSpace(ExtraJvmArguments) ? null : ExtraJvmArguments.Trim(),
+            string.IsNullOrWhiteSpace(ExtraGameArguments) ? null : ExtraGameArguments.Trim());
     }
 
     /// <summary>清空上一次的日志。</summary>
@@ -325,7 +375,84 @@ public partial class LaunchViewModel : ObservableObject
             _log.Remove(0, _log.Length - TrimmedLogLength);
         }
 
-        LogText = _log.ToString();
+        // 开着「只看错误」时，无关行不用重画（重画会把整串日志过滤一遍，尽量少做）
+        if (!ShowErrorsOnly || IsLogLineImportant(line))
+        {
+            RenderLog();
+        }
+    }
+
+    /// <summary>按当前过滤开关刷新日志框。</summary>
+    private void RenderLog()
+    {
+        LogText = ShowErrorsOnly ? FilterLog(_log.ToString()) : _log.ToString();
+    }
+
+    /// <summary>
+    /// 切换「只看错误和警告」时立即按新条件重画，不用等下一行日志。
+    /// CommunityToolkit 会在属性变化后自动调用这个 partial 方法。
+    /// </summary>
+    partial void OnShowErrorsOnlyChanged(bool value) => RenderLog();
+
+    /// <summary>
+    /// 只保留含 ERROR / WARN / FATAL / Exception / Caused by 的行。
+    /// 1.7.10 的日志格式是 <c>[时间] [线程/级别]: 内容</c>，按关键字过滤足够用。
+    /// </summary>
+    private static string FilterLog(string text)
+    {
+        if (text.Length == 0)
+        {
+            return text;
+        }
+
+        var builder = new StringBuilder(text.Length);
+
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+
+            if (IsLogLineImportant(line))
+            {
+                builder.AppendLine(line);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>这一行是不是错误/警告级别（大小写不敏感）。</summary>
+    private static bool IsLogLineImportant(string line)
+    {
+        return line.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+               || line.Contains("WARN", StringComparison.OrdinalIgnoreCase)
+               || line.Contains("FATAL", StringComparison.OrdinalIgnoreCase)
+               || line.Contains("Exception", StringComparison.OrdinalIgnoreCase)
+               || line.Contains("Caused by", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>刷新「运行中（PID / 已运行多久）」这一行状态。</summary>
+    private void UpdateRunningStatus()
+    {
+        if (!IsRunning)
+        {
+            return;
+        }
+
+        StatusText =
+            $"游戏运行中（PID {_processId}，已运行 {FormatDuration(DateTime.Now - _startedAt)}）";
+    }
+
+    /// <summary>把时长格式化成 mm:ss；超过一小时就变成 hh:mm:ss。</summary>
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration < TimeSpan.Zero)
+        {
+            duration = TimeSpan.Zero;
+        }
+
+        return duration.TotalHours >= 1
+            ? $"{(int)duration.TotalHours:00}:{duration.Minutes:00}:{duration.Seconds:00}"
+            : $"{(int)duration.TotalMinutes:00}:{duration.Seconds:00}";
     }
 
     /// <summary>

@@ -8,6 +8,7 @@ namespace EML.Core.Launch;
 ///   二、目录  —— 游戏目录在哪（.minecraft 的路径）
 ///   三、身份  —— 版本名与玩家名（离线模式，没有正版令牌）
 ///   四、内存  —— 最大堆内存，单位 MB
+///   五、额外参数 —— 用户自己填的 JVM 参数 / 游戏参数（可空）
 ///
 /// 这一步只用来拼命令行，所以字段很少；
 /// 以后做下载、实例、正版账号时，在对应功能里加字段，不要往这里硬塞。
@@ -33,9 +34,19 @@ namespace EML.Core.Launch;
 /// 最大堆内存，单位 MB，默认 2048。
 /// 最终会变成 <c>-Xmx2048M</c> 这样的参数。
 /// </param>
+/// <param name="ExtraJvmArguments">
+/// 额外的 JVM 参数（可空），例如 <c>-XX:+UseG1GC</c>。
+/// 会插在 <c>-Xmx</c> 之后、<c>-cp</c> 之前；没有就传 null。
+/// </param>
+/// <param name="ExtraGameArguments">
+/// 额外的游戏参数（可空），例如 <c>--width 1280 --height 720</c>。
+/// 会追加在游戏参数最后；没有就传 null。
+/// </param>
 public sealed record LaunchRequest(
     string JavaPath,
     string GameDirectory,
     string VersionName,
     string PlayerName,
-    int MaxMemoryMb = 2048);
+    int MaxMemoryMb = 2048,
+    string? ExtraJvmArguments = null,
+    string? ExtraGameArguments = null);

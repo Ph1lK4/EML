@@ -115,14 +115,33 @@ public sealed class VanillaLaunchPlanner : ILaunchPlanner
 
         // ────────────────────────────────────────────────────────────
         // ④ 拼最终参数
-        //    顺序：内存 → classpath → 主类 → 游戏参数。
+        //    顺序：内存 → 额外 JVM 参数 → classpath → 主类 → 游戏参数。
         //    -Xms 给 1 GB，-Xmx 用界面上填的值。
+        //    额外 JVM 参数必须放在主类之前，否则会被当成游戏参数。
         // ────────────────────────────────────────────────────────────
-        var arguments = "-Xms1024M " +
-                        $"-Xmx{request.MaxMemoryMb}M " +
-                        $"-cp \"{classpath}\" " +
-                        mainClass + " " +
-                        Expand(template, values);
+        var jvmArguments = new List<string>
+        {
+            "-Xms1024M",
+            $"-Xmx{request.MaxMemoryMb}M"
+        };
+
+        jvmArguments.AddRange(SplitArguments(request.ExtraJvmArguments));
+
+        // classpath 整体当一段，外面的引号要保留，命令行才能正确切分
+        jvmArguments.Add("-cp");
+        jvmArguments.Add($"\"{classpath}\"");
+
+        var arguments = string.Join(' ', jvmArguments) +
+                        " " + mainClass +
+                        " " + Expand(template, values);
+
+        // 额外游戏参数追加在最后：它们和 --username 这些是同一层级
+        var extraGameArguments = SplitArguments(request.ExtraGameArguments);
+
+        if (extraGameArguments.Count > 0)
+        {
+            arguments += " " + string.Join(' ', extraGameArguments);
+        }
 
         return new LaunchPlan(request.JavaPath, arguments, request.GameDirectory);
     }
@@ -219,6 +238,59 @@ public sealed class VanillaLaunchPlanner : ILaunchPlanner
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// 把用户填的一串参数按空格切开，支持用双引号包住带空格的值。
+    ///
+    /// 为什么不直接 Split(' ')？
+    ///   玩家可能写 <c>-Dfoo="bar baz"</c>，粗暴按空格切会把它切成两半。
+    ///   这里只在引号外遇到空格才切，并且保留引号本身（java.exe 需要它）。
+    ///
+    /// 举例：<c>-XX:+UseG1GC --width 1280</c> → 三段；
+    ///       <c>-Dfoo="a b"</c> → 一段（引号原样保留）。
+    /// </summary>
+    private static List<string> SplitArguments(string? text)
+    {
+        var result = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return result;
+        }
+
+        var token = new StringBuilder();
+        var inQuotes = false;
+
+        foreach (var character in text)
+        {
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                token.Append(character);
+                continue;
+            }
+
+            if (character == ' ' && !inQuotes)
+            {
+                if (token.Length > 0)
+                {
+                    result.Add(token.ToString());
+                    token.Clear();
+                }
+
+                continue;
+            }
+
+            token.Append(character);
+        }
+
+        if (token.Length > 0)
+        {
+            result.Add(token.ToString());
+        }
+
+        return result;
     }
 
     /// <summary>

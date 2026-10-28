@@ -127,6 +127,10 @@ public sealed class GameLaunchTests : IDisposable
         var lines = new List<string>();
 
         using var process = new GameLauncher().Start(plan);
+
+        // 进程号要能拿到（界面显示「运行中（PID …）」靠它）
+        Assert.True(process.Id > 0, "进程号应该是正数");
+
         process.OutputReceived += (_, line) =>
         {
             lock (lines)

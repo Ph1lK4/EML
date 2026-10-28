@@ -109,9 +109,16 @@ public sealed class GameLauncher : IGameLauncher
     {
         private readonly Process _process;
 
+        /// <summary>
+        /// 进程号在构造时就记下来：Process.Id 在进程退出后再读会抛异常，
+        /// 而界面可能要在游戏退出后还显示一次「刚才跑的是哪个进程」。
+        /// </summary>
+        private readonly int _id;
+
         public GameProcess(Process process)
         {
             _process = process;
+            _id = process.Id;
 
             // stdout 和 stderr 都当成「一行日志」往上抛。
             // 1.7.10 的崩溃栈在 stderr，必须接。
@@ -137,6 +144,9 @@ public sealed class GameLauncher : IGameLauncher
 
         /// <inheritdoc />
         public bool HasExited => _process.HasExited;
+
+        /// <inheritdoc />
+        public int Id => _id;
 
         /// <inheritdoc />
         public int? ExitCode => _process.HasExited ? _process.ExitCode : null;

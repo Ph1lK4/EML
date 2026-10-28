@@ -128,13 +128,15 @@
 
             <Grid Margin="12">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>  <!-- 0 游戏目录 -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 玩家名 -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 最大内存 -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 额外 JVM 参数 -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 额外游戏参数 -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 按钮行 -->
+                    <RowDefinition Height="Auto"/>  <!-- 6 生成的命令 -->
+                    <RowDefinition Height="Auto"/>  <!-- 7 日志框 -->
+                    <RowDefinition Height="Auto"/>  <!-- 8 启动状态 -->
                 </Grid.RowDefinitions>
 
                 <Grid.ColumnDefinitions>
@@ -181,9 +183,33 @@
                         Text="MB（1.7.10 建议 2048，装大型整合包再往上加）"/>
                 </StackPanel>
 
-                <!-- 按钮行：生成 / 启动 / 停止 -->
-                <StackPanel
+                <TextBlock
                     Grid.Row="3"
+                    Margin="0,8,0,0"
+                    Text="JVM 参数："/>
+
+                <TextBox
+                    Grid.Row="3"
+                    Grid.Column="1"
+                    Margin="0,8,0,0"
+                    ToolTip="可选，例如 -XX:+UseG1GC；会插在 -Xmx 之后、-cp 之前"
+                    Text="{Binding Launch.ExtraJvmArguments, UpdateSourceTrigger=PropertyChanged}"/>
+
+                <TextBlock
+                    Grid.Row="4"
+                    Margin="0,8,0,0"
+                    Text="游戏参数："/>
+
+                <TextBox
+                    Grid.Row="4"
+                    Grid.Column="1"
+                    Margin="0,8,0,0"
+                    ToolTip="可选，例如 --width 1280 --height 720；会追加在 --username 之后"
+                    Text="{Binding Launch.ExtraGameArguments, UpdateSourceTrigger=PropertyChanged}"/>
+
+                <!-- 按钮行：生成 / 启动 / 停止；右边是日志过滤开关 -->
+                <StackPanel
+                    Grid.Row="5"
                     Grid.ColumnSpan="2"
                     Margin="0,12,0,0"
                     Orientation="Horizontal">
@@ -209,11 +235,18 @@
                         Margin="12,0,0,0"
                         Command="{Binding Launch.StopCommand}"
                         Content="停止"/>
+
+                    <CheckBox
+                        Margin="20,0,0,0"
+                        VerticalAlignment="Center"
+                        Content="只看错误和警告"
+                        IsChecked="{Binding Launch.ShowErrorsOnly}"
+                        ToolTip="只显示含 ERROR / WARN / Exception 的日志行；日志本身不丢"/>
                 </StackPanel>
 
                 <!-- 生成出来的命令：只读，方便复制 -->
                 <TextBox
-                    Grid.Row="4"
+                    Grid.Row="6"
                     Grid.ColumnSpan="2"
                     Height="70"
                     Margin="0,12,0,0"
@@ -225,7 +258,7 @@
                 <!-- 游戏日志：实时追加，自动滚到底 -->
                 <TextBox
                     x:Name="LogBox"
-                    Grid.Row="5"
+                    Grid.Row="7"
                     Grid.ColumnSpan="2"
                     Height="180"
                     Margin="0,12,0,0"
@@ -241,7 +274,7 @@
 
                 <!-- 启动块自己的状态：成功 / 失败原因 -->
                 <TextBlock
-                    Grid.Row="6"
+                    Grid.Row="8"
                     Grid.ColumnSpan="2"
                     Margin="0,8,0,0"
                     Foreground="#666"

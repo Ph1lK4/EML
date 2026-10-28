@@ -40,28 +40,8 @@ public sealed class LaunchPlannerTests : IDisposable
     [Fact]
     public void Build_生成包含主类与离线UUID的启动命令()
     {
-        // ① 造一份最小版本 JSON：只要计划器真正用到的字段。
-        var versionDirectory = Path.Combine(gameDirectory, "versions", "1.7.10");
-        Directory.CreateDirectory(versionDirectory);
-        File.WriteAllText(
-            Path.Combine(versionDirectory, "1.7.10.json"),
-            """
-            {
-              "mainClass": "net.minecraft.client.main.Main",
-              "minecraftArguments": "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --userType ${user_type}",
-              "assetIndex": { "id": "1.7.10" },
-              "libraries": [
-                {
-                  "name": "a:b:1",
-                  "downloads": { "artifact": { "path": "a/b/1/b-1.jar" } }
-                },
-                {
-                  "name": "c:d:2",
-                  "downloads": { "artifact": { "path": "c/d/2/d-2.jar" } }
-                }
-              ]
-            }
-            """);
+        // ① 造一份最小版本 JSON。
+        WriteMinimalVersionJson();
 
         var planner = new VanillaLaunchPlanner();
         var request = new LaunchRequest(
@@ -110,5 +90,73 @@ public sealed class LaunchPlannerTests : IDisposable
 
         // 消息里必须写清楚缺的是哪个文件，用户才知道去补什么。
         Assert.Contains("versions\\1.7.10\\1.7.10.json", exception.Message);
+    }
+
+    /// <summary>
+    /// 额外参数：JVM 参数必须插在主类之前（否则会被当成游戏参数），
+    /// 游戏参数必须追加在最后；带引号的值不能被空格拆开。
+    /// </summary>
+    [Fact]
+    public void Build_额外参数放在正确位置()
+    {
+        WriteMinimalVersionJson();
+
+        var planner = new VanillaLaunchPlanner();
+        var request = new LaunchRequest(
+            @"C:\Java\jre8\bin\java.exe",
+            gameDirectory,
+            "1.7.10",
+            "Steve",
+            2048,
+            "-XX:+UseG1GC -Dfoo=\"a b\"",
+            "--width 1280 --height 720");
+
+        var plan = planner.Build(request);
+
+        // JVM 参数出现在主类之前
+        var mainClassIndex = plan.Arguments.IndexOf(
+            "net.minecraft.client.main.Main", StringComparison.Ordinal);
+        var jvmOptionIndex = plan.Arguments.IndexOf(
+            "-XX:+UseG1GC", StringComparison.Ordinal);
+
+        Assert.True(jvmOptionIndex >= 0, "额外 JVM 参数没进命令");
+        Assert.True(
+            jvmOptionIndex < mainClassIndex,
+            "额外 JVM 参数必须在主类之前");
+
+        // 引号里的空格不切分
+        Assert.Contains("-Dfoo=\"a b\"", plan.Arguments);
+
+        // 游戏参数在最后
+        Assert.EndsWith("--width 1280 --height 720", plan.Arguments);
+    }
+
+    /// <summary>
+    /// 写一份最小版本 JSON：只放计划器真正用到的字段。
+    /// </summary>
+    private void WriteMinimalVersionJson()
+    {
+        var versionDirectory = Path.Combine(gameDirectory, "versions", "1.7.10");
+        Directory.CreateDirectory(versionDirectory);
+
+        File.WriteAllText(
+            Path.Combine(versionDirectory, "1.7.10.json"),
+            """
+            {
+              "mainClass": "net.minecraft.client.main.Main",
+              "minecraftArguments": "--username ${auth_player_name} --version ${version_name} --gameDir ${game_directory} --assetsDir ${assets_root} --assetIndex ${assets_index_name} --uuid ${auth_uuid} --userType ${user_type}",
+              "assetIndex": { "id": "1.7.10" },
+              "libraries": [
+                {
+                  "name": "a:b:1",
+                  "downloads": { "artifact": { "path": "a/b/1/b-1.jar" } }
+                },
+                {
+                  "name": "c:d:2",
+                  "downloads": { "artifact": { "path": "c/d/2/d-2.jar" } }
+                }
+              ]
+            }
+            """);
     }
 }

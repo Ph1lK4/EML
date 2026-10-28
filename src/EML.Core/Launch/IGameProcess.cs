@@ -30,6 +30,12 @@ public interface IGameProcess : IDisposable
     bool HasExited { get; }
 
     /// <summary>
+    /// 进程号（PID），用来在任务管理器里认出是哪一个；
+    /// 进程退出后再读会拿到退出前的值。
+    /// </summary>
+    int Id { get; }
+
+    /// <summary>
     /// 退出码；进程还没退出时是 <c>null</c>。
     /// 0 表示正常退出，其它值多半是崩溃（例如 -1073741819）。
     /// </summary>
