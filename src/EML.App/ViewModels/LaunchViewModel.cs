@@ -14,6 +14,7 @@
 //            解压 natives 的细节（INativesExtractor）、进程细节（IGameLauncher）。
 // ════════════════════════════════════════════════════════════════════
 
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -58,6 +59,12 @@ public partial class LaunchViewModel : ObservableObject
 
     /// <summary>解压本机库（.dll）用的接口。</summary>
     private readonly INativesExtractor _nativesExtractor;
+
+    /// <summary>找最新崩溃报告用的接口。</summary>
+    private readonly ICrashReportFinder _crashReportFinder;
+
+    /// <summary>这次启动的开始时间，用来算「运行了多久」（崩溃信息里要写）。</summary>
+    private DateTime _startedAt;
 
     /// <summary>当前正在跑的游戏进程；没在跑时是 null。</summary>
     private IGameProcess? _process;
@@ -111,19 +118,43 @@ public partial class LaunchViewModel : ObservableObject
     private bool isRunning;
 
     /// <summary>
+    /// 是否要显示崩溃信息面板。
+    /// 只有「非 0 退出且不是用户主动停止」才为 true。
+    /// </summary>
+    [ObservableProperty]
+    private bool hasCrashInfo;
+
+    /// <summary>
+    /// 崩溃信息摘要：退出码、运行时长、日志路径、崩溃报告路径、日志最后几行。
+    /// 这一整块文本就是给用户「复制发给开发者」用的。
+    /// </summary>
+    [ObservableProperty]
+    private string crashInfo = string.Empty;
+
+    /// <summary>
+    /// 最新崩溃报告的完整路径；没有找到就是 null。
+    /// 「打开崩溃报告」按钮靠它定位文件。
+    /// </summary>
+    [ObservableProperty]
+    private string? crashReportPath;
+
+    /// <summary>
     /// 构造：只保存依赖，不做任何业务动作。
     /// </summary>
     /// <param name="launchPlanner">拼命令用的实现（窗口里传 VanillaLaunchPlanner）。</param>
     /// <param name="gameLauncher">启动进程用的实现（窗口里传 GameLauncher）。</param>
     /// <param name="nativesExtractor">解压本机库用的实现（窗口里传 NativesExtractor）。</param>
+    /// <param name="crashReportFinder">崩溃报告查找实现（窗口里传 CrashReportFinder）。</param>
     public LaunchViewModel(
         ILaunchPlanner launchPlanner,
         IGameLauncher gameLauncher,
-        INativesExtractor nativesExtractor)
+        INativesExtractor nativesExtractor,
+        ICrashReportFinder crashReportFinder)
     {
         _launchPlanner = launchPlanner;
         _gameLauncher = gameLauncher;
         _nativesExtractor = nativesExtractor;
+        _crashReportFinder = crashReportFinder;
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -210,6 +241,8 @@ public partial class LaunchViewModel : ObservableObject
 
             // ③ 启动
             ResetLog();
+            ClearCrashInfo();
+            _startedAt = DateTime.Now;
             _stopRequested = false;
             IsRunning = true;
             StatusText = "正在启动游戏…";
@@ -225,11 +258,22 @@ public partial class LaunchViewModel : ObservableObject
             var exitCode = await process.WaitForExitAsync();
 
             IsRunning = false;
-            StatusText = _stopRequested
-                ? "游戏已停止"
-                : exitCode == 0
-                    ? "游戏已正常退出"
-                    : $"游戏退出了，退出码 {exitCode}（非 0 一般是崩溃，日志最后几行是线索）";
+            var elapsed = (DateTime.Now - _startedAt).ToString(@"hh\:mm\:ss");
+
+            if (_stopRequested)
+            {
+                StatusText = "游戏已停止";
+            }
+            else if (exitCode == 0)
+            {
+                StatusText = "游戏已正常退出";
+            }
+            else
+            {
+                // 非 0 退出 = 崩溃：把「给开发者看的信息」整理出来，别让用户干瞪眼
+                StatusText = $"游戏异常退出：退出码 {exitCode}，运行了 {elapsed}（日志最后几行是线索）";
+                ShowCrashInfo(exitCode, elapsed);
+            }
         }
         catch (Exception exception)
         {
@@ -274,6 +318,38 @@ public partial class LaunchViewModel : ObservableObject
         {
             StatusText = "结束进程失败：" + exception.Message;
         }
+    }
+
+    /// <summary>
+    /// 打开崩溃报告：在资源管理器里选中它。
+    /// 用 explorer /select 而不是直接打开，是为了让用户看到它在哪个目录，
+    /// 方便把「日志 + 崩溃报告」一起打包发给开发者。
+    /// </summary>
+    [RelayCommand]
+    private void OpenCrashReport()
+    {
+        if (CrashReportPath is null || !File.Exists(CrashReportPath))
+        {
+            StatusText = "没有找到崩溃报告文件";
+            return;
+        }
+
+        Process.Start("explorer.exe", $"/select,\"{CrashReportPath}\"");
+    }
+
+    /// <summary>打开游戏目录下的 logs 文件夹。</summary>
+    [RelayCommand]
+    private void OpenLogFile()
+    {
+        var logsDirectory = Path.Combine(GameDirectory, "logs");
+
+        if (!Directory.Exists(logsDirectory))
+        {
+            StatusText = "日志目录还不存在：" + logsDirectory;
+            return;
+        }
+
+        Process.Start("explorer.exe", $"\"{logsDirectory}\"");
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -326,6 +402,66 @@ public partial class LaunchViewModel : ObservableObject
         }
 
         LogText = _log.ToString();
+    }
+
+    /// <summary>
+    /// 整理崩溃信息：退出码、运行时长、日志/崩溃报告路径、日志最后 10 行。
+    /// 用户可以把这一整块复制给开发者，比只截一张状态栏有用得多。
+    ///
+    /// 整理过程本身也可能出错（路径没权限之类），这里兜住异常：
+    /// 界面已经在显示「异常退出」，不能再因为整理信息再崩一次。
+    /// </summary>
+    private void ShowCrashInfo(int exitCode, string elapsed)
+    {
+        try
+        {
+            var logPath = Path.Combine(GameDirectory, "logs", "latest.log");
+            var reportPath = _crashReportFinder.FindLatest(GameDirectory);
+            CrashReportPath = reportPath;
+
+            var builder = new StringBuilder();
+            builder.AppendLine($"退出码：{exitCode}（0x{exitCode:X8}）");
+            builder.AppendLine($"运行了：{elapsed}");
+            builder.AppendLine($"日志：{logPath}");
+            builder.AppendLine($"崩溃报告：{reportPath ?? "没有找到 crash-reports\\crash-*.txt"}");
+            builder.AppendLine();
+            builder.AppendLine("日志最后 10 行：");
+
+            foreach (var line in LastLogLines(10))
+            {
+                builder.AppendLine(line);
+            }
+
+            CrashInfo = builder.ToString();
+            HasCrashInfo = true;
+        }
+        catch (Exception exception)
+        {
+            CrashInfo = "整理崩溃信息时出错：" + exception.Message;
+            HasCrashInfo = true;
+        }
+    }
+
+    /// <summary>取日志最后 N 行（去掉空行）。</summary>
+    private IReadOnlyList<string> LastLogLines(int count)
+    {
+        var lines = _log.ToString()
+            .Split('\n')
+            .Select(line => line.TrimEnd('\r'))
+            .Where(line => line.Length > 0)
+            .ToList();
+
+        return lines.Count <= count
+            ? lines
+            : lines.GetRange(lines.Count - count, count);
+    }
+
+    /// <summary>清掉上一次的崩溃信息（每次开始新启动时调用）。</summary>
+    private void ClearCrashInfo()
+    {
+        HasCrashInfo = false;
+        CrashInfo = string.Empty;
+        CrashReportPath = null;
     }
 
     /// <summary>

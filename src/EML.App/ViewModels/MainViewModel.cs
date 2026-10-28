@@ -41,13 +41,16 @@ public sealed class MainViewModel
     /// <param name="launchPlanner">启动命令实现（Infrastructure 的 VanillaLaunchPlanner）。</param>
     /// <param name="gameLauncher">进程启动实现（Infrastructure 的 GameLauncher）。</param>
     /// <param name="nativesExtractor">本机库解压实现（Infrastructure 的 NativesExtractor）。</param>
+    /// <param name="crashReportFinder">崩溃报告查找实现（Infrastructure 的 CrashReportFinder）。</param>
     public MainViewModel(
         IJavaLocator javaLocator,
         ILaunchPlanner launchPlanner,
         IGameLauncher gameLauncher,
-        INativesExtractor nativesExtractor)
+        INativesExtractor nativesExtractor,
+        ICrashReportFinder crashReportFinder)
     {
         Java = new JavaSettingsViewModel(javaLocator);
-        Launch = new LaunchViewModel(launchPlanner, gameLauncher, nativesExtractor);
+        Launch = new LaunchViewModel(
+            launchPlanner, gameLauncher, nativesExtractor, crashReportFinder);
     }
 }

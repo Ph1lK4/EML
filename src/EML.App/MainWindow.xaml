@@ -19,10 +19,15 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="EML"
         Width="820"
-        Height="880"
+        Height="990"
         MinWidth="640"
         MinHeight="640"
         WindowStartupLocation="CenterScreen">
+
+    <!-- 崩溃面板用：bool → Visibility -->
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility"/>
+    </Window.Resources>
 
     <Grid Margin="24">
         <Grid.RowDefinitions>
@@ -128,13 +133,14 @@
 
             <Grid Margin="12">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>  <!-- 0 游戏目录 -->
+                    <RowDefinition Height="Auto"/>  <!-- 1 玩家名 -->
+                    <RowDefinition Height="Auto"/>  <!-- 2 最大内存 -->
+                    <RowDefinition Height="Auto"/>  <!-- 3 按钮行（生成 / 启动 / 停止） -->
+                    <RowDefinition Height="Auto"/>  <!-- 4 生成的命令 -->
+                    <RowDefinition Height="Auto"/>  <!-- 5 日志框 -->
+                    <RowDefinition Height="Auto"/>  <!-- 6 启动状态 -->
+                    <RowDefinition Height="Auto"/>  <!-- 7 崩溃信息（异常退出才显示） -->
                 </Grid.RowDefinitions>
 
                 <Grid.ColumnDefinitions>
@@ -227,7 +233,7 @@
                     x:Name="LogBox"
                     Grid.Row="5"
                     Grid.ColumnSpan="2"
-                    Height="180"
+                    Height="150"
                     Margin="0,12,0,0"
                     Padding="6"
                     Background="#1E1E1E"
@@ -247,6 +253,56 @@
                     Foreground="#666"
                     Text="{Binding Launch.StatusText}"
                     TextWrapping="Wrap"/>
+
+                <!-- 崩溃信息：只在「非 0 退出且不是用户主动停止」时出现 -->
+                <Border
+                    Grid.Row="7"
+                    Grid.ColumnSpan="2"
+                    Margin="0,12,0,0"
+                    Padding="10"
+                    Background="#FFF4F4"
+                    BorderBrush="#E0B4B4"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Visibility="{Binding Launch.HasCrashInfo, Converter={StaticResource BoolToVisibility}}">
+
+                    <StackPanel>
+                        <TextBlock
+                            FontWeight="SemiBold"
+                            Text="游戏异常退出，这些信息可以直接复制发给开发者"/>
+
+                        <TextBox
+                            Height="96"
+                            Margin="0,6,0,0"
+                            Padding="4"
+                            FontFamily="Consolas"
+                            FontSize="12"
+                            IsReadOnly="True"
+                            Text="{Binding Launch.CrashInfo}"
+                            TextWrapping="Wrap"
+                            VerticalScrollBarVisibility="Auto"/>
+
+                        <StackPanel
+                            Margin="0,8,0,0"
+                            Orientation="Horizontal">
+
+                            <Button
+                                Width="130"
+                                Height="28"
+                                Command="{Binding Launch.OpenCrashReportCommand}"
+                                Content="打开崩溃报告"
+                                ToolTip="在资源管理器里选中 crash-reports 里的最新文件"/>
+
+                            <Button
+                                Width="120"
+                                Height="28"
+                                Margin="10,0,0,0"
+                                Command="{Binding Launch.OpenLogFileCommand}"
+                                Content="打开日志目录"
+                                ToolTip="打开 logs 文件夹，里面有 latest.log"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </Grid>
         </GroupBox>
 

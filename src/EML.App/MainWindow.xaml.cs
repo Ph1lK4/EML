@@ -38,8 +38,8 @@ public partial class MainWindow : Window
             new WindowsJavaLocator(),
             new VanillaLaunchPlanner(),
             new GameLauncher(),
-            new NativesExtractor());
-
+            new NativesExtractor(),
+            new CrashReportFinder());
         // 日志实时追加时，让滚动条跟着走到底部，
         // 否则用户只能看到第一屏，以为游戏卡住了。
         LogBox.TextChanged += (_, _) => LogBox.ScrollToEnd();
