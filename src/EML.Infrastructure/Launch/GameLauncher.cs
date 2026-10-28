@@ -13,6 +13,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using EML.Core.Launch;
 
@@ -23,6 +24,32 @@ namespace EML.Infrastructure.Launch;
 /// </summary>
 public sealed class GameLauncher : IGameLauncher
 {
+    /// <summary>
+    /// 读游戏输出用的编码。
+    ///
+    /// 为什么不是固定 UTF-8：
+    ///   Java 8 在中文 Windows 上往控制台写的是系统 OEM 代码页（简体中文是 GBK / 936），
+    ///   按 UTF-8 硬解会把 Java 自己的中文报错解成「����」。
+    ///   日志里大多数行是英文，GBK 与 UTF-8 解码结果一样，只有中文行会不同。
+    ///
+    /// 取不到 OEM 代码页时（比如系统不支持），退回 UTF-8，至少不影响英文日志。
+    /// </summary>
+    private static readonly Encoding ConsoleEncoding = CreateConsoleEncoding();
+
+    private static Encoding CreateConsoleEncoding()
+    {
+        try
+        {
+            // .NET 默认只带 UTF-8/UTF-16 等，GBK 这类代码页要注册扩展提供程序
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            return Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+        }
+        catch (Exception)
+        {
+            return Encoding.UTF8;
+        }
+    }
+
     /// <summary>
     /// 启动进程。
     ///
@@ -45,10 +72,10 @@ public sealed class GameLauncher : IGameLauncher
             RedirectStandardOutput = true,
             RedirectStandardError = true,
 
-            // Java 在 Windows 控制台默认按 UTF-8 输出（1.7.10 日志里是英文为主），
-            // 指定编码避免中文路径/Mod 名乱码
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            // Java 在 Windows 控制台按系统 OEM 代码页输出（中文系统是 GBK），
+            // 用系统码页解码，Java 的中文报错才不会乱码
+            StandardOutputEncoding = ConsoleEncoding,
+            StandardErrorEncoding = ConsoleEncoding
         };
 
         var process = new Process
