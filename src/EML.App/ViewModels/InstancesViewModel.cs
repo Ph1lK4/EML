@@ -21,7 +21,8 @@ public partial class InstancesViewModel : ObservableObject
     public ObservableCollection<MinecraftInstance> Instances { get; } = [];
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand),
+        nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand))]
     private MinecraftInstance? selectedInstance;
     [ObservableProperty] private string statusText = "正在准备检测本地实例。";
     [ObservableProperty] private string newName = "";
@@ -30,24 +31,32 @@ public partial class InstancesViewModel : ObservableObject
     [ObservableProperty] private bool isExporting;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanInteract))]
-    [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand),
+        nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand))]
     private bool isBusy;
     /// <summary>没有实例操作正在执行时，允许修改输入和列表选择。</summary>
     public bool CanInteract => !IsBusy;
 
     /// <summary>接收依赖，构造时不扫描磁盘；首次扫描由窗口显示事件触发。</summary>
     public InstancesViewModel(IMinecraftInstanceLocator locator, IMinecraftInstanceManager manager,
-        IMinecraftInstanceImporter importer, IInstanceDialogs dialogs, string instancesRoot)
+        IMinecraftInstanceImporter importer, IInstanceDialogs dialogs, string instancesRoot,
+        IMinecraftInstanceChecker checker, IMinecraftInstanceDownloader instanceDownloader)
     {
         _locator = locator;
         _manager = manager;
         _importer = importer;
         _dialogs = dialogs;
         InstancesRoot = instancesRoot;
+        _checker = checker;
+        _instanceDownloader = instanceDownloader;
     }
 
-    /// <summary>切换实例后，将当前显示名称填入重命名输入框。</summary>
-    partial void OnSelectedInstanceChanged(MinecraftInstance? value) => NewName = value?.Name ?? "";
+    /// <summary>切换实例后更新名称，并清除属于上一个实例的检查和下载记录。</summary>
+    partial void OnSelectedInstanceChanged(MinecraftInstance? value)
+    {
+        NewName = value?.Name ?? "";
+        ClearCheckResults();
+    }
     /// <summary>判断当前是否允许重命名、删除或导出选中的实例。</summary>
     private bool CanManage() => !IsBusy && SelectedInstance is not null;
     /// <summary>判断是否空闲，供刷新和导入命令决定能否执行。</summary>
@@ -58,6 +67,7 @@ public partial class InstancesViewModel : ObservableObject
     private async Task RefreshAsync()
     {
         if (IsBusy) return;
+        ClearCheckResults();
         IsBusy = true;
         StatusText = "正在扫描实例……";
         try
@@ -76,6 +86,7 @@ public partial class InstancesViewModel : ObservableObject
         if (!CanManage()) return;
         var instance = SelectedInstance!;
         var name = NewName;
+        ClearCheckResults();
         IsBusy = true;
         try
         {
@@ -96,6 +107,7 @@ public partial class InstancesViewModel : ObservableObject
         try
         {
             if (!_dialogs.ConfirmDelete(instance)) return;
+            ClearCheckResults();
             await _manager.DeleteAsync(instance.InstancePath);
             await ReloadAfterChangeAsync(null, "实例已删除，回收结果以 Windows 系统处理为准。");
         }
@@ -137,7 +149,7 @@ public partial class InstancesViewModel : ObservableObject
         finally { ++_transferRevision; IsExporting = false; IsBusy = false; }
     }
 
-    /// <summary>先只读预览，再导入到新目录；取消或失败时不发布半成品实例。</summary>
+    /// <summary>预览并导入新目录，再为 Prism、Modrinth 和 CurseForge 自动补全；下载失败保留已导入实例。</summary>
     [RelayCommand(CanExecute = nameof(CanRefresh), IncludeCancelCommand = true)]
     private async Task ImportAsync(CancellationToken token)
     {
@@ -166,7 +178,26 @@ public partial class InstancesViewModel : ObservableObject
             ++_transferRevision;
             TransferPercent = 100;
             TransferStatus = "导入完成";
-            await ReloadAfterChangeAsync(result.InstancePath, "实例文件已导入，完整性尚未检查；后续可根据依赖清单补全下载。");
+            await ReloadAfterChangeAsync(result.InstancePath, "实例文件已导入。Prism、Modrinth 和 CurseForge 会自动补全依赖；也可在“补全实例依赖”中继续未完成的下载。");
+            SelectedDetailTab = 2;
+            var sourceFormat = result.Manifest.SourceFormat;
+            if ((sourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
+                 sourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase) ||
+                 sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)) &&
+                string.Equals(SelectedInstance?.InstancePath, result.InstancePath, StringComparison.OrdinalIgnoreCase))
+            {
+                if (token.IsCancellationRequested)
+                {
+                    StatusText = $"{sourceFormat} 文件已导入，后续依赖补全已取消；可手动点击“补全实例依赖”继续。";
+                    return;
+                }
+                // 已提交实例后进入独立补全命令；下载失败不回滚导入，两个取消按钮都能停止后续下载。
+                IsBusy = false;
+                using var registration = token.Register(() => DownloadMissingCommand.Cancel());
+                var installation = DownloadMissingCommand.ExecuteAsync(null);
+                if (token.IsCancellationRequested) DownloadMissingCommand.Cancel();
+                await installation;
+            }
         }
         catch (OperationCanceledException) { TransferStatus = "已取消导入"; StatusText = "没有新增实例。"; }
         catch (Exception ex) { TransferStatus = "导入失败"; StatusText = ex.Message; }

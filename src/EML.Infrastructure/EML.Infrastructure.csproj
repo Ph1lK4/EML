@@ -2,6 +2,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EML.Core\EML.Core.csproj" />
+    <!-- 生成器仅参与编译，不作为启动器运行时依赖分发。 -->
+    <ProjectReference Include="..\EML.Build.Secrets\EML.Build.Secrets.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <CompilerVisibleProperty Include="EmitCompilerGeneratedFiles" />
+    <CompilerVisibleProperty Include="EmbedAllSources" />
+    <CompilerVisibleProperty Include="EmbedUntrackedSources" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -9,5 +15,25 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- 发布脚本必须重建；禁用编译服务器，确保生成器读取本次子进程的环境。 -->
+  <PropertyGroup Condition="'$(EML_EMBED_CURSEFORGE_KEY)' == '1'">
+    <UseSharedCompilation>false</UseSharedCompilation>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <EmbedAllSources>false</EmbedAllSources>
+    <EmbedUntrackedSources>false</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <!-- 在生成器运行前阻止明文源文件落盘；条件仅使用非秘密开关。 -->
+  <Target Name="ValidateCurseForgeSecretOutput" BeforeTargets="CoreCompile"
+          Condition="'$(EML_EMBED_CURSEFORGE_KEY)' == '1'">
+    <Error Condition="'$(EmitCompilerGeneratedFiles)' == 'true'"
+           Text="嵌入 CurseForge 凭证时禁止导出编译器生成的源文件。" />
+    <Error Condition="'$(EmbedAllSources)' == 'true' Or '$(EmbedUntrackedSources)' == 'true'"
+           Text="嵌入 CurseForge 凭证时禁止将源码嵌入调试文件。" />
+    <Error Condition="'$(DebugType)' != 'none' Or '$(DebugSymbols)' == 'true'"
+           Text="嵌入 CurseForge 凭证时必须关闭调试符号，以免生成源码进入 PDB。" />
+  </Target>
 
 </Project>

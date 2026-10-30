@@ -15,8 +15,8 @@
           <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="2*"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="2*"/>
             <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
           <TextBox Text="{Binding InstancesRoot, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" TextWrapping="Wrap"/>
@@ -40,7 +40,9 @@
             </DataGrid.Columns>
           </DataGrid>
           <!-- 下方详情绑定 SelectedInstance，选择不同实例时自动显示对应路径和提示。 -->
-          <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
+          <TabControl Grid.Row="3" Margin="0,12,0,0" SelectedIndex="{Binding SelectedDetailTab}">
+          <TabItem Header="实例详情">
+          <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8">
             <StackPanel>
               <TextBlock Text="实例路径" FontWeight="SemiBold"/>
               <TextBox Text="{Binding SelectedInstance.InstancePath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
@@ -54,13 +56,71 @@
                   </StackPanel></DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+              <TextBlock Text="扫描 / 导入说明（本次检查结果见“文件检查”）" Margin="0,6,0,0"/>
               <TextBlock Text="{Binding SelectedInstance.WarningDisplay}" Foreground="#9B4D00" TextWrapping="Wrap"/>
             </StackPanel>
           </ScrollViewer>
+          </TabItem>
+          <TabItem Header="文件检查">
+            <Grid Margin="8">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <WrapPanel>
+                <Button Content="快速检查" Command="{Binding QuickCheckCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="检查文件存在性和大小，不计算哈希"/>
+                <Button Content="完整检查" Command="{Binding FullCheckCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="读取清单文件并校验所有声明的哈希"/>
+                <Button Content="取消快速检查" Command="{Binding QuickCheckCancelCommand}" Padding="10,4" Margin="0,0,6,6"/>
+                <Button Content="取消完整检查" Command="{Binding FullCheckCancelCommand}" Padding="10,4" Margin="0,0,6,6"/>
+              </WrapPanel>
+              <ScrollViewer Grid.Row="1" MaxHeight="92" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                  <TextBlock Text="{Binding CheckSummary}" TextWrapping="Wrap"/>
+                  <TextBlock Text="{Binding CheckNotes}" TextWrapping="Wrap" Foreground="#9B4D00" Margin="0,4,0,6"/>
+                </StackPanel>
+              </ScrollViewer>
+              <DataGrid Grid.Row="2" ItemsSource="{Binding CheckFiles}" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="文件 / 引用" Binding="{Binding PathDisplay}" Width="2*"/>
+                  <DataGridTextColumn Header="要求" Binding="{Binding RequiredDisplay}" Width="55"/>
+                  <DataGridTextColumn Header="状态" Binding="{Binding StateDisplay}" Width="115"/>
+                  <DataGridTextColumn Header="说明" Binding="{Binding Message}" Width="3*"/>
+                </DataGrid.Columns>
+              </DataGrid>
+            </Grid>
+          </TabItem>
+          <TabItem Header="补全实例依赖">
+            <Grid Margin="8">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <WrapPanel>
+                <Button Content="补全实例依赖" Command="{Binding DownloadMissingCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="按整合包声明下载必需模组及支持的运行依赖；CurseForge 使用内置授权直接下载，受限制文件会提供手动处理提示"/>
+                <Button Content="取消下载 / 复查" Command="{Binding DownloadMissingCancelCommand}" Padding="10,4" Margin="0,0,6,6"/>
+              </WrapPanel>
+              <!-- 下载错误和完整配置路径可能较长，限制摘要高度并保留滚动阅读。 -->
+              <ScrollViewer Grid.Row="1" MaxHeight="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6">
+                <TextBlock Text="{Binding DownloadSummary}" TextWrapping="Wrap"/>
+              </ScrollViewer>
+              <DataGrid Grid.Row="2" ItemsSource="{Binding DownloadFiles}" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True">
+                <DataGrid.Columns>
+                  <DataGridTextColumn Header="文件 / 引用" Binding="{Binding PathDisplay}" Width="2*"/>
+                  <DataGridTextColumn Header="结果" Binding="{Binding StateDisplay}" Width="115"/>
+                  <DataGridTextColumn Header="说明" Binding="{Binding Message}" Width="3*"/>
+                </DataGrid.Columns>
+              </DataGrid>
+            </Grid>
+          </TabItem>
+          </TabControl>
           <StackPanel Grid.Row="4" Margin="0,12,0,0">
             <ProgressBar Value="{Binding TransferPercent}" Minimum="0" Maximum="100" Height="6"/>
             <TextBlock Text="{Binding TransferStatus}" TextTrimming="CharacterEllipsis"/>
-            <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+            <ScrollViewer MaxHeight="42" VerticalScrollBarVisibility="Auto">
+              <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap"/>
+            </ScrollViewer>
           </StackPanel>
         </Grid>
       </TabItem>
