@@ -4,7 +4,7 @@ using EML.Core.Minecraft;
 
 namespace EML.App.Services;
 
-/// <summary>导入预览：把包的识别结果和当前离线导入范围展示给用户。</summary>
+/// <summary>导入预览：展示识别结果，以及导入完成后的自动补全范围。</summary>
 internal sealed class InstanceImportDialog : Window
 {
     private readonly TextBox _name;
@@ -26,7 +26,11 @@ internal sealed class InstanceImportDialog : Window
         var details = $"格式：{preview.Format}\nMinecraft：{preview.MinecraftVersion ?? "未知"}\n" +
             $"包内文件：{preview.EmbeddedFileCount}\n有下载地址的文件声明：{preview.DownloadFileCount}\n" +
             $"待解析的 CurseForge 文件声明：{preview.UnresolvedFileCount}\n\n" +
-            "本次提取包内文件并保存依赖清单。下载与完整性检查尚未实现，导入后不保证可以启动。\n\n" +
+            (preview.Format.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
+             preview.Format.Equals("Modrinth", StringComparison.OrdinalIgnoreCase) ||
+             preview.Format.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)
+                ? "导入后会自动联网下载缺失的必需模组和支持的运行依赖，并执行完整检查。取消下载会保留已导入实例，可稍后继续补全。\n\n"
+                : "导入包内文件并保存已有清单；通用 ZIP 可能缺少完整下载信息，可在导入后检查文件。\n\n") +
             string.Join("\n", preview.Notes);
         content.Children.Add(new ScrollViewer
         {

@@ -184,6 +184,7 @@ internal static class InstanceArchiveReader
             files.Add(new InstanceFileRequirement
             {
                 Path = Combine(".minecraft", relative), Source = InstanceFileSource.DirectDownload,
+                Origin = InstanceFileOrigin.ModrinthDownload,
                 Required = client != "optional", Size = size, Hashes = hashes, Downloads = downloads
             });
         }

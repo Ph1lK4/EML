@@ -1,6 +1,6 @@
 namespace EML.Core.Minecraft;
 
-/// <summary>只处理本地整合包；下载和完整性检查后续通过统一清单接入。</summary>
+/// <summary>只处理本地整合包；界面在导入成功后通过独立下载服务继续补全和检查。</summary>
 public interface IMinecraftInstanceImporter
 {
     /// <summary>只读分析压缩包，供界面显示格式、名称和待补全的依赖。</summary>
@@ -27,7 +27,7 @@ public sealed record InstanceImportPreview(string SuggestedName, string Format, 
 /// <summary>提交成功后返回路径和持久化清单，界面据此刷新并选中新实例。</summary>
 public sealed record InstanceImportResult(string InstancePath, string GameDirectory, InstanceImportManifest Manifest);
 
-/// <summary>按解压后的字节报告进度，百分比不包含后续尚未实现的下载。</summary>
+/// <summary>按解压后的字节报告进度，百分比仅对应导入阶段；后续下载独立报告进度。</summary>
 public sealed record InstanceImportProgress(string FileName, long BytesCopied, long TotalBytes)
 {
     /// <summary>按解压后的字节计算进度；总大小为零时暂记为 0。</summary>

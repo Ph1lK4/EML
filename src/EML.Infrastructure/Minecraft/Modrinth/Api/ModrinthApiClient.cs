@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using EML.Core.Modrinth;
 
@@ -87,6 +88,43 @@ public sealed class ModrinthApiClient : IModrinthApiClient, IDisposable
         return result;
     }
 
+    /// <summary>规范化并分批查询精确文件哈希；缺失项保持缺失，不使用名称或最新版本替代。</summary>
+    public async Task<IReadOnlyDictionary<string, ModrinthVersion>> GetVersionsByHashesAsync(IReadOnlyList<string> hashes,
+        string algorithm = "sha1", CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(hashes);
+        cancellationToken.ThrowIfCancellationRequested();
+        algorithm = algorithm?.ToLowerInvariant() ?? "";
+        var length = algorithm switch { "sha1" => 40, "sha512" => 128, _ => 0 };
+        if (length == 0) throw new ArgumentException("文件哈希查询只支持 sha1 或 sha512。", nameof(algorithm));
+        var normalized = hashes.Select(hash => NormalizeHash(hash, length)).Distinct(StringComparer.Ordinal).ToArray();
+        var result = new Dictionary<string, ModrinthVersion>(StringComparer.OrdinalIgnoreCase);
+        foreach (var batch in normalized.Chunk(50))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var body = JsonSerializer.Serialize(new { hashes = batch, algorithm });
+            var response = await SendAsync<JsonElement>(HttpMethod.Post, "version_files", body, cancellationToken).ConfigureAwait(false);
+            if (response.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("Modrinth 哈希查询未返回哈希到版本的映射。");
+            var requested = batch.ToHashSet(StringComparer.Ordinal);
+            foreach (var property in response.EnumerateObject())
+            {
+                var hash = property.Name.ToLowerInvariant();
+                if (!requested.Contains(hash) || result.ContainsKey(hash))
+                    throw new InvalidDataException("Modrinth 哈希查询包含未请求或重复的文件哈希。");
+                ValidateHashVersion(property.Value, algorithm, hash);
+                try
+                {
+                    var version = property.Value.Deserialize<ModrinthVersion>(JsonOptions)
+                        ?? throw new InvalidDataException("Modrinth 哈希查询返回空版本。");
+                    result.Add(hash, version);
+                }
+                catch (JsonException ex) { throw new InvalidDataException("Modrinth 哈希查询返回的版本结构无效。", ex); }
+            }
+        }
+        return result;
+    }
+
     /// <summary>按游戏版本、加载器和精选标记获取项目版本列表。</summary>
     public async Task<IReadOnlyList<ModrinthVersion>> GetVersionsAsync(string projectIdOrSlug,
         ModrinthVersionFilter? filter = null, CancellationToken cancellationToken = default)
@@ -101,15 +139,20 @@ public sealed class ModrinthApiClient : IModrinthApiClient, IDisposable
             .ConfigureAwait(false);
     }
 
-    /// <summary>执行一次请求并有界读取 JSON；限流返回等待信息，由调用方决定是否重试。</summary>
-    private async Task<T> GetAsync<T>(string relativePath, CancellationToken cancellationToken)
+    /// <summary>通过统一传输执行公开 GET 查询，复用大小限制、超时和取消处理。</summary>
+    private Task<T> GetAsync<T>(string relativePath, CancellationToken cancellationToken) =>
+        SendAsync<T>(HttpMethod.Get, relativePath, null, cancellationToken);
+
+    /// <summary>执行公开请求并有界读取 JSON；限流返回等待信息，由调用方决定是否重试。</summary>
+    private async Task<T> SendAsync<T>(HttpMethod method, string relativePath, string? body, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(_options.RequestTimeout);
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(_options.BaseAddress, relativePath));
+            using var request = new HttpRequestMessage(method, new Uri(_options.BaseAddress, relativePath));
+            if (body is not null) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
             request.Headers.UserAgent.ParseAdd(_options.UserAgent);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token).ConfigureAwait(false);
@@ -152,6 +195,75 @@ public sealed class ModrinthApiClient : IModrinthApiClient, IDisposable
             throw new TimeoutException("Modrinth API 请求超时。", ex);
         }
     }
+
+    /// <summary>验证调用方提供的十六进制哈希并转换为小写，避免重复查询同一个文件。</summary>
+    private static string NormalizeHash(string hash, int length)
+    {
+        if (hash is null || hash.Length != length || !hash.All(Uri.IsHexDigit))
+            throw new ArgumentException("Modrinth 文件哈希必须为对应算法长度的十六进制字符串。", nameof(hash));
+        return hash.ToLowerInvariant();
+    }
+
+    /// <summary>校验哈希结果的固定标识与文件结构，保证返回版本确实包含请求的原文件。</summary>
+    private static void ValidateHashVersion(JsonElement version, string algorithm, string expectedHash)
+    {
+        RejectDuplicateProperties(version);
+        if (version.ValueKind != JsonValueKind.Object ||
+            !HasResponseId(version, "id") || !HasResponseId(version, "project_id") ||
+            !version.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array || files.GetArrayLength() == 0)
+            throw new InvalidDataException("Modrinth 哈希查询返回的版本缺少固定标识或文件列表。");
+        var matches = 0;
+        foreach (var file in files.EnumerateArray())
+        {
+            if (file.ValueKind != JsonValueKind.Object ||
+                !file.TryGetProperty("filename", out var filename) || filename.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(filename.GetString()) ||
+                !file.TryGetProperty("url", out var url) || url.ValueKind != JsonValueKind.String ||
+                !Uri.TryCreate(url.GetString(), UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps ||
+                uri.UserInfo.Length != 0 || uri.Fragment.Length != 0 ||
+                !file.TryGetProperty("size", out var size) || size.ValueKind != JsonValueKind.Number ||
+                !size.TryGetInt64(out var bytes) || bytes < 0 ||
+                !file.TryGetProperty("hashes", out var hashes) || hashes.ValueKind != JsonValueKind.Object)
+                throw new InvalidDataException("Modrinth 哈希查询返回的文件结构无效。");
+            var algorithms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var hash in hashes.EnumerateObject())
+            {
+                if (!algorithms.Add(hash.Name)) throw new InvalidDataException("Modrinth 文件包含重复的哈希算法。");
+                var name = hash.Name.ToLowerInvariant();
+                var length = name switch { "sha1" => 40, "sha512" => 128, _ => 0 };
+                if (length == 0) continue;
+                var value = hash.Value.ValueKind == JsonValueKind.String ? hash.Value.GetString() : null;
+                if (value is null || value.Length != length || !value.All(Uri.IsHexDigit))
+                    throw new InvalidDataException("Modrinth 文件的哈希格式无效。");
+                if (name == algorithm && value.Equals(expectedHash, StringComparison.OrdinalIgnoreCase)) matches++;
+            }
+        }
+        if (matches != 1) throw new InvalidDataException("Modrinth 返回版本未包含唯一匹配请求哈希的文件。");
+    }
+
+    /// <summary>拒绝版本、文件和哈希对象中的重复字段，避免 JSON 覆盖掩盖互相矛盾的元数据。</summary>
+    private static void RejectDuplicateProperties(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!names.Add(property.Name)) throw new InvalidDataException("Modrinth 哈希查询包含重复的 JSON 字段。");
+                RejectDuplicateProperties(property.Value);
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray()) RejectDuplicateProperties(item);
+        }
+    }
+
+    /// <summary>检查响应标识是否为可持久记录且不包含路径或空白的单个 ID。</summary>
+    private static bool HasResponseId(JsonElement value, string name) =>
+        value.TryGetProperty(name, out var id) && id.ValueKind == JsonValueKind.String &&
+        id.GetString() is { Length: > 0 and <= 128 } text &&
+        text.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
     /// <summary>验证 HTTPS 地址、应用身份及可控的响应大小和超时。</summary>
     private static ModrinthApiOptions ValidateOptions(ModrinthApiOptions options)

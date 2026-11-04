@@ -22,7 +22,7 @@ public sealed class MinecraftInstanceImporter : IMinecraftInstanceImporter
         {
             using var input = OpenArchive(archivePath);
             using var archive = new ZipArchive(input, ZipArchiveMode.Read);
-            var plan = InstanceArchiveReader.Read(archive, Path.GetFileName(archivePath), cancellationToken);
+            var plan = RemoveLocalSourceRecord(InstanceArchiveReader.Read(archive, Path.GetFileName(archivePath), cancellationToken));
             ValidatePlan(plan);
             return new InstanceImportPreview(InstanceImportPaths.SuggestName(plan.Manifest.Name), plan.Manifest.SourceFormat,
                 plan.Manifest.MinecraftVersion, plan.Manifest.Components, plan.Copies.Count(c => !c.Directory),
@@ -54,7 +54,7 @@ public sealed class MinecraftInstanceImporter : IMinecraftInstanceImporter
         using var input = OpenArchive(archivePath);
         using var archive = new ZipArchive(input, ZipArchiveMode.Read);
         // 预览后原包可能变更，因此执行导入时重做所有校验，不信任旧的界面预览。
-        var plan = InstanceArchiveReader.Read(archive, Path.GetFileName(archivePath), token);
+        var plan = RemoveLocalSourceRecord(InstanceArchiveReader.Read(archive, Path.GetFileName(archivePath), token));
         ValidatePlan(plan);
         var stagingParent = Path.Combine(_launcherRoot, ".eml-imports");
         InstanceImportPaths.EnsureNoLinks(stagingParent);
@@ -104,12 +104,22 @@ public sealed class MinecraftInstanceImporter : IMinecraftInstanceImporter
                     ArchiveEntry = copy.Entry.FullName.Replace('\\', '/')
                 });
             }
-            // 覆盖文件是最终版本：不能再用被覆盖的远端文件哈希检查它或把它下载覆盖回去。
-            // EML 备份里的已下载文件仍保留原始 URL/可信哈希，不能把损坏的 JAR 重新当作正确基线。
-            var remaining = plan.Manifest.Files.Where(f => f.Path is null || !files.ContainsKey(f.Path) ||
-                (plan.PreserveRemoteRequirements && f.Source != InstanceFileSource.Embedded)).ToList();
-            var retainedPaths = remaining.Where(f => f.Path is not null).Select(f => f.Path!).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            remaining.AddRange(files.Values.Where(f => !retainedPaths.Contains(f.Path!)));
+            List<InstanceFileRequirement> remaining;
+            if (plan.PreserveRemoteRequirements)
+            {
+                // 备份是已有来源的搬运：不能重新计算摘要把坏文件或未知 CF JAR 升格为可信覆盖。
+                // 未列出的额外文件仍解压保留，但不自动获得完整性依据。
+                remaining = plan.Manifest.Files.Select(file => file.Source == InstanceFileSource.Embedded &&
+                    file.Origin != InstanceFileOrigin.UserLocalImport && file.ArchiveEntry is not null &&
+                    file.Path is { } path && files.TryGetValue(path, out var copiedFile)
+                        ? file with { ArchiveEntry = copiedFile.ArchiveEntry } : file).ToList();
+            }
+            else
+            {
+                // 首次从平台原包导入时才建立包内基线；与远端同路径的内容保留独立 SHA-256。
+                remaining = plan.Manifest.Files.Where(file => file.Path is null || !files.ContainsKey(file.Path)).ToList();
+                remaining.AddRange(files.Values);
+            }
             var manifest = plan.Manifest with
             {
                 Name = name, SourceArchive = Path.GetFileName(archivePath), IntegrityStatus = "NotChecked", Files = remaining
@@ -119,6 +129,7 @@ public sealed class MinecraftInstanceImporter : IMinecraftInstanceImporter
             if (manifest.SourceFormat == "Prism")
                 SynchronizePrismName(staging, name, remaining);
             await InstanceManifestStore.WriteAsync(Path.Combine(staging, InstanceImportManifest.FileName), manifest, token);
+            await InstanceImportSourceStore.WriteAsync(staging, manifest, archivePath, token);
             token.ThrowIfCancellationRequested();
             InstanceImportPaths.EnsureNoLinks(destination);
             Directory.CreateDirectory(instances);
@@ -142,6 +153,17 @@ public sealed class MinecraftInstanceImporter : IMinecraftInstanceImporter
         return new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read);
     }
 
+    /// <summary>EML 自有状态只在本机按当前清单重新生成，不能来自压缩包或成为游戏内容基线。</summary>
+    private static InstanceArchivePlan RemoveLocalSourceRecord(InstanceArchivePlan plan) => plan with
+    {
+        Copies = plan.Copies.Where(copy => !InstanceFileChangePolicy.IsDerivedStatePath(copy.TargetPath)).ToArray(),
+        Manifest = plan.Manifest with
+        {
+            Files = plan.Manifest.Files.Where(file => file.Path is null ||
+                !InstanceFileChangePolicy.IsDerivedStatePath(file.Path)).ToArray()
+        }
+    };
+
     /// <summary>校验导入计划中的文件布局和需求清单，拒绝重复路径及清单自身被覆盖。</summary>
     private static void ValidatePlan(InstanceArchivePlan plan)
     {
@@ -152,20 +174,24 @@ public sealed class MinecraftInstanceImporter : IMinecraftInstanceImporter
             .Append((InstanceImportManifest.FileName, false)));
     }
 
-    /// <summary>把 Prism 显示名改为用户选择的名称，并更新 instance.cfg 的文件大小和哈希。</summary>
+    /// <summary>只同步策略允许变化的 Prism 名称；已有来源与摘要保持不变，严格来源的配置原样保留。</summary>
     private static void SynchronizePrismName(string staging, string name, List<InstanceFileRequirement> files)
     {
+        var requirement = files.SingleOrDefault(file => string.Equals(file.Path, "instance.cfg", StringComparison.OrdinalIgnoreCase));
+        if (requirement is not null && !InstanceFileChangePolicy.IsMutableConfiguration(requirement, ".minecraft", "Prism"))
+            return;
         var path = Path.Combine(staging, "instance.cfg");
         if (File.Exists(path) && new FileInfo(path).Length > 1024 * 1024) throw new InvalidDataException("Prism 配置过大。");
         var original = File.Exists(path) ? File.ReadAllText(path) : "";
         File.WriteAllText(path, MinecraftInstanceManager.UpdatePrismName(original, name));
-        files.RemoveAll(f => string.Equals(f.Path, "instance.cfg", StringComparison.OrdinalIgnoreCase));
+        // 名称属于允许的元数据变化，不重建已有基线；仅为原包未携带的配置建立首次声明。
+        if (requirement is not null) return;
         using var stream = File.OpenRead(path);
         files.Add(new InstanceFileRequirement
         {
             Path = "instance.cfg", Source = InstanceFileSource.Embedded, Size = stream.Length,
             Hashes = new Dictionary<string, string> { ["sha256"] = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant() },
-            // 同步名称后内容已变化，不能声称原压缩条目可以原样恢复这个哈希。
+            // 由 EML 新建的配置没有原压缩条目。
             ArchiveEntry = null
         });
     }

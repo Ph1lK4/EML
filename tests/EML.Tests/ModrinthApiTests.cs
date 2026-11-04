@@ -103,6 +103,228 @@ public sealed class ModrinthApiTests
         Assert.Equal(2, handler.Calls);
     }
 
+    /// <summary>哈希查询使用公开 POST、标准 JSON 和应用身份，统一大小写并去重而不请求最新版本。</summary>
+    [Theory]
+    [InlineData("sha1", 40)]
+    [InlineData("sha512", 128)]
+    public async Task HashLookupPostsNormalizedUniqueHashesWithoutCredentials(string algorithm, int length)
+    {
+        var hash = new string('a', length);
+        using var handler = new FakeHandler(async (request, token) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("https://api.modrinth.com/v2/version_files", request.RequestUri!.AbsoluteUri);
+            Assert.Contains("EML/", request.Headers.UserAgent.ToString());
+            Assert.Null(request.Headers.Authorization);
+            Assert.False(request.Headers.Contains("x-api-key"));
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
+            using var body = JsonDocument.Parse(await request.Content.ReadAsStringAsync(token));
+            Assert.Equal(algorithm, body.RootElement.GetProperty("algorithm").GetString());
+            Assert.Equal(hash, Assert.Single(body.RootElement.GetProperty("hashes").EnumerateArray()).GetString());
+            var response = Json(HashResponse(hash.ToUpperInvariant(), algorithm));
+            response.Headers.Add("X-Ratelimit-Remaining", "299");
+            return response;
+        });
+        using var client = new ModrinthApiClient(handler);
+
+        var versions = await client.GetVersionsByHashesAsync([hash.ToUpperInvariant(), hash], algorithm.ToUpperInvariant());
+
+        Assert.Equal(hash, Assert.Single(versions).Key);
+        Assert.Equal("exact-version", versions[hash].Id);
+        Assert.Equal("exact-project", versions[hash].ProjectId);
+        Assert.Equal(299, client.LastRateLimit!.Remaining);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>空输入不访问网络；没有找到的哈希不出现在结果中，不触发名称搜索或升级。</summary>
+    [Fact]
+    public async Task HashLookupSkipsEmptyInputAndLeavesMissingHashesAbsent()
+    {
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json("{}")));
+        using var client = new ModrinthApiClient(handler);
+
+        Assert.Empty(await client.GetVersionsByHashesAsync([]));
+        Assert.Equal(0, handler.Calls);
+        Assert.Empty(await client.GetVersionsByHashesAsync([new string('a', 40)]));
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>超过 50 个不同哈希时分批请求并合并结果，尾批不会重复前面的哈希。</summary>
+    [Fact]
+    public async Task HashLookupBatchesAtFiftyAndMergesExactResults()
+    {
+        var hashes = Enumerable.Range(1, 101).Select(value => value.ToString("x40")).ToArray();
+        var observed = new List<string>();
+        var counts = new List<int>();
+        using var handler = new FakeHandler(async (request, token) =>
+        {
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+            var batch = body.RootElement.GetProperty("hashes").EnumerateArray().Select(value => value.GetString()!).ToArray();
+            observed.AddRange(batch);
+            counts.Add(batch.Length);
+            return Json("{" + string.Join(',', batch.Select(hash => JsonSerializer.Serialize(hash) + ":" + HashVersion(hash))) + "}");
+        });
+        using var client = new ModrinthApiClient(handler);
+
+        var versions = await client.GetVersionsByHashesAsync(hashes);
+
+        Assert.Equal(new[] { 50, 50, 1 }, counts);
+        Assert.Equal(hashes, observed);
+        Assert.Equal(101, versions.Count);
+        Assert.Equal(3, handler.Calls);
+    }
+
+    /// <summary>不支持的算法、错误长度和非十六进制内容在发起网络请求前被拒绝。</summary>
+    [Theory]
+    [InlineData("sha256", "a")]
+    [InlineData("", "a")]
+    [InlineData("sha1", "abc")]
+    [InlineData("sha1", "gggggggggggggggggggggggggggggggggggggggg")]
+    [InlineData("sha512", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public async Task HashLookupRejectsInvalidInputWithoutRequest(string algorithm, string hash)
+    {
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json("{}")));
+        using var client = new ModrinthApiClient(handler);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetVersionsByHashesAsync([hash], algorithm));
+        Assert.Equal(0, handler.Calls);
+    }
+
+    /// <summary>未知哈希或大小写不同的重复键都不能覆盖请求的精确版本。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HashLookupRejectsUnknownOrDuplicateHashes(bool duplicate)
+    {
+        var hash = new string('a', 40);
+        var second = duplicate ? hash.ToUpperInvariant() : new string('b', 40);
+        var payload = "{" + JsonSerializer.Serialize(hash) + ":" + HashVersion(hash) + "," +
+            JsonSerializer.Serialize(second) + ":" + HashVersion(second) + "}";
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json(payload)));
+        using var client = new ModrinthApiClient(handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetVersionsByHashesAsync([hash]));
+    }
+
+    /// <summary>映射键正确但版本文件哈希不对应时拒绝，避免被同名文件替代。</summary>
+    [Fact]
+    public async Task HashLookupRejectsVersionWithoutRequestedFile()
+    {
+        var hash = new string('a', 40);
+        var payload = "{" + JsonSerializer.Serialize(hash) + ":" + HashVersion(new string('b', 40)) + "}";
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json(payload)));
+        using var client = new ModrinthApiClient(handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetVersionsByHashesAsync([hash]));
+    }
+
+    /// <summary>缺少标识、空文件、非法大小或矛盾字段都以数据错误返回，不能进入下载流程。</summary>
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    [InlineData("{\"id\":\"v1\",\"project_id\":\"p1\",\"files\":null}")]
+    [InlineData("{\"id\":\"v1\",\"project_id\":\"p1\",\"files\":[]}")]
+    [InlineData("{\"id\":\"v1\",\"project_id\":\"p1\",\"files\":[null]}")]
+    public async Task HashLookupRejectsMalformedVersion(string version)
+    {
+        var hash = new string('a', 40);
+        var payload = "{" + JsonSerializer.Serialize(hash) + ":" + version + "}";
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json(payload)));
+        using var client = new ModrinthApiClient(handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetVersionsByHashesAsync([hash]));
+    }
+
+    /// <summary>返回 JSON 内重复字段、不安全地址及不可信大小不能被反序列化的默认值掩盖。</summary>
+    [Theory]
+    [InlineData("\"id\":\"exact-version\"", "\"id\":\"exact-version\",\"id\":\"other\"")]
+    [InlineData("\"project_id\":\"exact-project\"", "\"project_id\":\"../unsafe\"")]
+    [InlineData("\"size\":123", "\"size\":-1")]
+    [InlineData("\"size\":123", "\"size\":\"123\"")]
+    [InlineData("\"size\":123,", "")]
+    [InlineData("https://cdn.modrinth.com/data/exact/file.jar", "http://cdn.modrinth.com/data/exact/file.jar")]
+    [InlineData("https://cdn.modrinth.com/data/exact/file.jar", "https://user:secret@cdn.modrinth.com/file.jar")]
+    public async Task HashLookupRejectsMalformedFileAndConflictingFields(string before, string after)
+    {
+        var hash = new string('a', 40);
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json(HashResponse(hash).Replace(before, after, StringComparison.Ordinal))));
+        using var client = new ModrinthApiClient(handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetVersionsByHashesAsync([hash]));
+    }
+
+    /// <summary>同一版本多个文件命中同一哈希时拒绝歧义；不依据 primary 误选另一个文件。</summary>
+    [Fact]
+    public async Task HashLookupRejectsDuplicateMatchingFiles()
+    {
+        var hash = new string('a', 40);
+        using var parsed = JsonDocument.Parse(HashVersion(hash));
+        var file = parsed.RootElement.GetProperty("files")[0].GetRawText();
+        var version = "{\"id\":\"v1\",\"project_id\":\"p1\",\"files\":[" + file + "," + file + "]}";
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json("{" + JsonSerializer.Serialize(hash) + ":" + version + "}")));
+        using var client = new ModrinthApiClient(handler);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetVersionsByHashesAsync([hash]));
+    }
+
+    /// <summary>哈希查询复用 JSON 大小上限，不因为改用 POST 而允许任意大的响应。</summary>
+    [Fact]
+    public async Task HashLookupPreservesResponseSizeLimit()
+    {
+        var hash = new string('a', 40);
+        using var handler = new FakeHandler((_, _) => Task.FromResult(Json(HashResponse(hash))));
+        using var client = new ModrinthApiClient(handler, new ModrinthApiOptions { MaximumJsonBytes = 16 });
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => client.GetVersionsByHashesAsync([hash]));
+    }
+
+    /// <summary>批量查询被取消时不再发送后续批次，也不把已完成的部分结果伪装成完整响应。</summary>
+    [Fact]
+    public async Task HashLookupHonorsCancellationBetweenBatches()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var handler = new FakeHandler((_, _) =>
+        {
+            cancellation.Cancel();
+            return Task.FromResult(Json("{}"));
+        });
+        using var client = new ModrinthApiClient(handler);
+        var hashes = Enumerable.Range(1, 51).Select(value => value.ToString("x40")).ToArray();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetVersionsByHashesAsync(hashes, cancellationToken: cancellation.Token));
+        Assert.Equal(1, handler.Calls);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetVersionsByHashesAsync([], cancellationToken: cancellation.Token));
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>哈希 POST 保留超时与限流分类，调用方可在稍后重试而不误报无匹配文件。</summary>
+    [Fact]
+    public async Task HashLookupPreservesTimeoutAndRateLimitErrors()
+    {
+        var hash = new string('a', 40);
+        using var timeoutHandler = new FakeHandler(async (_, token) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return Json("{}");
+        });
+        using var timeoutClient = new ModrinthApiClient(timeoutHandler,
+            new ModrinthApiOptions { RequestTimeout = TimeSpan.FromMilliseconds(30) });
+        await Assert.ThrowsAsync<TimeoutException>(() => timeoutClient.GetVersionsByHashesAsync([hash]));
+
+        using var rateHandler = new FakeHandler((_, _) =>
+        {
+            var response = Json("private detail", HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.FromSeconds(5));
+            return Task.FromResult(response);
+        });
+        using var rateClient = new ModrinthApiClient(rateHandler);
+        var error = await Assert.ThrowsAsync<ModrinthApiException>(() => rateClient.GetVersionsByHashesAsync([hash]));
+        Assert.Equal(TimeSpan.FromSeconds(5), error.RetryAfter);
+        Assert.DoesNotContain("private detail", error.Message);
+        Assert.Equal(1, rateHandler.Calls);
+    }
+
     /// <summary>限流错误提供等待秒数和余额，不暗中重试或显示响应正文。</summary>
     [Fact]
     public async Task RateLimitReturnsRetryInformationWithoutRetrying()
@@ -312,6 +534,21 @@ public sealed class ModrinthApiTests
         Assert.Throws<InvalidDataException>(() => ModrinthVersionDownloadService.CreateDownloadRequest(unverified, Path.GetTempPath()));
         Assert.Throws<InvalidDataException>(() => ModrinthVersionDownloadService.CreateDownloadRequest(malformed, Path.GetTempPath()));
     }
+
+    /// <summary>生成精确哈希到版本的映射响应，保留调用方指定的大小写以测试规范化。</summary>
+    private static string HashResponse(string hash, string algorithm = "sha1") =>
+        "{" + JsonSerializer.Serialize(hash) + ":" + HashVersion(hash, algorithm) + "}";
+
+    /// <summary>生成结构完整的单文件版本 JSON，避免测试依赖真实项目或在线接口。</summary>
+    private static string HashVersion(string hash, string algorithm = "sha1") =>
+        JsonSerializer.Serialize(new
+        {
+            id = "exact-version", project_id = "exact-project", files = new[]
+            {
+                new { filename = "file.jar", url = "https://cdn.modrinth.com/data/exact/file.jar", size = 123,
+                    hashes = new Dictionary<string, string> { [algorithm] = hash } }
+            }
+        });
 
     /// <summary>生成带有效长度哈希的内存版本文件，不进行真实下载。</summary>
     private static ModrinthVersionFile File(string filename, bool primary) => new()

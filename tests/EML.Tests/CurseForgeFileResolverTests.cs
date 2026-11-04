@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using EML.Core.CurseForge;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Minecraft.CurseForge;
@@ -28,6 +29,8 @@ public sealed class CurseForgeFileResolverTests : IDisposable
         var result = await new CurseForgeFileResolver(client).ResolveAsync(fixture.Instance, fixture.Manifest);
 
         Assert.Equal(2, handler.Calls);
+        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(InstanceFileOrigin.CurseForgeDownload, Assert.Single(result.Files).Requirement.Origin);
         Assert.Equal("https://edge.forgecdn.net/files/20/test.jar", Assert.Single(Assert.Single(result.Files).Requirement.Downloads));
         Assert.Equal(fixture.OriginalManifest, File.ReadAllBytes(Path.Combine(fixture.Instance, InstanceImportManifest.FileName)));
         Assert.DoesNotContain("test-only-key", File.ReadAllText(Path.Combine(fixture.Instance, CurseForgeFileStateStore.RelativePath)));
@@ -47,6 +50,8 @@ public sealed class CurseForgeFileResolverTests : IDisposable
         var result = await new CurseForgeFileResolver(client).ResolveAsync(fixture.Instance, fixture.Manifest);
 
         Assert.Equal(address, Assert.Single(Assert.Single(result.Files).Requirement.Downloads));
+        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(InstanceFileOrigin.CurseForgeDownload, Assert.Single(result.Files).Requirement.Origin);
         Assert.Equal(0, handler.Calls);
     }
 
@@ -64,6 +69,8 @@ public sealed class CurseForgeFileResolverTests : IDisposable
         var result = await new CurseForgeFileResolver(client).ResolveAsync(fixture.Instance, fixture.Manifest);
 
         Assert.Single(result.Files);
+        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(InstanceFileOrigin.CurseForgeDownload, Assert.Single(result.Files).Requirement.Origin);
         Assert.Equal(0, handler.Calls);
     }
 
@@ -118,8 +125,11 @@ public sealed class CurseForgeFileResolverTests : IDisposable
         var manifestPath = Path.Combine(instance, InstanceImportManifest.FileName);
         await InstanceManifestStore.WriteAsync(manifestPath, manifest, CancellationToken.None);
         if (cachedUrl is not null)
-            await CurseForgeFileStateStore.WriteAsync(instance, manifest, new()
+        {
+            // 直接序列化真实旧结构，让读取迁移负责补上来源，不能用新版写入器伪造旧缓存。
+            var legacy = new CurseForgeFileResolution
             {
+                SchemaVersion = 1,
                 Fingerprint = CurseForgeFileStateStore.Fingerprint(manifest),
                 Files = [new()
                 {
@@ -130,7 +140,16 @@ public sealed class CurseForgeFileResolverTests : IDisposable
                         Hashes = new Dictionary<string, string> { ["sha1"] = new string('a', 40) }
                     }
                 }]
-            }, CancellationToken.None);
+            };
+            var cache = Path.Combine(instance, CurseForgeFileStateStore.RelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(cache)!);
+            var options = new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                Converters = { new JsonStringEnumConverter(allowIntegerValues: false) }
+            };
+            await File.WriteAllTextAsync(cache, JsonSerializer.Serialize(legacy, options));
+        }
         return new(instance, manifest, await File.ReadAllBytesAsync(manifestPath));
     }
 

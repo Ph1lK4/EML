@@ -156,6 +156,7 @@ public partial class InstancesViewModel : ObservableObject
         if (IsBusy) return;
         IsBusy = true;
         var revision = ++_transferRevision;
+        InstanceImportResult? imported = null;
         try
         {
             var archive = _dialogs.ChooseImportPath();
@@ -174,34 +175,53 @@ public partial class InstancesViewModel : ObservableObject
                 TransferPercent = p.Percent;
                 TransferStatus = $"{p.Percent:F1}%  {p.FileName}";
             });
-            var result = await _importer.ImportAsync(archive, name, progress, token);
+            imported = await _importer.ImportAsync(archive, name, progress, token);
             ++_transferRevision;
             TransferPercent = 100;
             TransferStatus = "导入完成";
-            await ReloadAfterChangeAsync(result.InstancePath, "实例文件已导入。Prism、Modrinth 和 CurseForge 会自动补全依赖；也可在“补全实例依赖”中继续未完成的下载。");
+            await ReloadAfterChangeAsync(imported.InstancePath, "实例文件已导入。");
+            SelectImportedInstance(imported);
             SelectedDetailTab = 2;
-            var sourceFormat = result.Manifest.SourceFormat;
-            if ((sourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
+            var sourceFormat = imported.Manifest.SourceFormat;
+            if (sourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
                  sourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase) ||
-                 sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)) &&
-                string.Equals(SelectedInstance?.InstancePath, result.InstancePath, StringComparison.OrdinalIgnoreCase))
+                 sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase))
             {
-                if (token.IsCancellationRequested)
-                {
-                    StatusText = $"{sourceFormat} 文件已导入，后续依赖补全已取消；可手动点击“补全实例依赖”继续。";
-                    return;
-                }
-                // 已提交实例后进入独立补全命令；下载失败不回滚导入，两个取消按钮都能停止后续下载。
-                IsBusy = false;
-                using var registration = token.Register(() => DownloadMissingCommand.Cancel());
-                var installation = DownloadMissingCommand.ExecuteAsync(null);
-                if (token.IsCancellationRequested) DownloadMissingCommand.Cancel();
-                await installation;
+                // 补全始终使用导入结果中的路径，不依赖扫描成功，也不在两阶段之间释放忙碌状态。
+                await RunDownloadAsync(imported.InstancePath, token, afterImport: true);
             }
+            else StatusText += " 通用 ZIP 已保存包内文件；如有下载清单，可点击“补全实例依赖”继续检查。";
         }
-        catch (OperationCanceledException) { TransferStatus = "已取消导入"; StatusText = "没有新增实例。"; }
-        catch (Exception ex) { TransferStatus = "导入失败"; StatusText = ex.Message; }
+        catch (OperationCanceledException)
+        {
+            TransferStatus = imported is null ? "已取消导入" : "实例已导入，后续操作已取消";
+            StatusText = imported is null ? "没有新增实例。" : "已导入实例保留，可点击“补全实例依赖”继续。";
+        }
+        catch (Exception ex)
+        {
+            TransferStatus = imported is null ? "导入失败" : "实例已导入，后续操作未完成";
+            StatusText = (imported is null ? "" : "已导入实例保留，可点击“补全实例依赖”继续。") + ex.Message;
+        }
         finally { ++_transferRevision; IsBusy = false; }
+    }
+
+    /// <summary>刷新失败或扫描暂未发现时仍展示已提交实例，保证自动补全结果属于正确条目。</summary>
+    private void SelectImportedInstance(InstanceImportResult imported)
+    {
+        var instance = Instances.FirstOrDefault(item => string.Equals(item.InstancePath, imported.InstancePath,
+            StringComparison.OrdinalIgnoreCase));
+        if (instance is null)
+        {
+            var manifest = imported.Manifest;
+            instance = new MinecraftInstance(manifest.Name, imported.InstancePath, imported.GameDirectory,
+                manifest.MinecraftVersion is { } version ? [version] : [])
+            {
+                Format = manifest.SourceFormat,
+                Warnings = ["根据导入结果显示；完整扫描信息可稍后刷新。"]
+            };
+            Instances.Add(instance);
+        }
+        SelectedInstance = instance;
     }
 
     /// <summary>扫描完成后一次性替换集合，避免扫描失败时破坏当前列表。</summary>

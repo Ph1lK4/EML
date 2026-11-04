@@ -57,8 +57,22 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         }
 
         var runtimeIssues = new List<string>();
+        var contentIssues = new List<string>();
+        var manifestFingerprint = EmbeddedFileBaseline.ManifestFingerprint(manifest);
         var runtimeNotes = new List<string>();
-        var requirements = ReadEffectiveRequirements(root, manifest, runtimeIssues, runtimeNotes)
+        IReadOnlyList<InstanceFileRequirement> effectiveRequirements = manifest.Files
+            .Where(file => !InstanceFileChangePolicy.IsDerivedStatePath(file.Path)).ToArray();
+        InstanceEffectiveRequirements.Snapshot? sourceSnapshot = null;
+        try
+        {
+            sourceSnapshot = InstanceEffectiveRequirements.Build(root, manifest);
+            effectiveRequirements = sourceSnapshot.Requirements;
+            contentIssues.AddRange(sourceSnapshot.ContentIssues);
+            runtimeNotes.AddRange(sourceSnapshot.Notes);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        { contentIssues.Add("文件来源或本地替代记录无法验证：" + ex.Message); }
+        var requirements = effectiveRequirements
             .Select(file => (File: file, Runtime: false)).ToList();
         var isPrism = manifest.SourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase);
         var isModrinth = manifest.SourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase);
@@ -66,7 +80,8 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         var runtimeFormat = isPrism ? "Prism" : isModrinth ? "Modrinth" : isCurseForge ? "CurseForge" : null;
         string? launchProfile = null;
         if (runtimeFormat is not null)
-            launchProfile = await AddRuntimeRequirementsAsync(root, manifest, requirements, runtimeIssues, runtimeNotes, token).ConfigureAwait(false);
+            launchProfile = await AddRuntimeRequirementsAsync(root, manifest, effectiveRequirements, sourceSnapshot is not null, requirements,
+                runtimeIssues, runtimeNotes, token).ConfigureAwait(false);
         var results = new List<InstanceFileCheckResult>(requirements.Count);
         var reporter = new CheckProgressReporter(progress, requirements.Count);
         reporter.Report(0, "读取检查清单", force: true);
@@ -78,7 +93,8 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
             reporter.Report(results.Count, fileName);
             results.Add((await CheckFileAsync(root, requirement, mode, reporter, results.Count, token).ConfigureAwait(false))
                 with { IsRuntimeFile = isRuntime,
-                    IsAllowedConfigurationChange = InstanceFileChangePolicy.IsMutableConfiguration(requirement, manifest.GameDirectory) });
+                    IsAllowedConfigurationChange = !isRuntime && InstanceFileChangePolicy.IsMutableConfiguration(
+                        requirement, manifest.GameDirectory, manifest.SourceFormat) });
             reporter.Report(results.Count, fileName);
             lastFile = fileName;
         }
@@ -86,6 +102,19 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         // 再次验证整条祖先链，避免检查期间实例目录被换成链接后仍返回可信报告。
         // 路径检查无法消除任意外部进程反复替换目录的竞态；调用方也应避免同时移动实例。
         ValidateInstance(root);
+        if (EmbeddedFileBaseline.ManifestFingerprint(InstanceManifestStore.Read(manifestPath)) != manifestFingerprint)
+            contentIssues.Add("文件检查期间导入清单发生变化，请重新执行完整检查。");
+        if (sourceSnapshot is not null)
+        {
+            try { InstanceEffectiveRequirements.EnsureUnchanged(root, manifest, sourceSnapshot); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            { contentIssues.Add("文件来源或本地替代记录无法验证：" + ex.Message); }
+        }
+        // 即便依赖已经准备好，必需内容尚未通过也不向启动调用方发布可用配置。
+        var preparedLaunchProfile = launchProfile;
+        if (mode != InstanceCheckMode.Full || runtimeIssues.Count > 0 || contentIssues.Count > 0 ||
+            results.Any(InstanceFileStatePolicy.IsBlocking))
+            launchProfile = null;
         reporter.Report(results.Count, lastFile, force: true);
         var notes = new List<string>
         {
@@ -95,6 +124,7 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
                 "此格式的 Minecraft 本体、加载器和 Java 运行依赖尚未展开，文件校验通过不代表实例一定能启动。"
         };
         notes.AddRange(runtimeNotes);
+        notes.AddRange(contentIssues);
         notes.AddRange(runtimeIssues);
         if (mode == InstanceCheckMode.Quick) notes.Add("本次为快速检查，只确认路径和声明的大小，没有校验文件内容。");
         if (manifest.Files.Count == 0) notes.Add("清单没有具体文件需求，当前没有可校验的文件依据。");
@@ -102,13 +132,16 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         {
             InstancePath = root, Mode = mode, CheckedAt = DateTimeOffset.Now, HasManifest = true,
             Files = results, Components = manifest.Components, Notes = notes, IsPrismRuntime = isPrism,
-            RuntimeSourceFormat = runtimeFormat, RuntimeIssues = runtimeIssues, LaunchProfilePath = launchProfile
+            RuntimeSourceFormat = runtimeFormat, RuntimeIssues = runtimeIssues, ContentIssues = contentIssues,
+            PreparedLaunchProfilePath = preparedLaunchProfile, LaunchProfilePath = launchProfile
         };
     }
 
     /// <summary>按来源格式只读展开本地元数据、资源索引及独立状态，不在检查按钮中访问网络。</summary>
     private static async Task<string?> AddRuntimeRequirementsAsync(string root, InstanceImportManifest manifest,
-        List<(InstanceFileRequirement File, bool Runtime)> requirements, List<string> issues, List<string> notes, CancellationToken token)
+        IReadOnlyList<InstanceFileRequirement> effectiveRequirements, bool hasSourceSnapshot,
+        List<(InstanceFileRequirement File, bool Runtime)> requirements,
+        List<string> issues, List<string> notes, CancellationToken token)
     {
         try
         {
@@ -117,6 +150,16 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
                 : manifest.SourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase)
                     ? new ModrinthRuntimeResolver() : new PrismRuntimeResolver();
             var plan = resolver.Resolve(root, manifest);
+            if (!hasSourceSnapshot && plan.Files.Any(file => file.Requirement.Source == InstanceFileSource.Embedded))
+                issues.Add("本地运行文件的来源或用户替换记录无法验证，运行依赖尚未通过检查。");
+            var baseline = effectiveRequirements.Where(file => file.Path is not null)
+                .ToDictionary(file => file.Path!, StringComparer.OrdinalIgnoreCase);
+            plan = plan with
+            {
+                Files = plan.Files.Select(file => file.Requirement.Source == InstanceFileSource.Embedded &&
+                    baseline.TryGetValue(file.Requirement.Path!, out var selected)
+                        ? file with { Requirement = selected } : file).ToArray()
+            };
             issues.AddRange(plan.BlockingIssues);
             notes.AddRange(plan.Notes);
             foreach (var request in plan.MetadataRequests)
@@ -150,41 +193,6 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         }
     }
 
-    /// <summary>只读合并 CurseForge 的已解析缓存；文件检查不需要授权，也不会发出网络请求。</summary>
-    private static IReadOnlyList<InstanceFileRequirement> ReadEffectiveRequirements(string root,
-        InstanceImportManifest manifest, List<string> issues, List<string> notes)
-    {
-        if (!manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)) return manifest.Files;
-        try
-        {
-            var cached = CurseForgeFileStateStore.Read(root, manifest);
-            if (cached is null)
-            {
-                notes.Add("CurseForge 文件引用尚未解析，请执行“补全实例依赖”，获取清单指定版本的文件信息。");
-                return manifest.Files;
-            }
-            var entries = cached.Files.ToDictionary(f => (f.Requirement.ProjectId, f.Requirement.FileId));
-            var result = new List<InstanceFileRequirement>(manifest.Files.Count);
-            foreach (var file in CurseForgeFileStateStore.EffectiveRequirements(manifest, cached))
-            {
-                if (file.Source != InstanceFileSource.CurseForge || !entries.TryGetValue((file.ProjectId, file.FileId), out var resolved))
-                { result.Add(file); continue; }
-                result.Add(resolved.Requirement);
-                if (!string.IsNullOrEmpty(resolved.BlockReason) && file.Required)
-                    issues.Add($"CurseForge {file.ProjectId}/{file.FileId}：{resolved.BlockReason}");
-                if (resolved.Requirement.Downloads.Count == 0 && !string.IsNullOrEmpty(resolved.ManualDownloadUrl))
-                    notes.Add($"需要手动提供时请将文件放到 {resolved.Requirement.Path ?? "待确认目录"}：{resolved.ManualDownloadUrl}");
-            }
-            return result;
-        }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or
-            ArgumentException or InvalidOperationException or System.Text.Json.JsonException)
-        {
-            issues.Add("CurseForge 文件缓存无法读取：" + ex.Message);
-            return manifest.Files;
-        }
-    }
-
     /// <summary>验证实例层级和所有已有祖先，拒绝越界目录、链接目录以及不存在的实例。</summary>
     private string ValidateInstance(string instancePath)
     {
@@ -206,6 +214,7 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         var opened = false;
         try
         {
+            _ = InstanceFileIntegrity.HashesFor(requirement);
             var path = InstanceImportPaths.Within(root, requirement.Path);
             // 从已有实例目录向下检查；上层缺失时立即结束，避免对每个缺失祖先反复抛异常。
             ValidateFilePath(root, requirement.Path);
@@ -238,10 +247,13 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            return new(requirement, opened ? InstanceFileState.ChangedDuringCheck : InstanceFileState.Missing,
-                opened ? "文件在检查过程中消失，请重新检查。" : "清单声明的文件不存在。");
+            var missingState = requirement.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport
+                ? InstanceFileState.MissingEmbeddedFile : InstanceFileState.Missing;
+            return new(requirement, opened ? InstanceFileState.ChangedDuringCheck : missingState,
+                opened ? "文件在检查过程中消失，请重新检查。" : missingState == InstanceFileState.MissingEmbeddedFile
+                    ? "包内覆盖或用户选择的文件缺失，不能用同路径官方文件替代。" : "清单声明的文件不存在。");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.SecurityException)
         {
             return new(requirement, InstanceFileState.Unreadable, "无法安全读取文件：" + ex.Message);
         }
@@ -310,7 +322,7 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
 
     /// <summary>包内文件差异仅表示导入后变化，避免把用户配置或存档修改误报为损坏。</summary>
     private static InstanceFileCheckResult Difference(InstanceFileRequirement requirement, InstanceFileState state, string message) =>
-        requirement.Source == InstanceFileSource.Embedded
+        requirement.Source == InstanceFileSource.Embedded && requirement.Origin is not (InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport)
             ? new(requirement, InstanceFileState.ChangedSinceImport, "与导入时快照不同；配置或存档的正常修改也会产生此结果。" + message)
             : new(requirement, state, message);
 

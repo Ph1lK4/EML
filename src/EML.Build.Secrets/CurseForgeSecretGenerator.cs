@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Immutable;
+using System.IO;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -7,13 +9,15 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace EML.Build.Secrets;
 
-/// <summary>仅在显式发布开关开启时从进程环境生成内存源码，不读取配置文件或写入源码文件。</summary>
+/// <summary>从显式发布环境或本机加密构建输入生成内存源码，不输出明文凭证文件。</summary>
 [Generator(LanguageNames.CSharp)]
 public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
 {
     private const string TargetAssembly = "EML.Infrastructure";
     private const string EnableVariable = "EML_EMBED_CURSEFORGE_KEY";
     private const string KeyVariable = "EML_CURSEFORGE_API_KEY";
+    private const string CredentialFileProperty = "build_property.EMLCurseForgeCredentialFile";
+    private const int MaximumCredentialTextLength = 16 * 1024;
     private static readonly DiagnosticDescriptor InvalidCredential = new(
         "EMLCF001", "CurseForge 发布凭证无效", "发布凭证缺失或格式无效，无法完成此构建。",
         "Build", DiagnosticSeverity.Error, true);
@@ -23,26 +27,39 @@ public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor UnreadableEnvironment = new(
         "EMLCF003", "无法读取发布环境", "无法读取发布环境，请在独立构建进程中重试。",
         "Build", DiagnosticSeverity.Error, true);
+    private static readonly DiagnosticDescriptor UnreadableCredentialFile = new(
+        "EMLCF004", "无法读取本机加密构建凭证", "本机加密构建凭证缺失或无法解密，请重新配置开发构建授权。",
+        "Build", DiagnosticSeverity.Error, true);
     private readonly Func<string, string?> _readEnvironment;
+    private readonly Func<string, string?> _unprotectCredential;
 
-    /// <summary>生产编译只从当前编译进程取值，不使用 MSBuild 密钥属性或用户配置文件。</summary>
+    /// <summary>生产编译使用当前进程环境和 Windows 当前用户的加密构建输入。</summary>
     public CurseForgeSecretGenerator() : this(ReadProcessEnvironment) { }
 
     /// <summary>允许离线测试注入假环境，不读取或修改测试机器的实际环境变量。</summary>
-    public CurseForgeSecretGenerator(Func<string, string?> readEnvironment) =>
-        _readEnvironment = readEnvironment ?? throw new ArgumentNullException(nameof(readEnvironment));
+    public CurseForgeSecretGenerator(Func<string, string?> readEnvironment)
+        : this(readEnvironment, WindowsBuildCredential.Unprotect) { }
 
-    /// <summary>不注册语法遍历；凭证只依赖明确的发布开关及编译目标。</summary>
+    /// <summary>允许测试以假解密函数核实读取顺序及错误处理，不需要真实凭证。</summary>
+    public CurseForgeSecretGenerator(Func<string, string?> readEnvironment, Func<string, string?> unprotectCredential)
+    {
+        _readEnvironment = readEnvironment ?? throw new ArgumentNullException(nameof(readEnvironment));
+        _unprotectCredential = unprotectCredential ?? throw new ArgumentNullException(nameof(unprotectCredential));
+    }
+
+    /// <summary>将附加文件纳入增量依赖，凭证替换后重新生成；读取内容前仍执行目标与输出检查。</summary>
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var input = context.CompilationProvider.Select((compilation, _) => compilation.AssemblyName)
-            .Combine(context.AnalyzerConfigOptionsProvider);
+            .Combine(context.AnalyzerConfigOptionsProvider)
+            .Combine(context.AdditionalTextsProvider.Collect());
         context.RegisterSourceOutput(input, (production, values) =>
-            Execute(production, values.Left, values.Right.GlobalOptions));
+            Execute(production, values.Left.Left, values.Left.Right.GlobalOptions, values.Right));
     }
 
-    /// <summary>先验证目标与开关，再校验输出设置，最后读取密钥；所有失败只产生固定诊断。</summary>
-    private void Execute(SourceProductionContext context, string? assemblyName, AnalyzerConfigOptions options)
+    /// <summary>环境显式授权优先，否则使用配置的加密文件；所有失败只产生不含原始异常的固定诊断。</summary>
+    private void Execute(SourceProductionContext context, string? assemblyName, AnalyzerConfigOptions options,
+        ImmutableArray<AdditionalText> additionalFiles)
     {
         if (!string.Equals(assemblyName, TargetAssembly, StringComparison.Ordinal)) return;
         string? enabled;
@@ -52,7 +69,9 @@ public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
             ReportFailure(context, UnreadableEnvironment);
             return;
         }
-        if (!string.Equals(enabled, "1", StringComparison.Ordinal))
+        var useEnvironment = string.Equals(enabled, "1", StringComparison.Ordinal);
+        options.TryGetValue(CredentialFileProperty, out var credentialPath);
+        if (!useEnvironment && string.IsNullOrEmpty(credentialPath))
         {
             AddValue(context, string.Empty);
             return;
@@ -64,6 +83,22 @@ public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
             return;
         }
         string? key;
+        if (!useEnvironment)
+        {
+            try { key = ReadCredential(context, credentialPath!, additionalFiles); }
+            catch
+            {
+                ReportFailure(context, UnreadableCredentialFile);
+                return;
+            }
+            if (!IsValidKey(key))
+            {
+                ReportFailure(context, UnreadableCredentialFile);
+                return;
+            }
+            AddValue(context, key!);
+            return;
+        }
         try { key = _readEnvironment(KeyVariable); }
         catch
         {
@@ -76,6 +111,28 @@ public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
             return;
         }
         AddValue(context, key!);
+    }
+
+    /// <summary>只读取编译器提供的唯一、完整路径匹配文件；限制输入长度后交由当前用户解密。</summary>
+    private string? ReadCredential(SourceProductionContext context, string path,
+        ImmutableArray<AdditionalText> additionalFiles)
+    {
+        // 拒绝相对路径和盘符相对路径，避免凭证来源取决于编译进程的工作目录。
+        if (!Path.IsPathRooted(path)) return null;
+        var fullPath = Path.GetFullPath(path);
+        if (!string.Equals(Path.GetPathRoot(path), Path.GetPathRoot(fullPath), StringComparison.OrdinalIgnoreCase))
+            return null;
+        AdditionalText? selected = null;
+        foreach (var file in additionalFiles)
+        {
+            if (!string.Equals(file.Path, path, StringComparison.OrdinalIgnoreCase)) continue;
+            if (selected != null) return null;
+            selected = file;
+        }
+        if (selected == null) return null;
+        var content = selected.GetText(context.CancellationToken);
+        if (content == null || content.Length == 0 || content.Length > MaximumCredentialTextLength) return null;
+        return _unprotectCredential(content.ToString());
     }
 
     /// <summary>识别布尔型编译输出选项，仅查询非秘密的 analyzer 配置项。</summary>
@@ -96,7 +153,7 @@ public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
     {
         var source = "// <auto-generated/>\n" +
             "namespace EML.Infrastructure.Minecraft.CurseForge.Api\n{\n" +
-            "    /// <summary>由发布编译生成的凭证；普通构建为空。</summary>\n" +
+            "    /// <summary>由构建输入生成的凭证；未配置授权的构建为空。</summary>\n" +
             "    internal static class GeneratedCurseForgeSecret\n    {\n" +
             "        internal const string Value = " + SymbolDisplay.FormatLiteral(value, true) + ";\n" +
             "    }\n}\n";
@@ -111,7 +168,7 @@ public sealed class CurseForgeSecretGenerator : IIncrementalGenerator
         AddValue(context, string.Empty);
     }
 
-    /// <summary>构建工具的唯一实际环境入口；独立发布进程与禁止共享编译保证每次使用当前值。</summary>
+    /// <summary>构建工具的唯一实际环境入口；独立编译进程保证显式发布使用当前值。</summary>
 #pragma warning disable RS1035 // 此生成器的明确用途是在发布编译时读取进程级凭证。
     private static string? ReadProcessEnvironment(string name) => Environment.GetEnvironmentVariable(name);
 #pragma warning restore RS1035

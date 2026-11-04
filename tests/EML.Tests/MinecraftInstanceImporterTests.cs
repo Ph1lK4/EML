@@ -471,7 +471,7 @@ public sealed class MinecraftInstanceImporterTests : IDisposable
         AssertNothingImported();
     }
 
-    /// <summary>EML 导出后重新导入仍保留未下载需求，已有配置则按备份中的实际内容重新计算哈希。</summary>
+    /// <summary>备份保留原始下载和包内基线；玩家配置变化保持原样，由共享变更策略允许。</summary>
     [Fact]
     public async Task ExportAndReimportPreservesPendingRequirementsAndCurrentEmbeddedFiles()
     {
@@ -492,7 +492,11 @@ public sealed class MinecraftInstanceImporterTests : IDisposable
         Assert.Equal("user changed configuration", File.ReadAllText(Path.Combine(second.GameDirectory, "config", "test.cfg")));
         var saved = Assert.Single(second.Manifest.Files, file => file.Path == ".minecraft/config/test.cfg");
         Assert.Equal(InstanceFileSource.Embedded, saved.Source);
-        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("user changed configuration"))), saved.Hashes["sha256"]);
+        Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("original configuration"))), saved.Hashes["sha256"]);
+        var report = await new MinecraftInstanceChecker(_root).CheckAsync(second.InstancePath);
+        var setting = Assert.Single(report.Files, file => file.Requirement.Path == saved.Path);
+        Assert.Equal(InstanceFileState.ChangedSinceImport, setting.State);
+        Assert.False(InstanceFileStatePolicy.IsBlocking(setting));
         Assert.False(File.Exists(Path.Combine(second.GameDirectory, "mods", "missing.jar")));
     }
 

@@ -79,7 +79,7 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
                         pending.Add(requirement);
                     else results.Add(new(requirement, InstanceDownloadState.Unavailable, MissingSourceReason(requirement)));
                 }
-                else if (file.State is not (InstanceFileState.Verified or InstanceFileState.PresentUnverified))
+                else if (InstanceFileStatePolicy.IsBlocking(file))
                     results.Add(new(requirement, InstanceDownloadState.Unavailable,
                         file.State == InstanceFileState.Unresolved ? "平台文件引用尚未解析，不能确定下载目标。" :
                         "保留现有内容，不自动替换：" + file.Message));

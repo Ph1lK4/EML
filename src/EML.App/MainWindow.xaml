@@ -29,7 +29,7 @@
             <Button Content="删除实例" Command="{Binding DeleteCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="导出 ZIP" Command="{Binding ExportCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="完整备份实例目录；请先关闭游戏。不包含实例外的共享依赖。"/>
             <Button Content="取消导出" Command="{Binding ExportCancelCommand}" Padding="12,6" Margin="0,0,0,4"/>
-            <Button Content="取消导入" Command="{Binding ImportCancelCommand}" Padding="12,6" Margin="8,0,0,4"/>
+            <Button Content="取消导入 / 自动补全" Command="{Binding ImportCancelCommand}" Padding="12,6" Margin="8,0,0,4"/>
           </WrapPanel>
           <DataGrid Grid.Row="2" ItemsSource="{Binding Instances}" SelectedItem="{Binding SelectedInstance}" IsEnabled="{Binding CanInteract}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single">
             <DataGrid.Columns>
@@ -99,7 +99,7 @@
               </Grid.RowDefinitions>
               <WrapPanel>
                 <Button Content="补全实例依赖" Command="{Binding DownloadMissingCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="按整合包声明下载必需模组及支持的运行依赖；CurseForge 使用内置授权直接下载，受限制文件会提供手动处理提示"/>
-                <Button Content="取消下载 / 复查" Command="{Binding DownloadMissingCancelCommand}" Padding="10,4" Margin="0,0,6,6"/>
+                <Button Content="取消下载 / 复查" Command="{Binding CancelDependencyDownloadCommand}" Padding="10,4" Margin="0,0,6,6"/>
               </WrapPanel>
               <!-- 下载错误和完整配置路径可能较长，限制摘要高度并保留滚动阅读。 -->
               <ScrollViewer Grid.Row="1" MaxHeight="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6">

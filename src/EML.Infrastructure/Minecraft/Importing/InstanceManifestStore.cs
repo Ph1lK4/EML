@@ -42,10 +42,16 @@ internal static class InstanceManifestStore
     /// <summary>验证并保存清单为 JSON，支持取消且限制生成文件的大小。</summary>
     internal static async Task WriteAsync(string path, InstanceImportManifest manifest, CancellationToken token)
     {
+        await File.WriteAllBytesAsync(path, Serialize(manifest), token);
+    }
+
+    /// <summary>导出与本地保存使用同一套验证和编码，避免备份丢失来源字段。</summary>
+    internal static byte[] Serialize(InstanceImportManifest manifest)
+    {
         Validate(manifest);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest, Options);
         if (bytes.Length > SafeInstanceArchive.MaxManifestBytes) throw new InvalidDataException("生成的实例清单超过 8 MiB。");
-        await File.WriteAllBytesAsync(path, bytes, token);
+        return bytes;
     }
 
     /// <summary>检查清单版本、文件路径、HTTPS 地址和哈希格式，拒绝不完整或冲突的声明。</summary>
@@ -84,6 +90,11 @@ internal static class InstanceManifestStore
                 if (expected == 0 || hash is null || hash.Length != expected || !hash.All(Uri.IsHexDigit))
                     throw new InvalidDataException("不支持的哈希类型或无效校验值。");
             }
+            // 未解析平台引用可以暂缺大小/摘要；实际文件验证阶段再执行来源完整性约束。
+            if (file.Origin is { } origin && !Enum.IsDefined(origin)) throw new InvalidDataException("未知的文件内容来源。");
+            if (file.Role is { } role && (!Enum.IsDefined(role) ||
+                role != InstanceFileChangePolicy.GetRole(file, manifest.GameDirectory, manifest.SourceFormat)))
+                throw new InvalidDataException("文件用途与来源或 EML 管理范围不一致。");
             if (file.ArchiveEntry is not null) InstanceImportPaths.Relative(file.ArchiveEntry);
         }
         InstanceImportPaths.ValidateLayout(manifest.Files.Where(f => f.Path is not null).Select(f => (f.Path!, false)));

@@ -7,7 +7,7 @@ public interface ICurseForgeApiKeyProvider
     string? GetApiKey();
 }
 
-/// <summary>读取发布构建内置的密钥；普通开源构建返回 null，不回退运行时环境或明文文件。</summary>
+/// <summary>读取构建内置的密钥；未配置构建凭据时返回 null，不读取运行时环境或本机文件。</summary>
 public sealed class EmbeddedCurseForgeApiKeyProvider : ICurseForgeApiKeyProvider
 {
     /// <summary>返回生成器在编译阶段提供的值，不进行任何外部凭证读取。</summary>

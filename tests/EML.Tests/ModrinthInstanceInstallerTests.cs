@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using EML.Core.Downloads;
@@ -102,14 +103,11 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         Assert.Equal(fixture.ManifestBytes, File.ReadAllBytes(fixture.ManifestPath));
     }
 
-    /// <summary>缺少必须的包内文件时明确要求原包恢复，不调用运行阶段或伪造下载来源。</summary>
+    /// <summary>缺少必需包内文件且原包不存在时仍准备运行依赖，但最终启动保持阻断。</summary>
     [Fact]
-    public async Task MissingEmbeddedFileBlocksRuntimeAndExplainsRecovery()
+    public async Task MissingEmbeddedFilePreparesRuntimeButBlocksLaunchAndExplainsRecovery()
     {
-        var embedded = Requirement(".minecraft/config/required.cfg", Encoding.UTF8.GetBytes("settings")) with
-        {
-            Source = InstanceFileSource.Embedded, Downloads = [], ArchiveEntry = "overrides/config/required.cfg"
-        };
+        var embedded = EmbeddedRequirement(".minecraft/config/required.cfg", Encoding.UTF8.GetBytes("settings"));
         var fixture = await CreateFixtureAsync(0, [embedded]);
         var downloader = new FixtureDownloader(fixture.Payloads);
         var runtime = new FixtureRuntimeInstaller();
@@ -118,10 +116,13 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
 
         Assert.False(result.FilesReady);
         Assert.Null(result.LaunchProfilePath);
-        Assert.Equal(0, runtime.Calls);
+        Assert.Equal(1, runtime.Calls);
         Assert.Empty(downloader.Requests);
-        Assert.Equal(InstanceDownloadState.Unavailable, Assert.Single(result.Files).State);
+        Assert.Equal(InstanceDownloadState.MissingEmbeddedFile, Assert.Single(result.Files).State);
         Assert.Contains(result.Issues, issue => issue.Contains("原 mrpack"));
+        Assert.False(result.ContentReady);
+        Assert.True(result.RuntimeReady);
+        Assert.NotNull(result.PreparedLaunchProfilePath);
     }
 
     /// <summary>游戏会改写的包内配置保留玩家内容并写入说明，游戏目录为实例根目录时也正确匹配。</summary>
@@ -175,7 +176,7 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
 
         Assert.False(result.FilesReady);
-        Assert.Equal(0, runtime.Calls);
+        Assert.Equal(1, runtime.Calls);
         Assert.Empty(downloader.Requests);
         Assert.Equal(changed, File.ReadAllBytes(Path.Combine(fixture.Instance, path)));
         Assert.Equal(InstanceDownloadState.Failed, Assert.Single(result.Files).State);
@@ -184,7 +185,7 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
 
     /// <summary>同大小但内容不同的已有文件保留原样，报告哈希冲突，不覆盖用户内容或继续发布就绪状态。</summary>
     [Fact]
-    public async Task ExistingHashMismatchIsPreservedAndBlocksRuntime()
+    public async Task ExistingHashMismatchIsPreservedAndBlocksLaunch()
     {
         var fixture = await CreateFixtureAsync(1);
         var file = Assert.Single(fixture.Manifest.Files);
@@ -196,7 +197,7 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
 
         Assert.False(result.FilesReady);
-        Assert.Equal(0, runtime.Calls);
+        Assert.Equal(1, runtime.Calls);
         Assert.Empty(downloader.Requests);
         Assert.Equal(unexpected, File.ReadAllBytes(Path.Combine(fixture.Instance, file.Path!)));
         Assert.Contains(result.Issues, issue => issue.Contains("哈希不符"));
@@ -218,9 +219,9 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         Assert.Contains(result.Notes, note => note.Contains("1 个可选文件"));
     }
 
-    /// <summary>缺少来源哈希的模组需求不能降级为不验证下载，也不能进入运行安装阶段。</summary>
+    /// <summary>缺少来源哈希不允许不验证下载，独立运行阶段可准备但不能最终启动。</summary>
     [Fact]
-    public async Task MissingHashBlocksDownloadAndRuntime()
+    public async Task MissingHashBlocksDownloadAndFinalLaunch()
     {
         var file = Requirement(".minecraft/mods/no-hash.jar", Encoding.UTF8.GetBytes("unverified")) with
         {
@@ -233,14 +234,14 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
 
         Assert.False(result.FilesReady);
-        Assert.Equal(0, runtime.Calls);
+        Assert.Equal(1, runtime.Calls);
         Assert.Empty(downloader.Requests);
         Assert.Contains(result.Issues, issue => issue.Contains("缺少文件哈希"));
     }
 
     /// <summary>下载器未确认哈希时不可将文件标记为校验完成，即使下载器已写出内容。</summary>
     [Fact]
-    public async Task DownloaderMustConfirmHashBeforeRuntimeCanRun()
+    public async Task DownloaderMustConfirmHashBeforeFinalLaunch()
     {
         var fixture = await CreateFixtureAsync(1);
         var downloader = new FixtureDownloader(fixture.Payloads) { ConfirmHash = false };
@@ -249,14 +250,14 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
 
         Assert.False(result.FilesReady);
-        Assert.Equal(0, runtime.Calls);
+        Assert.Equal(1, runtime.Calls);
         Assert.Equal(InstanceDownloadState.Failed, Assert.Single(result.Files).State);
         Assert.Contains(result.Issues, issue => issue.Contains("未确认"));
     }
 
     /// <summary>部分下载失败仍保留其他成功文件及记录，但不会生成一个缺失必需模组的就绪实例。</summary>
     [Fact]
-    public async Task PartialDownloadFailureRetainsSuccessesAndBlocksRuntime()
+    public async Task PartialDownloadFailureRetainsSuccessesAndBlocksLaunch()
     {
         var fixture = await CreateFixtureAsync(3);
         var downloader = new FixtureDownloader(fixture.Payloads)
@@ -271,7 +272,7 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
 
         Assert.False(result.FilesReady);
-        Assert.Equal(0, runtime.Calls);
+        Assert.Equal(1, runtime.Calls);
         Assert.Equal(2, result.Files.Count(file => file.State == InstanceDownloadState.Downloaded));
         Assert.Equal(InstanceDownloadState.Failed, Assert.Single(result.Files, file => file.Requirement.Path!.EndsWith("mod-1.jar")).State);
         Assert.Contains(result.Issues, issue => issue.Contains("simulated network failure"));
@@ -349,7 +350,7 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         Assert.False(result.FilesReady);
         Assert.Equal(0, runtime.Calls);
         Assert.Single(result.Files);
-        Assert.Contains(result.Issues, issue => issue.Contains("清单发生变化"));
+        Assert.Contains(result.Issues, issue => issue.Contains("清单") && issue.Contains("变化"));
     }
 
     /// <summary>运行阶段改变清单时也不能把其配置与先前模组检查结果合并为就绪状态。</summary>
@@ -369,7 +370,7 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
         Assert.Equal(1, runtime.Calls);
         Assert.Null(result.LaunchProfilePath);
         Assert.Single(result.Files);
-        Assert.Contains(result.Issues, issue => issue.Contains("清单发生变化"));
+        Assert.Contains(result.Issues, issue => issue.Contains("清单") && issue.Contains("变化"));
     }
 
     /// <summary>非直接子目录和其他来源格式不得进入 Modrinth 下载流程。</summary>
@@ -417,6 +418,295 @@ public sealed class ModrinthInstanceInstallerTests : IDisposable
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => Installer(new FixtureDownloader(new Dictionary<string, byte[]>()),
             new FixtureRuntimeInstaller(), new ModrinthInstallOptions { MaxConcurrentFiles = value }));
+    }
+
+    /// <summary>真实确认服务产生的替换基线会被后续补全采用，不能重新要求原包哈希。</summary>
+    [Fact]
+    public async Task AcceptedLocalReplacementIsUsedByCompletion()
+    {
+        var original = Encoding.UTF8.GetBytes("original embedded mod");
+        var embedded = EmbeddedRequirement(".minecraft/mods/override.jar", original);
+        var fixture = await CreateFixtureAsync(0, [embedded]);
+        var replacement = Encoding.UTF8.GetBytes("explicitly accepted replacement mod");
+        WriteFile(fixture.Instance, embedded.Path!, replacement);
+        await new InstanceLocalReplacementService(_root).AcceptExistingAsync(fixture.Instance, embedded.Path!);
+        var downloader = new FixtureDownloader(fixture.Payloads);
+        var runtime = new FixtureRuntimeInstaller();
+
+        var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
+
+        Assert.True(result.LaunchReady, string.Join("\n", result.Issues));
+        Assert.True(result.ContentReady);
+        Assert.True(result.RuntimeReady);
+        Assert.Empty(downloader.Requests);
+        Assert.Equal(1, runtime.Calls);
+        Assert.Equal(replacement, File.ReadAllBytes(Path.Combine(fixture.Instance, embedded.Path!)));
+    }
+
+    /// <summary>损坏的替换记录阻断内容来源解析，但不改动文件或阻止独立运行依赖准备。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InvalidReplacementRecordSkipsContentAndStillPreparesRuntime(bool invalidStructure)
+    {
+        var embedded = EmbeddedRequirement(".minecraft/mods/override.jar", Encoding.UTF8.GetBytes("original"));
+        var fixture = await CreateFixtureAsync(1, [embedded]);
+        var chosen = Encoding.UTF8.GetBytes("chosen replacement");
+        WriteFile(fixture.Instance, embedded.Path!, chosen);
+        await new InstanceLocalReplacementService(_root).AcceptExistingAsync(fixture.Instance, embedded.Path!);
+        var statePath = Path.Combine(fixture.Instance, InstanceLocalReplacementService.RelativePath);
+        var brokenState = invalidStructure ? "{}" : "invalid JSON";
+        File.WriteAllText(statePath, brokenState);
+        var runtime = new FixtureRuntimeInstaller();
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
+
+        Assert.Equal(1, runtime.Calls);
+        Assert.Empty(downloader.Requests);
+        Assert.Empty(result.Files);
+        Assert.False(result.ContentReady);
+        Assert.True(result.RuntimeReady);
+        Assert.False(result.LaunchReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.NotNull(result.PreparedLaunchProfilePath);
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("替换记录"));
+        Assert.Empty(result.RuntimeIssues);
+        Assert.Equal(chosen, File.ReadAllBytes(Path.Combine(fixture.Instance, embedded.Path!)));
+        Assert.False(File.Exists(Path.Combine(fixture.Instance, fixture.Manifest.Files[0].Path!)));
+        Assert.Equal(brokenState, File.ReadAllText(statePath));
+    }
+
+    /// <summary>下载期间用户来源记录变化后废弃旧内容快照，保留已提交记录并继续独立运行阶段。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplacementChangedBeforeRuntimePreservesContentFailureAndRunsRuntime(bool corruptRecord)
+    {
+        var embedded = EmbeddedRequirement(".minecraft/mods/override.jar", Encoding.UTF8.GetBytes("original"));
+        var fixture = await CreateFixtureAsync(1, [embedded]);
+        var chosen = Encoding.UTF8.GetBytes("chosen replacement");
+        WriteFile(fixture.Instance, embedded.Path!, chosen);
+        await new InstanceLocalReplacementService(_root).AcceptExistingAsync(fixture.Instance, embedded.Path!);
+        var statePath = Path.Combine(fixture.Instance, InstanceLocalReplacementService.RelativePath);
+        var runtime = new FixtureRuntimeInstaller();
+        var downloader = new FixtureDownloader(fixture.Payloads)
+        {
+            AfterDownload = _ =>
+            {
+                if (corruptRecord) File.WriteAllText(statePath, "invalid JSON");
+                else File.Delete(statePath);
+            }
+        };
+
+        var result = await Installer(downloader, runtime, new ModrinthInstallOptions { MaxConcurrentFiles = 1 })
+            .InstallAsync(fixture.Instance);
+
+        Assert.Equal(1, runtime.Calls);
+        Assert.Single(downloader.Requests);
+        Assert.Equal(InstanceDownloadState.Downloaded, Assert.Single(result.Files).State);
+        Assert.False(result.ContentReady);
+        Assert.True(result.RuntimeReady);
+        Assert.False(result.LaunchReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.NotNull(result.PreparedLaunchProfilePath);
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("替换记录"));
+        Assert.Empty(result.RuntimeIssues);
+        Assert.Equal(chosen, File.ReadAllBytes(Path.Combine(fixture.Instance, embedded.Path!)));
+        Assert.Equal(fixture.Payloads[fixture.Manifest.Files[0].Downloads[0]],
+            File.ReadAllBytes(Path.Combine(fixture.Instance, fixture.Manifest.Files[0].Path!)));
+        if (corruptRecord) Assert.Equal("invalid JSON", File.ReadAllText(statePath));
+        else Assert.False(File.Exists(statePath));
+    }
+
+    /// <summary>具有明确来源的配置使用各自基线，不能借 config 路径绕过 SHA-256。</summary>
+    [Theory]
+    [InlineData(InstanceFileOrigin.EmbeddedOverride)]
+    [InlineData(InstanceFileOrigin.UserLocalImport)]
+    public async Task ExplicitSourceConfigurationMismatchRemainsBlocking(InstanceFileOrigin origin)
+    {
+        var original = Encoding.UTF8.GetBytes("original settings");
+        var file = EmbeddedRequirement(".minecraft/config/strict.cfg", original) with
+        {
+            Origin = origin, ArchiveEntry = origin == InstanceFileOrigin.UserLocalImport ? null : "overrides/config/strict.cfg"
+        };
+        var fixture = await CreateFixtureAsync(0, [file]);
+        var changed = Enumerable.Repeat((byte)'x', original.Length).ToArray();
+        WriteFile(fixture.Instance, file.Path!, changed);
+        var runtime = new FixtureRuntimeInstaller();
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await Installer(downloader, runtime).InstallAsync(fixture.Instance);
+
+        Assert.False(result.ContentReady);
+        Assert.True(result.RuntimeReady);
+        Assert.False(result.LaunchReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.NotEmpty(result.ContentIssues);
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("哈希不符"));
+        Assert.Equal(1, runtime.Calls);
+        Assert.Empty(downloader.Requests);
+        Assert.Equal(changed, File.ReadAllBytes(Path.Combine(fixture.Instance, file.Path!)));
+    }
+
+    /// <summary>缺失的包内文件可从原 mrpack 精确条目恢复，随后按原大小和 SHA-256 验证。</summary>
+    [Fact]
+    public async Task MissingEmbeddedFileIsRestoredFromOriginalMrpack()
+    {
+        var bytes = Encoding.UTF8.GetBytes("original embedded mod");
+        var embedded = EmbeddedRequirement(".minecraft/mods/embedded.jar", bytes);
+        var fixture = await CreateFixtureAsync(0, [embedded]);
+        var manifest = fixture.Manifest with { SourceArchive = "source.mrpack" };
+        await InstanceManifestStore.WriteAsync(fixture.ManifestPath, manifest, CancellationToken.None);
+        WriteOriginalArchive(manifest, embedded, bytes);
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await Installer(downloader, new FixtureRuntimeInstaller()).InstallAsync(fixture.Instance);
+
+        Assert.True(result.LaunchReady, string.Join("\n", result.Issues));
+        Assert.Equal(InstanceDownloadState.RestoredEmbeddedFile, Assert.Single(result.Files).State);
+        Assert.Empty(downloader.Requests);
+        Assert.Equal(bytes, File.ReadAllBytes(Path.Combine(fixture.Instance, embedded.Path!)));
+    }
+
+    /// <summary>用户已确认的替代文件丢失后不从原包恢复不同字节，即使原包仍可用。</summary>
+    [Fact]
+    public async Task MissingAcceptedReplacementNeverRestoresOriginalContent()
+    {
+        var original = Encoding.UTF8.GetBytes("original embedded mod");
+        var embedded = EmbeddedRequirement(".minecraft/mods/override.jar", original);
+        var fixture = await CreateFixtureAsync(0, [embedded]);
+        var manifest = fixture.Manifest with { SourceArchive = "source.mrpack" };
+        await InstanceManifestStore.WriteAsync(fixture.ManifestPath, manifest, CancellationToken.None);
+        WriteOriginalArchive(manifest, embedded, original);
+        WriteFile(fixture.Instance, embedded.Path!, Encoding.UTF8.GetBytes("chosen replacement"));
+        await new InstanceLocalReplacementService(_root).AcceptExistingAsync(fixture.Instance, embedded.Path!);
+        File.Delete(Path.Combine(fixture.Instance, embedded.Path!));
+        var runtime = new FixtureRuntimeInstaller();
+
+        var result = await Installer(new FixtureDownloader(fixture.Payloads), runtime).InstallAsync(fixture.Instance);
+
+        Assert.False(result.LaunchReady);
+        Assert.True(result.RuntimeReady);
+        Assert.False(File.Exists(Path.Combine(fixture.Instance, embedded.Path!)));
+        Assert.Equal(InstanceDownloadState.MissingEmbeddedFile, Assert.Single(result.Files).State);
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("本地替代文件缺失"));
+        Assert.Equal(1, runtime.Calls);
+    }
+
+    /// <summary>下层仅返回分类问题或失败文件时仍保留阻断；运行依赖与内容就绪独立表达。</summary>
+    [Theory]
+    [InlineData("runtime")]
+    [InlineData("content")]
+    [InlineData("unclassified")]
+    [InlineData("file")]
+    public async Task RuntimeResultCannotLoseClassifiedIssuesOrRequiredFailures(string scenario)
+    {
+        var fixture = await CreateFixtureAsync(0);
+        var input = new PrismInstallResult
+        {
+            PreparedLaunchProfilePath = "prepared.json",
+            LaunchProfilePath = "prepared.json",
+            RuntimeIssues = scenario == "runtime" ? ["runtime failure"] : [],
+            ContentIssues = scenario == "content" ? ["content failure"] : [],
+            Issues = scenario == "unclassified" ? ["unclassified runtime failure"] : [],
+            Files = scenario == "file" ? [new(new InstanceFileRequirement
+            {
+                Path = ".minecraft/libraries/required.jar", Source = InstanceFileSource.DirectDownload
+            }, InstanceDownloadState.Failed, "required runtime failure")] : []
+        };
+
+        var result = await Installer(new FixtureDownloader(fixture.Payloads), new FixtureRuntimeInstaller { Result = input })
+            .InstallAsync(fixture.Instance);
+
+        Assert.False(result.FilesReady);
+        Assert.False(result.LaunchReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.Equal("prepared.json", result.PreparedLaunchProfilePath);
+        Assert.Equal(scenario == "content", result.RuntimeReady);
+        Assert.Equal(scenario != "content", result.ContentReady);
+        Assert.Contains(result.Issues, issue => issue.Contains("failure"));
+        if (scenario == "content") Assert.Contains("content failure", result.ContentIssues);
+        else Assert.NotEmpty(result.RuntimeIssues);
+    }
+
+    /// <summary>可选运行文件失败不阻止必要依赖已经就绪的实例，原失败记录仍保留。</summary>
+    [Fact]
+    public async Task OptionalRuntimeFailureDoesNotBlockLaunch()
+    {
+        var fixture = await CreateFixtureAsync(0);
+        var runtime = new FixtureRuntimeInstaller
+        {
+            Result = new PrismInstallResult
+            {
+                LaunchProfilePath = "prepared.json",
+                Files = [new(new InstanceFileRequirement
+                {
+                    Path = ".minecraft/libraries/optional.jar", Required = false
+                }, InstanceDownloadState.Unavailable, "optional unavailable")]
+            }
+        };
+
+        var result = await Installer(new FixtureDownloader(fixture.Payloads), runtime).InstallAsync(fixture.Instance);
+
+        Assert.True(result.LaunchReady, string.Join("\n", result.Issues));
+        Assert.Equal(InstanceDownloadState.Unavailable, Assert.Single(result.Files).State);
+    }
+
+    /// <summary>运行准备期间修改已通过的必需文件时，最终复查拒绝沿用旧校验结果。</summary>
+    [Fact]
+    public async Task ContentChangedDuringRuntimeBlocksFinalReadiness()
+    {
+        var fixture = await CreateFixtureAsync(1);
+        var file = Assert.Single(fixture.Manifest.Files);
+        var runtime = new FixtureRuntimeInstaller
+        {
+            BeforeInstall = () => WriteFile(fixture.Instance, file.Path!, Enumerable.Repeat((byte)'x', (int)file.Size!.Value).ToArray())
+        };
+
+        var result = await Installer(new FixtureDownloader(fixture.Payloads), runtime).InstallAsync(fixture.Instance);
+
+        Assert.False(result.ContentReady);
+        Assert.True(result.RuntimeReady);
+        Assert.False(result.LaunchReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("哈希不符"));
+    }
+
+    /// <summary>运行期间撤销用户选择后，本次结果不能继续使用已经失效的替换快照。</summary>
+    [Fact]
+    public async Task ReplacementWithdrawnDuringRuntimeBlocksFinalReadiness()
+    {
+        var file = EmbeddedRequirement(".minecraft/mods/override.jar", Encoding.UTF8.GetBytes("original"));
+        var fixture = await CreateFixtureAsync(0, [file]);
+        WriteFile(fixture.Instance, file.Path!, Encoding.UTF8.GetBytes("accepted replacement"));
+        await new InstanceLocalReplacementService(_root).AcceptExistingAsync(fixture.Instance, file.Path!);
+        var runtime = new FixtureRuntimeInstaller
+        {
+            BeforeInstall = () => File.Delete(Path.Combine(fixture.Instance, InstanceLocalReplacementService.RelativePath))
+        };
+
+        var result = await Installer(new FixtureDownloader(fixture.Payloads), runtime).InstallAsync(fixture.Instance);
+
+        Assert.False(result.LaunchReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("替换记录"));
+    }
+
+    /// <summary>生成原包嵌入来源的完整记录，测试来源基线不借用任何下载摘要。</summary>
+    private static InstanceFileRequirement EmbeddedRequirement(string path, byte[] bytes) => new()
+    {
+        Path = path, Source = InstanceFileSource.Embedded, Origin = InstanceFileOrigin.EmbeddedOverride,
+        ArchiveEntry = "overrides/" + path[".minecraft/".Length..], Size = bytes.Length,
+        Hashes = new Dictionary<string, string> { ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(bytes)) }
+    };
+
+    /// <summary>仅在隔离测试根目录创建原包，用精确导入条目验证自动恢复。</summary>
+    private void WriteOriginalArchive(InstanceImportManifest manifest, InstanceFileRequirement file, byte[] bytes)
+    {
+        using var archive = ZipFile.Open(Path.Combine(_root, manifest.SourceArchive), ZipArchiveMode.Create);
+        using var entry = archive.CreateEntry(file.ArchiveEntry!).Open();
+        entry.Write(bytes);
     }
 
     /// <summary>集中创建被测服务，所有测试都显式注入运行替身，避免网络与真实实例操作。</summary>

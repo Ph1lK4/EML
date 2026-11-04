@@ -14,6 +14,10 @@ public interface IModrinthApiClient
     /// <summary>使用固定版本 ID 获取精确版本、依赖和可下载文件。</summary>
     Task<ModrinthVersion> GetVersionAsync(string versionId, CancellationToken cancellationToken = default);
 
+    /// <summary>按文件 SHA-1 或 SHA-512 精确查询版本；结果仅包含找到的哈希，不选择更新版本。</summary>
+    Task<IReadOnlyDictionary<string, ModrinthVersion>> GetVersionsByHashesAsync(IReadOnlyList<string> hashes,
+        string algorithm = "sha1", CancellationToken cancellationToken = default);
+
     /// <summary>查询项目的兼容版本，可同时限制 Minecraft 版本和加载器。</summary>
     Task<IReadOnlyList<ModrinthVersion>> GetVersionsAsync(string projectIdOrSlug,
         ModrinthVersionFilter? filter = null, CancellationToken cancellationToken = default);

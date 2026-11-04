@@ -40,6 +40,7 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
     {
         var records = new List<InstanceDownloadFileResult>();
         var issues = new List<string>();
+        var contentIssues = new List<string>();
         var notes = new List<string>();
         string? launchPath = null;
         try
@@ -77,8 +78,24 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
             if (plan.MetadataRequests.Count > 0) issues.Add("仍有组件元数据尚未取得，不能生成完整运行配置。");
             if (issues.Count > 0) return Result();
 
-            // 包内本地库的已知哈希优先复用导入基线；来源为 local 时绝不猜测下载 URL。
-            var baseline = manifest.Files.Where(f => f.Path is not null).ToDictionary(f => f.Path!, StringComparer.OrdinalIgnoreCase);
+            // 与检查器及平台安装器共享来源选择和用户替换；运行依赖仍按选定内容严格校验。
+            InstanceEffectiveRequirements.Snapshot? sourceSnapshot = null;
+            IReadOnlyList<InstanceFileRequirement> effective = manifest.Files;
+            var usesEmbeddedRuntime = plan.Files.Any(file => file.Requirement.Source == InstanceFileSource.Embedded);
+            try
+            {
+                sourceSnapshot = InstanceEffectiveRequirements.Build(root, manifest);
+                effective = sourceSnapshot.Requirements;
+                contentIssues.AddRange(sourceSnapshot.ContentIssues);
+                notes.AddRange(sourceSnapshot.Notes);
+            }
+            catch (Exception ex) when (IsExpectedFailure(ex))
+            {
+                effective = [];
+                contentIssues.Add("文件来源无法验证：" + ex.Message);
+                if (usesEmbeddedRuntime) issues.Add("本地运行文件的来源或用户替换记录无法验证，不能发布运行配置。");
+            }
+            var baseline = effective.Where(f => f.Path is not null).ToDictionary(f => f.Path!, StringComparer.OrdinalIgnoreCase);
             plan = plan with
             {
                 Files = plan.Files.Select(file => file.Requirement.Source == InstanceFileSource.Embedded &&
@@ -88,6 +105,8 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
             for (var index = 0; index < plan.Files.Count; index++)
             {
                 var file = plan.Files[index];
+                // 来源快照失败时继续下载可信远端依赖，但不回退到失效的旧包内基线。
+                if (sourceSnapshot is null && file.Requirement.Source == InstanceFileSource.Embedded) continue;
                 progress?.Report(new("运行依赖", index, plan.Files.Count, file.Requirement.Path ?? ""));
                 await EnsureFileAsync(root, file.Requirement, records, issues, progress, index, plan.Files.Count, token,
                     file.Role == PrismRuntimeFileRole.AssetIndex ? 8 * 1024 * 1024 : null).ConfigureAwait(false);
@@ -127,6 +146,16 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
             var prepared = await _materializer.PrepareAsync(plan with { Files = plan.Files.Concat(assets).ToArray() }, token).ConfigureAwait(false);
             var current = _resolver.Resolve(root, InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName)));
             if (current.Fingerprint != plan.Fingerprint) throw new IOException("准备过程中组件配置发生变化，请重新补全。");
+            if (sourceSnapshot is not null)
+            {
+                try { InstanceEffectiveRequirements.EnsureUnchanged(root, manifest, sourceSnapshot); }
+                catch (Exception ex) when (IsExpectedFailure(ex))
+                {
+                    contentIssues.Add("文件来源在运行依赖准备期间发生变化：" + ex.Message);
+                    // 本地类库也采用该快照时，运行阶段本身必须重新确认。
+                    if (usesEmbeddedRuntime) throw new IOException("本地运行文件依据已变化，请重新补全。", ex);
+                }
+            }
             await PrismRuntimeStateStore.WriteAsync(plan, new PrismRuntimeState
             {
                 Fingerprint = plan.Fingerprint, LaunchProfilePath = prepared.LaunchProfilePath,
@@ -143,7 +172,10 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
         /// <summary>保留当前成功下载记录，并分别返回阻断原因和启动配置位置。</summary>
         PrismInstallResult Result() => new()
         {
-            SourceFormat = _sourceFormat, Files = records.ToArray(), Issues = issues.Distinct().ToArray(), Notes = notes.Distinct().ToArray(), LaunchProfilePath = launchPath
+            SourceFormat = _sourceFormat, Files = records.Select(file => file with { IsRuntimeFile = true }).ToArray(),
+            Issues = issues.Concat(contentIssues).Distinct().ToArray(), ContentIssues = contentIssues.Distinct().ToArray(),
+            RuntimeIssues = issues.Distinct().ToArray(), Notes = notes.Distinct().ToArray(),
+            PreparedLaunchProfilePath = launchPath, LaunchProfilePath = contentIssues.Count == 0 ? launchPath : null
         };
     }
 
@@ -192,6 +224,7 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
     /// <summary>只把明确不存在视作待下载；已有不匹配文件需用户处理，不能静默覆盖。</summary>
     internal static async Task<bool> ExistingFileMatchesAsync(string path, InstanceFileRequirement file, CancellationToken token)
     {
+        var integrityHashes = InstanceFileIntegrity.HashesFor(file);
         FileStream input;
         try { input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan); }
         catch (FileNotFoundException) { return false; }
@@ -199,8 +232,8 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
         await using (input)
         {
             if (file.Size is { } size && input.Length != size) throw new InvalidDataException("已有文件大小不符，已保留原文件。");
-            if (file.Hashes.Count == 0) return true;
-            var hashes = file.Hashes.Select(pair => (Expected: pair.Value, Hash: IncrementalHash.CreateHash(pair.Key switch
+            if (integrityHashes.Count == 0) return true;
+            var hashes = integrityHashes.Select(pair => (Expected: pair.Value, Hash: IncrementalHash.CreateHash(pair.Key switch
             {
                 "sha1" => HashAlgorithmName.SHA1, "sha256" => HashAlgorithmName.SHA256,
                 "sha512" => HashAlgorithmName.SHA512, _ => throw new InvalidDataException("不支持的文件哈希。")

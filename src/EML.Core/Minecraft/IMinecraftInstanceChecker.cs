@@ -15,7 +15,7 @@ public enum InstanceCheckMode { Quick, Full }
 public enum InstanceFileState
 {
     Verified, PresentUnverified, Missing, SizeMismatch, HashMismatch,
-    ChangedSinceImport, Unresolved, Unreadable, ChangedDuringCheck
+    ChangedSinceImport, Unresolved, Unreadable, ChangedDuringCheck, MissingEmbeddedFile
 }
 
 /// <summary>保留文件需求和当前结果，供界面展示与后续下载计划使用。</summary>
@@ -34,6 +34,7 @@ public sealed record InstanceFileCheckResult(InstanceFileRequirement Requirement
         InstanceFileState.Verified => "校验通过",
         InstanceFileState.PresentUnverified => "存在，未校验内容",
         InstanceFileState.Missing => "缺失",
+        InstanceFileState.MissingEmbeddedFile => "缺少包内文件",
         InstanceFileState.SizeMismatch => "大小不符",
         InstanceFileState.HashMismatch => "哈希不符",
         InstanceFileState.ChangedSinceImport => "导入后已变化",
@@ -61,7 +62,20 @@ public sealed record InstanceCheckReport
     /// <summary>已经接入运行依赖解析的来源格式；未知格式为空，兼容原 Prism 标记。</summary>
     public string? RuntimeSourceFormat { get; init; }
     public string? LaunchProfilePath { get; init; }
+    /// <summary>本地已生成的运行配置；内容阻断时仍可展示准备进度，但不能据此启动。</summary>
+    public string? PreparedLaunchProfilePath { get; init; }
+    /// <summary>平台映射、用户替换等内容依据的问题，与 Minecraft 运行依赖分开表达。</summary>
+    public IReadOnlyList<string> ContentIssues { get; init; } = [];
     public IReadOnlyList<string> RuntimeIssues { get; init; } = [];
+    /// <summary>完整检查下的必要内容通过；没有清单和快速检查不产生就绪结论。</summary>
+    public bool ContentReady => HasManifest && Mode == InstanceCheckMode.Full && ContentIssues.Count == 0 &&
+        !Files.Any(file => !file.IsRuntimeFile && InstanceFileStatePolicy.IsBlocking(file));
+    /// <summary>运行依赖及其生成配置通过完整检查，与内容是否待修复独立。</summary>
+    public bool RuntimeReady => HasManifest && Mode == InstanceCheckMode.Full && RuntimeIssues.Count == 0 &&
+        (PreparedLaunchProfilePath ?? LaunchProfilePath) is not null &&
+        !Files.Any(file => file.IsRuntimeFile && InstanceFileStatePolicy.IsBlocking(file));
+    /// <summary>供启动调用方使用的最终文件准备条件；Java、账号和真实游戏运行仍另行验证。</summary>
+    public bool LaunchReady => ContentReady && RuntimeReady && LaunchProfilePath is not null;
 }
 
 /// <summary>按清单文件数量报告检查进度；读取大文件时仍会报告当前文件名。</summary>

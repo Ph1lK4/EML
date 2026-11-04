@@ -131,7 +131,6 @@ public sealed class MinecraftInstanceCheckerTests : IDisposable
         Assert.Equal(format, report.RuntimeSourceFormat);
         if (shouldRead)
         {
-            Assert.Equal(Path.Combine(InstancePath, profilePath.Replace('/', Path.DirectorySeparatorChar)), report.LaunchProfilePath);
             var generated = Assert.Single(report.Files);
             Assert.True(generated.IsRuntimeFile);
             Assert.Equal(InstanceFileState.Verified, generated.State);
@@ -143,6 +142,7 @@ public sealed class MinecraftInstanceCheckerTests : IDisposable
         }
         // 测试的元数据未下载，即使存在配置也仍保留阻断信息，不应伪称实际可启动。
         Assert.NotEmpty(report.RuntimeIssues);
+        Assert.Null(report.LaunchProfilePath);
     }
 
     /// <summary>CurseForge 检查只读取固定文件缓存，无 API Key 时也可校验人工提供的受限文件。</summary>
@@ -157,7 +157,12 @@ public sealed class MinecraftInstanceCheckerTests : IDisposable
         };
         var manifestPath = Path.Combine(InstancePath, InstanceImportManifest.FileName);
         await InstanceManifestStore.WriteAsync(manifestPath, manifest, CancellationToken.None);
-        var requirement = Requirement() with { Source = InstanceFileSource.CurseForge, ProjectId = 10, FileId = 20, Downloads = [] };
+        var requirement = Requirement() with
+        {
+            Source = InstanceFileSource.CurseForge, Origin = InstanceFileOrigin.CurseForgeDownload,
+            ProjectId = 10, FileId = 20, Downloads = [],
+            Hashes = new Dictionary<string, string> { ["sha1"] = Requirement().Hashes["sha1"] }
+        };
         WriteFile(requirement.Path!, "expected");
         await CurseForgeFileStateStore.WriteAsync(InstancePath, manifest, new CurseForgeFileResolution
         {
@@ -194,7 +199,9 @@ public sealed class MinecraftInstanceCheckerTests : IDisposable
         WriteFile(CurseForgeFileStateStore.RelativePath, "{broken");
         var report = await new MinecraftInstanceChecker(_root).CheckAsync(InstancePath);
         Assert.Equal(InstanceFileState.Unresolved, Assert.Single(report.Files).State);
-        Assert.Contains(report.RuntimeIssues, issue => issue.Contains("CurseForge 文件缓存无法读取"));
+        Assert.Contains(report.ContentIssues, issue => issue.Contains("文件来源") && issue.Contains("CurseForge"));
+        Assert.DoesNotContain(report.RuntimeIssues, issue => issue.Contains("CurseForge 文件缓存"));
+        Assert.False(report.ContentReady);
         Assert.Equal("{broken", File.ReadAllText(Path.Combine(InstancePath, CurseForgeFileStateStore.RelativePath)));
     }
 

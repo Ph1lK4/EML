@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Text;
 using Microsoft.VisualBasic.FileIO;
 using EML.Core.Minecraft;
+using EML.Infrastructure.Minecraft.Importing;
 
 namespace EML.Infrastructure.Minecraft;
 
@@ -62,7 +63,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         finally { _operationLock.Release(); }
     }
 
-    /// <summary>确认目标是 instances 下的直接子实例，并返回规范化路径。</summary>
+    /// <summary>确认目标是直接子实例；导入清单与游戏目录采用和扫描器相同的路径、结构及链接校验。</summary>
     private string ValidateInstance(string instancePath)
     {
         var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(instancePath));
@@ -70,6 +71,15 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
             throw new InvalidOperationException("只能操作 instances 文件夹的直接子实例。");
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException("实例目录已不存在，请刷新列表。");
         EnsureNoLinkedAncestors(path);
+        var manifestPath = Path.Combine(path, InstanceImportManifest.FileName);
+        if (File.Exists(manifestPath))
+        {
+            // 清单存在时必须先验证，不能让坏清单借助 .minecraft 等传统标记绕过检查。
+            var manifest = InstanceManifestStore.Read(manifestPath);
+            var game = manifest.GameDirectory == "." ? path : InstanceImportPaths.Within(path, manifest.GameDirectory);
+            InstanceImportPaths.EnsureNoLinks(game);
+            return path;
+        }
         if (!Directory.Exists(Path.Combine(path, ".minecraft")) &&
             !Directory.Exists(Path.Combine(path, "minecraft")) &&
             !Directory.Exists(Path.Combine(path, "versions")) &&
@@ -122,10 +132,21 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
                     original = reader.ReadToEnd();
                     encoding = reader.CurrentEncoding;
                 }
+                var updated = UpdatePrismName(original, newName);
+                var manifestPath = Path.Combine(source, InstanceImportManifest.FileName);
+                if (updated != original && File.Exists(manifestPath))
+                {
+                    var manifest = InstanceManifestStore.Read(manifestPath);
+                    var requirement = InstanceEffectiveRequirements.Build(source, manifest).Requirements.SingleOrDefault(file =>
+                        string.Equals(file.Path, "instance.cfg", StringComparison.OrdinalIgnoreCase));
+                    if (requirement is not null && !InstanceFileChangePolicy.IsMutableConfiguration(
+                            requirement, manifest.GameDirectory, manifest.SourceFormat))
+                        throw new InvalidOperationException("instance.cfg 使用严格来源或用户确认的替换基线，无法自动改写名称；请先调整该文件的变更策略。");
+                }
                 temporaryConfigName = ".eml-name-" + Guid.NewGuid().ToString("N") + ".tmp";
                 using var stream = new FileStream(Path.Combine(source, temporaryConfigName), FileMode.CreateNew, FileAccess.Write, FileShare.None);
                 using var writer = new StreamWriter(stream, encoding);
-                writer.Write(UpdatePrismName(original, newName));
+                writer.Write(updated);
             }
 
             // 写入提交开始后不再响应取消，保证目录和配置同步完成或回滚。
@@ -233,7 +254,12 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         var parent = Path.GetDirectoryName(destination)!;
         if (!Directory.Exists(parent)) throw new DirectoryNotFoundException("导出目录不存在。");
         EnsureNoLinkedAncestors(parent);
-        var entries = EnumerateContents(source, token);
+        var manifestPath = Path.Combine(source, InstanceImportManifest.FileName);
+        var backup = File.Exists(manifestPath)
+            ? InstanceBackupManifest.Create(source, InstanceManifestStore.Read(manifestPath)) : null;
+        // 本机位置、用户选择状态和可再生缓存不直接传播；可信来源与选择已转入备份清单。
+        var entries = EnumerateContents(source, token)
+            .Where(entry => !InstanceFileChangePolicy.IsDerivedStatePath(Path.GetRelativePath(source, entry.Path).Replace('\\', '/'))).ToList();
         var total = entries.Sum(entry => entry.Length);
         long copied = 0;
         var temporary = Path.Combine(parent, ".eml-export-" + Guid.NewGuid().ToString("N") + ".tmp");
@@ -253,6 +279,13 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
                     var relative = Path.GetRelativePath(source, entry.Path).Replace('\\', '/');
                     if (entry.IsDirectory) { zip.CreateEntry(relative + "/"); continue; }
                     var archived = zip.CreateEntry(relative, CompressionLevel.Fastest);
+                    if (backup is not null && relative.Equals(InstanceImportManifest.FileName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        using var manifestOutput = archived.Open();
+                        await manifestOutput.WriteAsync(InstanceManifestStore.Serialize(backup.Manifest), token);
+                        copied += entry.Length;
+                        continue;
+                    }
                     using var input = new FileStream(entry.Path, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, useAsync: true);
                     if (input.Length != entry.Length) throw new IOException("文件在导出期间发生变化，请关闭游戏后重试：" + relative);
                     using var target = archived.Open();
@@ -270,6 +303,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
                 }
             }
             token.ThrowIfCancellationRequested();
+            if (backup is not null) InstanceBackupManifest.EnsureUnchanged(source, backup);
             File.Move(temporary, destination); // 不覆盖旧文件；竞争创建的同名文件同样会保留。
             progress?.Report(new("完成", copied, total));
         }

@@ -67,8 +67,26 @@ public sealed record PrismInstallResult
     public string SourceFormat { get; init; } = "Prism";
     public IReadOnlyList<InstanceDownloadFileResult> Files { get; init; } = [];
     public IReadOnlyList<string> Issues { get; init; } = [];
+    /// <summary>必需模组、包内覆盖等内容的问题；运行依赖可继续准备，但最终就绪仍被阻断。</summary>
+    public IReadOnlyList<string> ContentIssues { get; init; } = [];
+    /// <summary>Minecraft、加载器、资源或启动配置准备失败，与内容问题分别展示。</summary>
+    public IReadOnlyList<string> RuntimeIssues { get; init; } = [];
     public IReadOnlyList<string> Notes { get; init; } = [];
     public string? LaunchProfilePath { get; init; }
+    /// <summary>已生成的运行配置，即使内容尚待修复也保留；不能据此直接启动。</summary>
+    public string? PreparedLaunchProfilePath { get; init; }
     public bool IsCanceled { get; init; }
-    public bool FilesReady => !IsCanceled && Issues.Count == 0 && LaunchProfilePath is not null;
+    /// <summary>必要内容通过当前准备流程；取消或未分类问题不能被误报成功。</summary>
+    public bool ContentReady => !IsCanceled && ContentIssues.Count == 0 && !HasUnclassifiedIssues &&
+        !Files.Any(file => !file.IsRuntimeFile && InstanceFileStatePolicy.IsFailure(file));
+    /// <summary>运行配置及必要依赖已准备，独立于整合包内容是否通过。</summary>
+    public bool RuntimeReady => !IsCanceled && RuntimeIssues.Count == 0 && !HasUnclassifiedIssues &&
+        (PreparedLaunchProfilePath ?? LaunchProfilePath) is not null &&
+        !Files.Any(file => file.IsRuntimeFile && InstanceFileStatePolicy.IsFailure(file));
+    /// <summary>只有内容、运行依赖和最终发布条件都满足时，才提供可用启动结果。</summary>
+    public bool LaunchReady => ContentReady && RuntimeReady && LaunchProfilePath is not null;
+    /// <summary>保留旧调用方兼容名称；含义仍为整个实例完成准备。</summary>
+    public bool FilesReady => LaunchReady;
+    /// <summary>兼容旧安装器仅填 Issues 的情况；未知阶段的问题保守阻断。</summary>
+    private bool HasUnclassifiedIssues => Issues.Except(ContentIssues.Concat(RuntimeIssues)).Any();
 }

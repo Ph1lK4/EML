@@ -2,32 +2,37 @@ using System.Text.Json;
 using EML.Core.CurseForge;
 using EML.Core.Downloads;
 using EML.Core.Minecraft;
+using EML.Core.Modrinth;
 using EML.Infrastructure.Minecraft.CurseForge.Api;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Modrinth.Api;
 using EML.Infrastructure.Minecraft.Prism;
 using EML.Infrastructure.Minecraft.Runtime;
 
 namespace EML.Infrastructure.Minecraft.CurseForge;
 
-/// <summary>解析 CurseForge 固定文件引用，补齐必需内容后再交给共享游戏运行安装流程。</summary>
+/// <summary>按内容来源补全实例，独立准备运行依赖，最终就绪要求必需内容和运行文件同时通过。</summary>
 public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
 {
     private readonly string _instancesRoot;
     private readonly IFileDownloader _downloader;
     private readonly CurseForgeFileResolver _resolver;
     private readonly IPrismInstanceInstaller _runtimeInstaller;
+    private readonly EmbeddedFileRestorer _embeddedRestorer;
     private readonly int _maxConcurrentFiles;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
 
     /// <summary>复用通用下载器和官方 API 客户端；允许测试注入 API 和运行阶段。</summary>
     public CurseForgeInstanceInstaller(string launcherRoot, IFileDownloader downloader,
-        ICurseForgeApiClient? apiClient = null, IPrismInstanceInstaller? runtimeInstaller = null, int maxConcurrentFiles = 4)
+        ICurseForgeApiClient? apiClient = null, IPrismInstanceInstaller? runtimeInstaller = null, int maxConcurrentFiles = 4,
+        IModrinthApiClient? modrinthApiClient = null)
     {
         ArgumentNullException.ThrowIfNull(downloader);
         if (maxConcurrentFiles is < 1 or > 16) throw new ArgumentOutOfRangeException(nameof(maxConcurrentFiles));
         _instancesRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(launcherRoot, "instances")));
         _downloader = downloader;
-        _resolver = new CurseForgeFileResolver(apiClient ?? new CurseForgeApiClient());
+        _embeddedRestorer = new EmbeddedFileRestorer(launcherRoot);
+        _resolver = new CurseForgeFileResolver(apiClient ?? new CurseForgeApiClient(), modrinthApiClient ?? new ModrinthApiClient());
         _runtimeInstaller = runtimeInstaller ?? new InstanceRuntimeInstaller(launcherRoot, downloader,
             new CurseForgeRuntimeResolver(), "CurseForge");
         _maxConcurrentFiles = maxConcurrentFiles;
@@ -52,14 +57,14 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
         finally { if (acquired) _operationLock.Release(); }
     }
 
-    /// <summary>解析并校验必需文件，保留所有成功记录；仅在整合包内容完整时继续游戏运行准备。</summary>
+    /// <summary>分别处理内容与运行阶段；内容失败不阻止准备运行依赖，但不能发布最终就绪结果。</summary>
     private async Task<PrismInstallResult> InstallCoreAsync(string instancePath,
         IProgress<InstanceDownloadProgress>? progress, CancellationToken token)
     {
         var records = new List<InstanceDownloadFileResult>();
-        var issues = new List<string>();
+        var contentIssues = new List<string>();
         var notes = new List<string>();
-        string? launchPath = null;
+        PrismInstallResult? runtime = null;
         var canceled = false;
         try
         {
@@ -68,11 +73,31 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
             if (!manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("此安装器只处理 CurseForge 实例。");
-            var fingerprint = CurseForgeFileStateStore.Fingerprint(manifest);
             progress?.Report(new("解析 CurseForge 文件列表", 0, 0, ""));
-            var resolution = await _resolver.ResolveAsync(root, manifest, token).ConfigureAwait(false);
-            var resolvedById = resolution.Files.ToDictionary(file => (file.Requirement.ProjectId, file.Requirement.FileId));
-            var required = CurseForgeFileStateStore.EffectiveRequirements(manifest, resolution).Where(file => file.Required).ToArray();
+            CurseForgeFileResolution? resolution = null;
+            InstanceEffectiveRequirements.Snapshot? snapshot = null;
+            try
+            {
+                resolution = await _resolver.ResolveAsync(root, manifest, token).ConfigureAwait(false);
+                snapshot = InstanceEffectiveRequirements.Build(root, manifest, resolution);
+                contentIssues.AddRange(snapshot.ContentIssues);
+                notes.AddRange(snapshot.Notes);
+            }
+            catch (Exception ex) when (IsExpectedFailure(ex))
+            {
+                // 平台或本机来源记录失效时不尝试内容下载；可信运行依赖仍可独立准备。
+                contentIssues.Add("CurseForge 内容来源解析失败：" + ex.Message);
+                notes.Add("本轮跳过内容文件处理，保留现有文件；来源解析恢复前不会标记为可启动。");
+            }
+            var fallbackCount = resolution?.Files.Count(file => file.ModrinthFallback is not null) ?? 0;
+            if (fallbackCount > 0) notes.Add($"{fallbackCount} 个文件已匹配 Modrinth 同内容来源，保留原版本、文件名和安装目录。");
+            var resolvedById = (resolution?.Files ?? []).ToDictionary(file => (file.Requirement.ProjectId, file.Requirement.FileId));
+            var effectiveRequirements = snapshot?.Requirements ?? [];
+            var required = effectiveRequirements.Where(file => file.Required).ToArray();
+            var overrideCount = required.Count(file => file.Origin == InstanceFileOrigin.EmbeddedOverride);
+            if (overrideCount > 0) notes.Add($"{overrideCount} 个包内覆盖文件使用原包大小与 SHA-256；官方文件信息仅保留为来源记录。");
+            var userCount = required.Count(file => file.Origin == InstanceFileOrigin.UserLocalImport);
+            if (userCount > 0) notes.Add($"{userCount} 个文件使用用户明确接受的本地替代基线。");
             var optionalCount = manifest.Files.Count(file => !file.Required);
             if (optionalCount > 0) notes.Add($"已跳过 {optionalCount} 个可选文件；可选模组选择功能尚未启用。");
             var completed = 0;
@@ -84,13 +109,14 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             {
                 var resolved = file.Source == InstanceFileSource.CurseForge
                     ? resolvedById[(file.ProjectId, file.FileId)] : null;
-                var effective = resolved?.Requirement ?? file;
+                var effective = file; // 已由来源优先级选择，不能再换回同路径官方需求。
                 InstanceDownloadFileResult? result = null;
                 try
                 {
-                    result = await EnsureFileAsync(root, manifest.GameDirectory, effective, resolved,
+                    result = await EnsureFileAsync(root, manifest, effective, resolved,
                         new InlineProgress<FileDownloadProgress>(value => progress?.Report(new(
-                            "下载 CurseForge 整合包文件", Volatile.Read(ref completed), required.Length,
+                            resolved?.ModrinthFallback is not null ? "从 Modrinth 补全同内容文件" : "下载 CurseForge 整合包文件",
+                            Volatile.Read(ref completed), required.Length,
                             effective.Path ?? $"{effective.ProjectId}/{effective.FileId}", value))),
                         note => { lock (gate) notes.Add(note); }, fileToken).ConfigureAwait(false);
                 }
@@ -101,8 +127,11 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
                         if (result is not null)
                         {
                             records.Add(result);
-                            if (result.State is InstanceDownloadState.Failed or InstanceDownloadState.Unavailable)
-                                issues.Add(result.PathDisplay + "：" + result.Message);
+                            if (InstanceFileStatePolicy.IsFailure(result))
+                            {
+                                var issue = result.PathDisplay + "：" + result.Message;
+                                contentIssues.Add(issue);
+                            }
                         }
                         completed++;
                         progress?.Report(new("检查 CurseForge 整合包文件", completed, required.Length, effective.Path ?? ""));
@@ -110,34 +139,47 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
                 }
             }).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
-            if (issues.Count > 0) return Result();
             ValidateInstance(root);
-            CurseForgeFileStateStore.EnsureManifestUnchanged(root, fingerprint);
-            var runtime = await _runtimeInstaller.InstallAsync(root, progress, token).ConfigureAwait(false);
-            records.AddRange(runtime.Files);
-            issues.AddRange(runtime.Issues);
-            notes.AddRange(runtime.Notes);
+            EnsureContentSnapshotUnchanged();
+            if (contentIssues.Count > 0)
+                notes.Add("内容文件仍待修复；继续准备 Minecraft/加载器依赖，必需内容通过前不会标记为可启动。");
+            try
+            {
+                runtime = await _runtimeInstaller.InstallAsync(root, progress, token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsExpectedFailure(ex))
+            {
+                runtime = new PrismInstallResult { SourceFormat = "CurseForge", RuntimeIssues = [ex.Message] };
+            }
             canceled = runtime.IsCanceled;
             if (canceled) return Result();
             token.ThrowIfCancellationRequested();
-            CurseForgeFileStateStore.EnsureManifestUnchanged(root, fingerprint);
-            launchPath = runtime.LaunchProfilePath;
-            if (launchPath is null && issues.Count == 0) issues.Add("运行依赖安装未生成启动配置，请查看组件解析结果。");
+            EnsureContentSnapshotUnchanged();
+            // 运行阶段期间内容可能被外部修改；发布就绪前重新确认所有必需内容。
+            contentIssues.AddRange(await InstanceContentVerifier.VerifyRequiredAsync(root, manifest, required, token).ConfigureAwait(false));
+            EnsureContentSnapshotUnchanged();
+
+            /// <summary>内容来源解析失败时仅保留清单一致性检查；未验证的内容始终保持失败状态。</summary>
+            void EnsureContentSnapshotUnchanged()
+            {
+                if (snapshot is not null) InstanceEffectiveRequirements.EnsureUnchanged(root, manifest, snapshot);
+                else EmbeddedFileBaseline.EnsureManifestUnchanged(root, manifest);
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { canceled = true; }
-        catch (Exception ex) when (IsExpectedFailure(ex)) { issues.Add(ex.Message); }
+        catch (Exception ex) when (IsExpectedFailure(ex)) { contentIssues.Add(ex.Message); }
         return Result();
 
         /// <summary>汇总结果，必需模组缺失、运行失败或取消均不会被标记为完整可运行。</summary>
-        PrismInstallResult Result() => new()
+        PrismInstallResult Result() => InstanceInstallResultPolicy.Merge(new PrismInstallResult
         {
-            SourceFormat = "CurseForge", Files = records.ToArray(), Issues = issues.Distinct().ToArray(),
-            Notes = notes.Distinct().ToArray(), LaunchProfilePath = launchPath, IsCanceled = canceled
-        };
+            SourceFormat = "CurseForge", Files = records.ToArray(), ContentIssues = contentIssues.Distinct().ToArray(),
+            Notes = notes.Distinct().ToArray(), IsCanceled = canceled
+        }, runtime ?? new PrismInstallResult { SourceFormat = "CurseForge" });
     }
 
     /// <summary>先验证现有文件，允许人工放入被限制分发的文件；只下载 API 明确授权且有 SHA-1 的内容。</summary>
-    private async Task<InstanceDownloadFileResult?> EnsureFileAsync(string root, string gameDirectory,
+    private async Task<InstanceDownloadFileResult?> EnsureFileAsync(string root, InstanceImportManifest manifest,
         InstanceFileRequirement file, CurseForgeResolvedFile? resolved, IProgress<FileDownloadProgress>? progress,
         Action<string> addNote, CancellationToken token)
     {
@@ -149,30 +191,39 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
                 return new(file, InstanceDownloadState.Unavailable, reason + " 官方文件页面：" + resolved.ManualDownloadUrl);
             var path = InstanceImportPaths.Within(root, file.Path ?? throw new InvalidDataException("文件缺少目标路径。"));
             InstanceImportPaths.EnsureNoLinks(path);
+            var hashes = InstanceFileIntegrity.HashesFor(file);
             try
             {
                 if (await PrismInstanceInstaller.ExistingFileMatchesAsync(path, file, token).ConfigureAwait(false)) return null;
             }
-            catch (InvalidDataException) when (InstanceFileChangePolicy.IsMutableConfiguration(file, gameDirectory))
+            catch (InvalidDataException) when (InstanceFileChangePolicy.IsMutableConfiguration(file, manifest.GameDirectory, manifest.SourceFormat))
             {
                 addNote("已保留导入后修改的配置：" + file.Path);
                 return null;
             }
             if (file.Source == InstanceFileSource.Embedded)
-                return new(file, InstanceDownloadState.Unavailable, "缺少包内文件，请从原 CurseForge 压缩包恢复。");
+            {
+                if (file.Origin == InstanceFileOrigin.UserLocalImport)
+                    return new(file, InstanceDownloadState.MissingEmbeddedFile, "用户明确选择的本地替代文件缺失，请重新提供该文件；不会改用官方版本。");
+                if (await _embeddedRestorer.RestoreAsync(root, manifest, file, token).ConfigureAwait(false))
+                    return new(file, InstanceDownloadState.RestoredEmbeddedFile, "已从原始整合包条目恢复，并验证导入时大小及 SHA-256。");
+                return new(file, InstanceDownloadState.MissingEmbeddedFile, "找不到可恢复的原始整合包或条目，请提供原包；不会使用不同内容的官方文件替代。");
+            }
             if (file.Source != InstanceFileSource.CurseForge || resolved is null)
                 return new(file, InstanceDownloadState.Unavailable, "CurseForge 导入清单包含不支持的文件来源。");
             if (file.Downloads.Count == 0)
                 return new(file, InstanceDownloadState.Unavailable,
-                    $"作者限制第三方分发或平台未提供下载地址。请从官方文件页面 {resolved.ManualDownloadUrl} 下载指定版本并放入 {file.Path}，再执行补全。");
-            if (!file.Hashes.ContainsKey("sha1"))
+                    $"作者限制第三方分发或平台未提供下载地址。{resolved.FallbackMessage}请从官方文件页面 {resolved.ManualDownloadUrl} 下载指定版本并放入 {file.Path}，再执行补全。");
+            if (!hashes.ContainsKey("sha1"))
                 return new(file, InstanceDownloadState.Unavailable, "CurseForge 文件缺少 SHA-1，无法校验指定版本。");
             var download = await _downloader.DownloadAsync(new FileDownloadRequest
             {
-                DestinationPath = path, Urls = file.Downloads, ExpectedSize = file.Size, Hashes = file.Hashes
+                DestinationPath = path, Urls = file.Downloads, ExpectedSize = file.Size, Hashes = hashes
             }, progress, token).ConfigureAwait(false);
             if (!download.HashVerified) throw new InvalidDataException("下载器未确认 CurseForge 文件 SHA-1。");
-            return new(file, InstanceDownloadState.Downloaded, "已下载并校验 CurseForge 固定版本文件。");
+            return new(file, InstanceDownloadState.Downloaded, resolved.ModrinthFallback is null
+                ? "已下载并校验 CurseForge 固定版本文件。"
+                : "已从 Modrinth 下载同内容文件，并按原 CurseForge 清单哈希校验。");
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
         catch (Exception ex) when (IsExpectedFailure(ex)) { return new(file, InstanceDownloadState.Failed, ex.Message); }

@@ -1,12 +1,13 @@
 using EML.Core.CurseForge;
 using EML.Core.Minecraft;
+using EML.Core.Modrinth;
 using EML.Infrastructure.Minecraft.CurseForge.Api;
 using EML.Infrastructure.Minecraft.Importing;
 
 namespace EML.Infrastructure.Minecraft.CurseForge;
 
 /// <summary>通过官方 API 将整合包的固定项目和文件 ID 解析为可校验的本地文件需求。</summary>
-internal sealed class CurseForgeFileResolver(ICurseForgeApiClient apiClient)
+internal sealed class CurseForgeFileResolver(ICurseForgeApiClient apiClient, IModrinthApiClient? modrinthApiClient = null)
 {
     private const int MinecraftGameId = 432;
     private const int BatchSize = 50;
@@ -55,17 +56,23 @@ internal sealed class CurseForgeFileResolver(ICurseForgeApiClient apiClient)
             Files = requirements.Select(requirement => ResolveOne(manifest, requirement,
                 files.GetValueOrDefault(requirement.FileId!.Value), mods.GetValueOrDefault(requirement.ProjectId!.Value))).ToArray()
         };
+        if (modrinthApiClient is not null)
+            state = await new CurseForgeModrinthFallbackResolver(modrinthApiClient)
+                .ResolveAsync(instanceRoot, state, token).ConfigureAwait(false);
         await CurseForgeFileStateStore.WriteAsync(instanceRoot, manifest, state, token).ConfigureAwait(false);
         return state;
     }
 
-    /// <summary>已有文件仍可离线校验；生产下载只复用官方 CDN 地址，旧后端缓存需重新向 API 解析。</summary>
+    /// <summary>已有文件仍可离线校验；缺失文件只复用官方 CDN 或带精确匹配依据的 Modrinth 来源。</summary>
     private bool CanReuseCachedFile(string instanceRoot, CurseForgeResolvedFile entry)
     {
+        // 原包内容的可用性由恢复/校验阶段判断，不能因缺失而回退到平台上的不同文件。
+        if (entry.EmbeddedOverride is not null) return true;
         if (entry.BlockReason is not null) return false;
         var file = entry.Requirement;
         if (file.Path is { } path && File.Exists(InstanceImportPaths.Within(instanceRoot, path))) return true;
         if (file.Downloads.Count == 0) return false;
+        if (entry.ModrinthFallback is not null) return true; // Read 已核对来源身份、下载地址、原 SHA-1 和大小。
         return apiClient is not CurseForgeApiClient || file.Downloads.All(IsOfficialDownloadUrl);
     }
 
@@ -75,7 +82,8 @@ internal sealed class CurseForgeFileResolver(ICurseForgeApiClient apiClient)
     {
         var requirement = new InstanceFileRequirement
         {
-            Source = InstanceFileSource.CurseForge, Required = true, ProjectId = original.ProjectId, FileId = original.FileId
+            Source = InstanceFileSource.CurseForge, Origin = InstanceFileOrigin.CurseForgeDownload,
+            Required = true, ProjectId = original.ProjectId, FileId = original.FileId
         };
         var entry = new CurseForgeResolvedFile
         {
@@ -101,9 +109,10 @@ internal sealed class CurseForgeFileResolver(ICurseForgeApiClient apiClient)
             Hashes = sha1Hashes.Length == 1 ? new Dictionary<string, string> { ["sha1"] = sha1Hashes[0].ToLowerInvariant() }
                 : new Dictionary<string, string>()
         };
-        if (mod.ClassId == 6945)
-            requirement = PreserveEmbeddedDataPackBaseline(manifest, requirement);
         entry = entry with { Requirement = requirement, ClassId = mod.ClassId, FileName = file.FileName };
+        CurseForgeFileStateStore.EnsureOfficialBaseline(original, requirement);
+        entry = PreserveEmbeddedDataPackBaseline(manifest, entry);
+        if (entry.EmbeddedOverride is not null) return entry;
         if (sha1Hashes.Length == 0)
             return entry with { BlockReason = "官方 API 未提供 SHA-1；当前校验器不支持仅有 MD5 的文件，无法确认指定内容。" };
         if (mod.AllowModDistribution == false || !file.IsAvailable || string.IsNullOrWhiteSpace(file.DownloadUrl)) return entry;
@@ -113,23 +122,12 @@ internal sealed class CurseForgeFileResolver(ICurseForgeApiClient apiClient)
         return entry with { Requirement = requirement with { Downloads = [file.DownloadUrl] } };
     }
 
-    /// <summary>同路径包内数据包同时保留导入基线和 API 哈希，只有实际内容符合两者时才可复用。</summary>
-    private static InstanceFileRequirement PreserveEmbeddedDataPackBaseline(InstanceImportManifest manifest,
-        InstanceFileRequirement requirement)
+    /// <summary>以导入清单确证的同路径原包文件优先；平台文件只保留独立来源信息，不合并摘要。</summary>
+    private static CurseForgeResolvedFile PreserveEmbeddedDataPackBaseline(InstanceImportManifest manifest,
+        CurseForgeResolvedFile entry)
     {
-        var embedded = manifest.Files.SingleOrDefault(file => file.Source == InstanceFileSource.Embedded &&
-            string.Equals(file.Path, requirement.Path, StringComparison.OrdinalIgnoreCase));
-        if (embedded is null) return requirement;
-        if (embedded.Size is null || embedded.Size != requirement.Size || embedded.Hashes.Count == 0)
-            throw new InvalidDataException("同路径 Paxi 数据包与包内文件的大小声明不同或缺少校验依据，已保留原文件。");
-        var hashes = requirement.Hashes.ToDictionary(pair => pair.Key, pair => pair.Value);
-        foreach (var (name, value) in embedded.Hashes)
-        {
-            if (hashes.TryGetValue(name, out var expected) && !value.Equals(expected, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("同路径 Paxi 数据包与包内文件的哈希声明冲突，已保留原文件。");
-            hashes[name] = value;
-        }
-        return requirement with { Hashes = hashes };
+        var embedded = CurseForgeFileStateStore.ImportedOverride(manifest, entry.Requirement);
+        return embedded is null ? entry : entry with { EmbeddedOverride = embedded };
     }
 
     /// <summary>与下载请求签名共用 CDN 地址约束，不接受旧后端、其他主机或包含凭据的地址。</summary>

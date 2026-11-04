@@ -8,6 +8,7 @@
     <CompilerVisibleProperty Include="EmitCompilerGeneratedFiles" />
     <CompilerVisibleProperty Include="EmbedAllSources" />
     <CompilerVisibleProperty Include="EmbedUntrackedSources" />
+    <CompilerVisibleProperty Include="EMLCurseForgeCredentialFile" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -16,8 +17,20 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
-  <!-- 发布脚本必须重建；禁用编译服务器，确保生成器读取本次子进程的环境。 -->
-  <PropertyGroup Condition="'$(EML_EMBED_CURSEFORGE_KEY)' == '1'">
+  <!-- 仅开发机保存加密构建输入，运行时仍只使用程序集常量。 -->
+  <PropertyGroup>
+    <_EMLCurseForgeLocalFile>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../.eml-build/curseforge.key.dpapi'))</_EMLCurseForgeLocalFile>
+    <EMLCurseForgeCredentialFile Condition="Exists('$(_EMLCurseForgeLocalFile)')">$(_EMLCurseForgeLocalFile)</EMLCurseForgeCredentialFile>
+    <_EMLHasCurseForgeCredential Condition="'$(EML_EMBED_CURSEFORGE_KEY)' == '1' Or '$(EMLCurseForgeCredentialFile)' != ''">true</_EMLHasCurseForgeCredential>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- AdditionalFiles 让 Roslyn 跟踪加密内容变化；不复制到 bin 或发布目录。 -->
+    <AdditionalFiles Include="$(EMLCurseForgeCredentialFile)" Condition="'$(EMLCurseForgeCredentialFile)' != ''" />
+    <UpToDateCheckInput Include="$(_EMLCurseForgeLocalFile)" />
+  </ItemGroup>
+
+  <!-- 普通 F5、重新生成与发布共用相同防护；App/Core 仍可保留调试符号。 -->
+  <PropertyGroup Condition="'$(_EMLHasCurseForgeCredential)' == 'true'">
     <UseSharedCompilation>false</UseSharedCompilation>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
@@ -27,7 +40,7 @@
 
   <!-- 在生成器运行前阻止明文源文件落盘；条件仅使用非秘密开关。 -->
   <Target Name="ValidateCurseForgeSecretOutput" BeforeTargets="CoreCompile"
-          Condition="'$(EML_EMBED_CURSEFORGE_KEY)' == '1'">
+          Condition="'$(_EMLHasCurseForgeCredential)' == 'true'">
     <Error Condition="'$(EmitCompilerGeneratedFiles)' == 'true'"
            Text="嵌入 CurseForge 凭证时禁止导出编译器生成的源文件。" />
     <Error Condition="'$(EmbedAllSources)' == 'true' Or '$(EmbedUntrackedSources)' == 'true'"

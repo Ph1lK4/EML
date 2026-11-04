@@ -284,6 +284,113 @@ public sealed class PrismInstanceInstallerTests : IDisposable
         Assert.Null(Assert.Single(downloader.Requests, request => request.Urls[0].StartsWith("https://resources.download.minecraft.net/")).MaximumBytes);
     }
 
+    /// <summary>Prism 内容损坏不阻止运行依赖准备，但公开安装结果不能把运行成功当成整个实例成功。</summary>
+    [Fact]
+    public async Task CorruptContentKeepsPreparedRuntimeButBlocksFinalReadiness()
+    {
+        var fixture = await CreateFixtureAsync();
+        var changed = fixture.PreservedMod.ToArray();
+        changed[^1] ^= 1;
+        WriteFile(fixture.Instance, ".minecraft/mods/preserved.jar", changed);
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await new PrismInstanceInstaller(_root, downloader, new PlanResolver(_ => fixture.Plan)).InstallAsync(fixture.Instance);
+
+        Assert.True(result.RuntimeReady);
+        Assert.False(result.ContentReady);
+        Assert.False(result.FilesReady);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.True(File.Exists(result.PreparedLaunchProfilePath));
+        Assert.Contains(result.ContentIssues, issue => issue.Contains("preserved.jar"));
+        Assert.Empty(result.RuntimeIssues);
+        Assert.Equal(2, downloader.Requests.Count);
+        Assert.Equal(changed, File.ReadAllBytes(Path.Combine(fixture.Instance, ".minecraft/mods/preserved.jar")));
+    }
+
+    /// <summary>程序修改 Prism 名称后，公开安装服务沿用原导入声明并认可启动器元数据变化。</summary>
+    [Fact]
+    public async Task ChangedPrismNameDoesNotBlockContentPreparation()
+    {
+        var fixture = await CreateFixtureAsync();
+        var manifestPath = Path.Combine(fixture.Instance, InstanceImportManifest.FileName);
+        var manifest = InstanceManifestStore.Read(manifestPath);
+        var original = File.ReadAllBytes(Path.Combine(fixture.Instance, "instance.cfg"));
+        var config = new InstanceFileRequirement
+        {
+            Path = "instance.cfg", Source = InstanceFileSource.Embedded, Size = original.Length,
+            Hashes = new Dictionary<string, string> { ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(original)) }
+        };
+        await InstanceManifestStore.WriteAsync(manifestPath, manifest with { Files = manifest.Files.Append(config).ToArray() }, CancellationToken.None);
+        var before = File.ReadAllBytes(manifestPath);
+        WriteFile(fixture.Instance, "instance.cfg", Encoding.UTF8.GetBytes("[General]\nname=Renamed instance\n"));
+
+        var result = await new PrismInstanceInstaller(_root, new FixtureDownloader(fixture.Payloads),
+            new PlanResolver(_ => fixture.Plan)).InstallAsync(fixture.Instance);
+
+        Assert.True(result.FilesReady, string.Join("\n", result.Issues));
+        Assert.Equal(before, File.ReadAllBytes(manifestPath));
+    }
+
+    /// <summary>用户主动接受本地类库替换后，运行安装器和内容复核都使用相同的新基线。</summary>
+    [Fact]
+    public async Task LocalRuntimeLibraryUsesAcceptedReplacementAcrossBothStages()
+    {
+        var fixture = await CreateFixtureAsync();
+        var manifestPath = Path.Combine(fixture.Instance, InstanceImportManifest.FileName);
+        var manifest = InstanceManifestStore.Read(manifestPath);
+        var original = fixture.Payloads["https://example.test/library.jar"];
+        var local = new InstanceFileRequirement
+        {
+            Path = LibraryPath, Source = InstanceFileSource.Embedded, Origin = InstanceFileOrigin.EmbeddedOverride,
+            Size = original.Length, ArchiveEntry = "libraries/library.jar",
+            Hashes = new Dictionary<string, string> { ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(original)) }
+        };
+        await InstanceManifestStore.WriteAsync(manifestPath, manifest with { Files = manifest.Files.Append(local).ToArray() }, CancellationToken.None);
+        var replacement = CreateJar("example/Library.class", "user explicitly chosen library");
+        WriteFile(fixture.Instance, LibraryPath, replacement);
+        await new InstanceLocalReplacementService(_root).AcceptExistingAsync(fixture.Instance, LibraryPath);
+        var plan = fixture.Plan with
+        {
+            Files = fixture.Plan.Files.Select(file => file.Role == PrismRuntimeFileRole.Library ? file with { Requirement = local } : file).ToArray()
+        };
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await new PrismInstanceInstaller(_root, downloader, new PlanResolver(_ => plan)).InstallAsync(fixture.Instance);
+
+        Assert.True(result.FilesReady, string.Join("\n", result.Issues));
+        Assert.Single(downloader.Requests);
+        Assert.DoesNotContain(downloader.Requests, request => request.Urls.Contains("https://example.test/library.jar"));
+        Assert.Equal(replacement, File.ReadAllBytes(Path.Combine(fixture.Instance, LibraryPath)));
+    }
+
+    /// <summary>替换记录损坏时不能退回旧本地类库发布成功；无关的可信远端运行依赖仍能下载。</summary>
+    [Fact]
+    public async Task InvalidSourceSnapshotDoesNotFallBackToOldEmbeddedRuntimeBaseline()
+    {
+        var fixture = await CreateFixtureAsync();
+        var original = fixture.Payloads["https://example.test/library.jar"];
+        WriteFile(fixture.Instance, LibraryPath, original);
+        WriteFile(fixture.Instance, InstanceLocalReplacementService.RelativePath, Encoding.UTF8.GetBytes("{broken"));
+        var plan = fixture.Plan with
+        {
+            Files = fixture.Plan.Files.Select(file => file.Role == PrismRuntimeFileRole.Library
+                ? file with { Requirement = file.Requirement with { Source = InstanceFileSource.Embedded, Downloads = [] } } : file).ToArray()
+        };
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await new PrismInstanceInstaller(_root, downloader, new PlanResolver(_ => plan)).InstallAsync(fixture.Instance);
+
+        Assert.False(result.RuntimeReady);
+        Assert.False(result.ContentReady);
+        Assert.Null(result.PreparedLaunchProfilePath);
+        Assert.Null(result.LaunchProfilePath);
+        Assert.Contains(result.RuntimeIssues, issue => issue.Contains("本地运行文件"));
+        Assert.Single(downloader.Requests);
+        Assert.Equal("https://example.test/main.jar", Assert.Single(downloader.Requests).Urls.Single());
+        Assert.Equal(original, File.ReadAllBytes(Path.Combine(fixture.Instance, LibraryPath)));
+        Assert.Null(PrismRuntimeStateStore.Read(plan));
+    }
+
     /// <summary>构造有效 JAR、可选资源索引及必须保留的用户内容，并保存真实 Prism 导入清单。</summary>
     private async Task<Fixture> CreateFixtureAsync(bool includeAssets = false)
     {

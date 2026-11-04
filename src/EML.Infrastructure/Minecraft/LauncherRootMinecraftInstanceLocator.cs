@@ -91,7 +91,8 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         if (prism) versions = ReadPrism(directory, warnings, token);
         else if (Directory.Exists(Path.Combine(game, "versions"))) versions = ReadStandard(game, warnings, token);
         // Modrinth / CurseForge 正常只提供安装清单，缺少 versions 不能直接判定为导入损坏。
-        if (versions.Count == 0) versions = ReadImportedVersions(manifest, manifestPath);
+        var declaredVersions = ReadImportedVersions(manifest, manifestPath);
+        versions = ApplyImportedVersionFallback(versions, declaredVersions, warnings);
         if (versions.Count == 0)
             warnings.Add(manifest.SourceFormat == "Zip"
                 ? "通用 ZIP 未提供可识别的 Minecraft 版本信息，版本和加载器尚无法确认。"
@@ -120,12 +121,34 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         return Create(directory, game, format, versions, warnings.Distinct().ToArray()) with { Name = name };
     }
 
+    /// <summary>仅补充实际元数据中未知的本体版本，保留已有版本、配置 ID、加载器和元数据路径。</summary>
+    private static IReadOnlyList<MinecraftVersionInfo> ApplyImportedVersionFallback(
+        IReadOnlyList<MinecraftVersionInfo> versions, IReadOnlyList<MinecraftVersionInfo> declaredVersions,
+        List<string> warnings)
+    {
+        if (versions.Count == 0) return declaredVersions;
+        if (declaredVersions.Count == 0) return versions;
+        var declaredVersion = declaredVersions[0].MinecraftVersion;
+        return versions.Select(version =>
+        {
+            if (HasKnownMinecraftVersion(version.MinecraftVersion)) return version;
+            warnings.Remove(version.VersionId + "：无法从元数据确认 Minecraft 版本。");
+            warnings.Add($"{version.VersionId}：版本 JSON 未声明 Minecraft 版本，显示导入清单声明的 {declaredVersion}。");
+            return version with { MinecraftVersion = declaredVersion };
+        }).ToArray();
+    }
+
+    /// <summary>空值及显示占位符不能作为已知本体版本，避免覆盖可用的组件声明。</summary>
+    private static bool HasKnownMinecraftVersion(string? version) =>
+        !string.IsNullOrWhiteSpace(version) && version != "未知";
+
     /// <summary>把组件声明转换为版本和加载器显示文本，不代表已经安装。</summary>
     private static IReadOnlyList<MinecraftVersionInfo> ReadImportedVersions(InstanceImportManifest manifest, string manifestPath)
     {
-        var minecraft = manifest.MinecraftVersion ?? manifest.Components
-            .FirstOrDefault(component => component.Id is "minecraft" or "net.minecraft")?.Version;
-        if (string.IsNullOrWhiteSpace(minecraft)) return [];
+        var minecraft = HasKnownMinecraftVersion(manifest.MinecraftVersion) ? manifest.MinecraftVersion : manifest.Components
+            .FirstOrDefault(component => (component.Id is "minecraft" or "net.minecraft") &&
+                HasKnownMinecraftVersion(component.Version))?.Version;
+        if (!HasKnownMinecraftVersion(minecraft)) return [];
         var loaders = new List<string>();
         foreach (var component in manifest.Components)
         {
@@ -144,7 +167,7 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
             }
             if (loader is not null) loaders.Add(loader + " " + version);
         }
-        return [new(minecraft, minecraft, loaders.Count == 0 ? "未声明加载器" :
+        return [new(minecraft!, minecraft!, loaders.Count == 0 ? "未声明加载器" :
             string.Join(" + ", loaders.Distinct()), manifestPath)];
     }
 
@@ -251,6 +274,9 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
                 if (separator > 0) return coordinate[2][..separator];
             }
         }
+        // 统一运行安装器写入的标准配置保留独立本体版本，不能把 EML 配置 ID 当作游戏版本。
+        var generatedVersion = Text(json, "emlMinecraftVersion");
+        if (HasKnownMinecraftVersion(generatedVersion)) return generatedVersion;
         return Text(json, "mainClass") == "net.minecraft.client.main.Main" ? Text(json, "id") : null;
     }
 

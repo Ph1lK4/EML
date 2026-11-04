@@ -9,12 +9,13 @@ public partial class InstancesViewModel
 {
     private readonly IMinecraftInstanceChecker _checker;
     private readonly IMinecraftInstanceDownloader _instanceDownloader;
+    private CancellationTokenSource? _downloadCancellation;
 
     [ObservableProperty] private IReadOnlyList<InstanceFileCheckResult> checkFiles = [];
     [ObservableProperty] private IReadOnlyList<InstanceDownloadFileResult> downloadFiles = [];
     [ObservableProperty] private string checkSummary = "请选择实例并执行文件检查。";
     [ObservableProperty] private string checkNotes = "";
-    [ObservableProperty] private string downloadSummary = "Prism、Modrinth 和 CurseForge 会补全支持的运行依赖；CurseForge 使用内置授权直接下载，受限制文件会提示手动处理。";
+    [ObservableProperty] private string downloadSummary = "Prism、Modrinth 和 CurseForge 会补全支持的运行依赖；CurseForge 受限文件会尝试 Modrinth 同内容来源，无法精确匹配时提示手动处理。";
     [ObservableProperty] private int selectedDetailTab;
 
     /// <summary>切换、刷新或写入实例后使旧快照失效，避免把历史结果当成当前状态。</summary>
@@ -24,7 +25,7 @@ public partial class InstancesViewModel
         DownloadFiles = [];
         CheckSummary = "尚未检查；快速检查确认路径和大小，完整检查还会计算哈希。";
         CheckNotes = "只读检查导入清单以及 Prism、Modrinth、CurseForge 的本地缓存。首次补全会联网取得缺少的元数据和文件。";
-        DownloadSummary = "Prism、Modrinth 和 CurseForge 会补全支持的运行依赖；CurseForge 使用内置授权直接下载，受限制文件会提示手动处理。";
+        DownloadSummary = "Prism、Modrinth 和 CurseForge 会补全支持的运行依赖；CurseForge 受限文件会尝试 Modrinth 同内容来源，无法精确匹配时提示手动处理。";
     }
 
     /// <summary>检查文件存在性和大小，不读取全部文件计算哈希。</summary>
@@ -72,16 +73,40 @@ public partial class InstancesViewModel
     private async Task DownloadMissingAsync(CancellationToken token)
     {
         if (!CanManage()) return;
-        var instance = SelectedInstance!;
+        var instancePath = SelectedInstance!.InstancePath;
+        IsBusy = true;
+        try { await RunDownloadAsync(instancePath, token); }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>手动补全与导入后的补全使用同一个取消入口。</summary>
+    [RelayCommand(CanExecute = nameof(CanCancelDependencyDownload))]
+    private void CancelDependencyDownload()
+    {
+        _downloadCancellation?.Cancel();
+        CancelDependencyDownloadCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>仅当前补全阶段仍可取消时启用按钮。</summary>
+    private bool CanCancelDependencyDownload() => _downloadCancellation is { IsCancellationRequested: false };
+
+    /// <summary>对固定实例路径补全并复查；调用方持有忙碌状态，导入阶段无需执行另一个界面命令。</summary>
+    private async Task RunDownloadAsync(string instancePath, CancellationToken operationToken, bool afterImport = false)
+    {
         ClearCheckResults();
         SelectedDetailTab = 2;
-        IsBusy = true;
         var revision = ++_transferRevision;
         TransferPercent = 0;
-        TransferStatus = "正在重新检查缺失文件……";
-        StatusText = "已有文件将保留；下载失败的条目可以再次尝试。";
+        TransferStatus = afterImport ? "导入完成，正在自动补全依赖……" : "正在重新检查缺失文件……";
+        StatusText = afterImport ? "实例已导入，正在自动下载依赖并复查；取消后可继续补全。" :
+            "已有文件将保留；下载失败的条目可以再次尝试。";
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(operationToken);
+        _downloadCancellation = cancellation;
+        CancelDependencyDownloadCommand.NotifyCanExecuteChanged();
+        var token = cancellation.Token;
         try
         {
+            token.ThrowIfCancellationRequested();
             var progress = new Progress<InstanceDownloadProgress>(p =>
             {
                 if (revision != _transferRevision || !IsBusy) return;
@@ -90,27 +115,29 @@ public partial class InstancesViewModel
                 if (p.Download is { } download)
                     TransferStatus += $"  {download.BytesReceived / 1048576.0:F1} MiB";
             });
-            var report = await _instanceDownloader.DownloadMissingAsync(instance.InstancePath, progress, token);
+            var report = await _instanceDownloader.DownloadMissingAsync(instancePath, progress, token);
             ++_transferRevision;
             DownloadFiles = report.Files;
             if (report.CheckReport is { } checkReport) ApplyCheckReport(checkReport);
             var downloaded = report.Files.Count(f => f.State == InstanceDownloadState.Downloaded);
             var unverified = report.Files.Count(f => f.State == InstanceDownloadState.DownloadedUnverified);
+            var restored = report.Files.Count(f => f.State == InstanceDownloadState.RestoredEmbeddedFile);
             var failed = report.Files.Count(f => f.State == InstanceDownloadState.Failed);
-            var unavailable = report.Files.Count(f => f.State == InstanceDownloadState.Unavailable);
-            DownloadSummary = $"已下载并校验 {downloaded} 项，来源无哈希 {unverified} 项，下载失败 {failed} 项，需要处理 {unavailable} 项。";
+            var unavailable = report.Files.Count(f => f.State is InstanceDownloadState.Unavailable or InstanceDownloadState.MissingEmbeddedFile);
+            DownloadSummary = $"已下载并校验 {downloaded} 项，原包恢复 {restored} 项，来源无哈希 {unverified} 项，下载失败 {failed} 项，需要处理 {unavailable} 项。";
             if (report.Runtime is { } runtime)
             {
-                var finalCheckPassed = !report.IsCanceled && report.CheckError is null &&
-                    report.CheckReport is { HasManifest: true, LaunchProfilePath: not null, RuntimeIssues.Count: 0 } finalCheck &&
-                    !finalCheck.Files.Any(f => f.Requirement.Required &&
-                        f.State is not (InstanceFileState.Verified or InstanceFileState.PresentUnverified) &&
-                        !(f.State == InstanceFileState.ChangedSinceImport && f.IsAllowedConfigurationChange));
+                var finalCheckPassed = report.LaunchReady;
                 DownloadSummary += runtime.FilesReady && finalCheckPassed ? $"\n{runtime.SourceFormat} 运行文件与启动配置已准备，需使用匹配 Java 由启动模块启动。" :
                     runtime.FilesReady ? $"\n{runtime.SourceFormat} 启动配置已生成，但最终复查尚未通过，请查看文件检查结果。" :
-                    $"\n{runtime.SourceFormat} 尚未完成准备：" + string.Join("；", runtime.Issues.Take(5));
+                    runtime.RuntimeReady ? $"\n{runtime.SourceFormat} 运行依赖已准备，内容仍需修复。" :
+                    $"\n{runtime.SourceFormat} 尚未完成准备：" + string.Join("；", runtime.Issues
+                        .Concat(runtime.ContentIssues).Concat(runtime.RuntimeIssues).Distinct().Take(5));
                 if (runtime.Notes.Count > 0) DownloadSummary += "\n" + string.Join("\n", runtime.Notes.Take(5));
-                if (runtime.LaunchProfilePath is { } profile) DownloadSummary += "\n启动配置：" + profile;
+                if (runtime.ContentIssues.Count > 0) DownloadSummary += $"\n内容文件待修复 {runtime.ContentIssues.Count} 项，修复前不能启动。";
+                if (runtime.RuntimeIssues.Count > 0) DownloadSummary += $"\n运行依赖待处理 {runtime.RuntimeIssues.Count} 项。";
+                if ((runtime.PreparedLaunchProfilePath ?? runtime.LaunchProfilePath) is { } profile)
+                    DownloadSummary += "\n已准备的运行配置：" + profile;
             }
             if (report.IsCanceled || report.CheckError is not null)
             {
@@ -123,7 +150,7 @@ public partial class InstancesViewModel
             if (report.CheckReport is { HasManifest: false })
                 DownloadSummary = "没有 eml-instance.json，缺少检查和下载依据，本次没有下载文件。";
             TransferPercent = 100;
-            TransferStatus = report.Runtime is { FilesReady: false } ? "补全结束，仍有待处理的运行依赖" : "下载流程和复查已结束";
+            TransferStatus = report.Runtime is { FilesReady: false } ? "补全结束，仍有待处理的内容文件或运行依赖" : "下载流程和复查已结束";
             StatusText = "补全结果见上方列表；请在“文件检查”中查看复查结果及待处理依赖。";
         }
         catch (OperationCanceledException)
@@ -138,7 +165,14 @@ public partial class InstancesViewModel
             DownloadSummary = "已完成的文件会保留；请重新检查后重试。";
             StatusText = ex.Message + " " + DownloadSummary;
         }
-        finally { ++_transferRevision; IsBusy = false; }
+        finally
+        {
+            ++_transferRevision;
+            _downloadCancellation = null;
+            CancelDependencyDownloadCommand.NotifyCanExecuteChanged();
+            if (afterImport)
+                StatusText = "实例已导入并保留。" + StatusText + " 未完成时可点击“补全实例依赖”继续。";
+        }
     }
 
     /// <summary>展示检查范围和各类结果；包内基线变化单列，不将用户设置改动称为损坏。</summary>
@@ -151,8 +185,8 @@ public partial class InstancesViewModel
         {
             var verified = report.Files.Count(f => f.State == InstanceFileState.Verified);
             var unverified = report.Files.Count(f => f.State == InstanceFileState.PresentUnverified);
-            var missing = report.Files.Count(f => f.State == InstanceFileState.Missing && f.Requirement.Required);
-            var optional = report.Files.Count(f => f.State == InstanceFileState.Missing && !f.Requirement.Required);
+            var missing = report.Files.Count(f => f.State is (InstanceFileState.Missing or InstanceFileState.MissingEmbeddedFile) && f.Requirement.Required);
+            var optional = report.Files.Count(f => f.State is (InstanceFileState.Missing or InstanceFileState.MissingEmbeddedFile) && !f.Requirement.Required);
             var changed = report.Files.Count(f => f.State == InstanceFileState.ChangedSinceImport);
             var mismatch = report.Files.Count(f => f.State is InstanceFileState.SizeMismatch or InstanceFileState.HashMismatch);
             var unresolved = report.Files.Count(f => f.State == InstanceFileState.Unresolved);
@@ -166,6 +200,7 @@ public partial class InstancesViewModel
             string.Join("、", report.Components.Take(12).Select(c => $"{c.Id} {c.Version}")) +
             (report.Components.Count > 12 ? $" 等 {report.Components.Count} 项" : "");
         CheckNotes = string.Join("\n", report.Notes) + componentText;
-        if (report.LaunchProfilePath is { } launch) CheckNotes += "\n已生成启动配置：" + launch;
+        if ((report.PreparedLaunchProfilePath ?? report.LaunchProfilePath) is { } launch)
+            CheckNotes += "\n已生成运行配置：" + launch + (report.LaunchReady ? "" : "（最终文件检查尚未通过）");
     }
 }

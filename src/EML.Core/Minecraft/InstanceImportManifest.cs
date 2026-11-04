@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EML.Core.Minecraft;
 
 /// <summary>
@@ -41,6 +43,21 @@ public sealed record InstanceComponentRequirement(string Id, string Version)
 /// <summary>Embedded 对应包内文件，DirectDownload 有 URL，CurseForge 需要通过项目/文件 ID 解析。</summary>
 public enum InstanceFileSource { Embedded, DirectDownload, CurseForge }
 
+/// <summary>实际采用的内容来源；与旧 Source 的获取方式分开，旧清单未声明时继续按原规则读取。</summary>
+public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport }
+
+/// <summary>文件用途独立于内容来源；可变配置和启动器状态不会改变原来源摘要的含义。</summary>
+public enum InstanceFileRole { Content, UserConfiguration, LauncherMetadata, DerivedState }
+
+/// <summary>原平台文件的来源信息，不参与另一个来源文件的强制校验。</summary>
+public sealed record CurseForgeFileOrigin
+{
+    public long ProjectId { get; init; }
+    public long FileId { get; init; }
+    public long? Size { get; init; }
+    public IReadOnlyDictionary<string, string> Hashes { get; init; } = new Dictionary<string, string>();
+}
+
 /// <summary>统一文件需求；CurseForge 未解析时路径和大小可为 null，哈希集合可为空。</summary>
 public sealed record InstanceFileRequirement
 {
@@ -48,6 +65,15 @@ public sealed record InstanceFileRequirement
     public string? Path { get; init; }
     /// <summary>内容来自包内条目、直接下载地址还是 CurseForge 文件引用。</summary>
     public InstanceFileSource Source { get; init; }
+    /// <summary>当前内容及其 Hashes 所属的来源；null 保留旧清单的序列化指纹。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public InstanceFileOrigin? Origin { get; init; }
+    /// <summary>明确记录的文件用途；旧清单省略时由共享策略作保守分类。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public InstanceFileRole? Role { get; init; }
+    /// <summary>被包内覆盖或用户选择替代的官方固定文件信息，不作为当前内容的校验条件。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public CurseForgeFileOrigin? CurseForgeOrigin { get; init; }
     /// <summary>是否为必需文件；false 的文件留待用户选择是否安装。</summary>
     public bool Required { get; init; } = true;
     /// <summary>未压缩的字节数；未知时为 null。</summary>
