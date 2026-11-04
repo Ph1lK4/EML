@@ -1,10 +1,11 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EML.Core.Java;
 
 namespace EML.App.ViewModels;
 
+/// <summary>提供 Java 列表、当前选择和检测命令，供 WPF 页面绑定。</summary>
 public partial class JavaSettingsViewModel : ObservableObject
 {
     private readonly IJavaLocator _javaLocator;
@@ -18,11 +19,14 @@ public partial class JavaSettingsViewModel : ObservableObject
     [ObservableProperty]
     private string statusText = "尚未检测 Java";
 
+    /// <summary>接收 Java 检测接口，让界面无需了解注册表或磁盘搜索的具体实现。</summary>
     public JavaSettingsViewModel(IJavaLocator javaLocator)
     {
         _javaLocator = javaLocator;
     }
 
+    /// <summary>检测 Java 并更新列表，默认选中首项；失败时显示原因。</summary>
+    // 生成供按钮和启动扫描调用的 DetectJavaCommand。
     [RelayCommand]
     private async Task DetectJavaAsync()
     {

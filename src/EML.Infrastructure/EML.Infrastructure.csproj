@@ -2,6 +2,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\EML.Core\EML.Core.csproj" />
+    <!-- 生成器仅参与编译，不作为启动器运行时依赖分发。 -->
+    <ProjectReference Include="..\EML.Build.Secrets\EML.Build.Secrets.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <CompilerVisibleProperty Include="EmitCompilerGeneratedFiles" />
+    <CompilerVisibleProperty Include="EmbedAllSources" />
+    <CompilerVisibleProperty Include="EmbedUntrackedSources" />
+    <CompilerVisibleProperty Include="EMLCurseForgeCredentialFile" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -9,5 +16,37 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- 仅开发机保存加密构建输入，运行时仍只使用程序集常量。 -->
+  <PropertyGroup>
+    <_EMLCurseForgeLocalFile>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../.eml-build/curseforge.key.dpapi'))</_EMLCurseForgeLocalFile>
+    <EMLCurseForgeCredentialFile Condition="Exists('$(_EMLCurseForgeLocalFile)')">$(_EMLCurseForgeLocalFile)</EMLCurseForgeCredentialFile>
+    <_EMLHasCurseForgeCredential Condition="'$(EML_EMBED_CURSEFORGE_KEY)' == '1' Or '$(EMLCurseForgeCredentialFile)' != ''">true</_EMLHasCurseForgeCredential>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- AdditionalFiles 让 Roslyn 跟踪加密内容变化；不复制到 bin 或发布目录。 -->
+    <AdditionalFiles Include="$(EMLCurseForgeCredentialFile)" Condition="'$(EMLCurseForgeCredentialFile)' != ''" />
+    <UpToDateCheckInput Include="$(_EMLCurseForgeLocalFile)" />
+  </ItemGroup>
+
+  <!-- 普通 F5、重新生成与发布共用相同防护；App/Core 仍可保留调试符号。 -->
+  <PropertyGroup Condition="'$(_EMLHasCurseForgeCredential)' == 'true'">
+    <UseSharedCompilation>false</UseSharedCompilation>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <EmbedAllSources>false</EmbedAllSources>
+    <EmbedUntrackedSources>false</EmbedUntrackedSources>
+  </PropertyGroup>
+
+  <!-- 在生成器运行前阻止明文源文件落盘；条件仅使用非秘密开关。 -->
+  <Target Name="ValidateCurseForgeSecretOutput" BeforeTargets="CoreCompile"
+          Condition="'$(_EMLHasCurseForgeCredential)' == 'true'">
+    <Error Condition="'$(EmitCompilerGeneratedFiles)' == 'true'"
+           Text="嵌入 CurseForge 凭证时禁止导出编译器生成的源文件。" />
+    <Error Condition="'$(EmbedAllSources)' == 'true' Or '$(EmbedUntrackedSources)' == 'true'"
+           Text="嵌入 CurseForge 凭证时禁止将源码嵌入调试文件。" />
+    <Error Condition="'$(DebugType)' != 'none' Or '$(DebugSymbols)' == 'true'"
+           Text="嵌入 CurseForge 凭证时必须关闭调试符号，以免生成源码进入 PDB。" />
+  </Target>
 
 </Project>
