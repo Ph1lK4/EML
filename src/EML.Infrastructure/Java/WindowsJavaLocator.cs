@@ -14,6 +14,10 @@ public sealed class WindowsJavaLocator : IJavaLocator
 {
     private readonly string[] _additionalSearchRoots;
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
+    private IReadOnlyList<JavaInstallation>? _lastKnownInstallations;
+
+    /// <summary>提供上次已完成的不可变检测快照，启动模块仍需实时查询选中的 Java。</summary>
+    internal IReadOnlyList<JavaInstallation>? LastKnownInstallations => Volatile.Read(ref _lastKnownInstallations);
 
     /// <summary>保存可选的额外搜索目录；不传参数时使用默认发现规则。</summary>
     public WindowsJavaLocator(IEnumerable<string>? additionalSearchRoots = null)
@@ -48,10 +52,12 @@ public sealed class WindowsJavaLocator : IJavaLocator
                 found.TryAdd(installation.ExecutablePath, installation);
         });
 
-        return found.Values
+        var installations = found.Values
             .OrderByDescending(item => MajorVersion(item.Version))
             .ThenBy(item => item.ExecutablePath, PathComparer)
             .ToArray();
+        Volatile.Write(ref _lastKnownInstallations, installations);
+        return installations;
     }
 
     /// <summary>从环境变量、注册表和常见目录收集候选 java.exe，尚不验证能否运行。</summary>

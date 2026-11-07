@@ -4,6 +4,7 @@ using EML.Infrastructure.Minecraft.Importing;
 using EML.Infrastructure.Minecraft.Modrinth;
 using EML.Infrastructure.Minecraft.CurseForge;
 using EML.Infrastructure.Minecraft.Prism;
+using EML.Infrastructure.Minecraft.Standard;
 
 namespace EML.Infrastructure.Minecraft;
 
@@ -16,12 +17,13 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
     private readonly IPrismInstanceInstaller _prismInstaller;
     private readonly IModrinthInstanceInstaller _modrinthInstaller;
     private readonly ICurseForgeInstanceInstaller _curseForgeInstaller;
+    private readonly IPrismInstanceInstaller _zipInstaller;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
 
     /// <summary>复用页面的检查器和下载器，所有写入限制在启动器的 instances 直接子目录。</summary>
     public MinecraftInstanceDownloader(string launcherRoot, IMinecraftInstanceChecker checker, IFileDownloader downloader,
         IPrismInstanceInstaller? prismInstaller = null, IModrinthInstanceInstaller? modrinthInstaller = null,
-        ICurseForgeInstanceInstaller? curseForgeInstaller = null)
+        ICurseForgeInstanceInstaller? curseForgeInstaller = null, IPrismInstanceInstaller? zipInstaller = null)
     {
         _instancesRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(launcherRoot, "instances")));
         _checker = checker;
@@ -29,6 +31,7 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
         _prismInstaller = prismInstaller ?? new PrismInstanceInstaller(launcherRoot, downloader);
         _modrinthInstaller = modrinthInstaller ?? new ModrinthInstanceInstaller(launcherRoot, downloader);
         _curseForgeInstaller = curseForgeInstaller ?? new CurseForgeInstanceInstaller(launcherRoot, downloader);
+        _zipInstaller = zipInstaller ?? new ZipInstanceInstaller(launcherRoot, downloader);
     }
 
     /// <summary>同一服务的下载依次执行；失败文件单独记录，取消则停止余下任务并保留已完成文件。</summary>
@@ -52,9 +55,12 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
         var sourceFormat = File.Exists(manifestPath) ? InstanceManifestStore.Read(manifestPath).SourceFormat : null;
         var isModrinth = string.Equals(sourceFormat, "Modrinth", StringComparison.OrdinalIgnoreCase);
         var isCurseForge = string.Equals(sourceFormat, "CurseForge", StringComparison.OrdinalIgnoreCase);
-        if (isModrinth || isCurseForge || string.Equals(sourceFormat, "Prism", StringComparison.OrdinalIgnoreCase))
+        var isZip = string.Equals(sourceFormat, "Zip", StringComparison.OrdinalIgnoreCase);
+        if (isModrinth || isCurseForge || isZip || string.Equals(sourceFormat, "Prism", StringComparison.OrdinalIgnoreCase))
         {
-            runtime = isCurseForge
+            runtime = isZip
+                ? await _zipInstaller.InstallAsync(root, progress, token).ConfigureAwait(false)
+                : isCurseForge
                 ? await _curseForgeInstaller.InstallAsync(root, progress, token).ConfigureAwait(false)
                 : isModrinth
                 ? await _modrinthInstaller.InstallAsync(root, progress, token).ConfigureAwait(false)

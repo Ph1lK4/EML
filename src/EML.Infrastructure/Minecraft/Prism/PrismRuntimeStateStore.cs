@@ -19,6 +19,7 @@ internal static class PrismRuntimeStateStore
     internal const string RelativePath = ".eml-runtime/state.json";
     internal const string ModrinthRelativePath = ".eml-runtime/modrinth/state.json";
     internal const string CurseForgeRelativePath = ".eml-runtime/curseforge/state.json";
+    internal const string StandardRelativePath = ".eml-runtime/standard/state.json";
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     /// <summary>只读取当前组件指纹对应的状态；不存在或旧状态返回 null，损坏状态明确抛出错误。</summary>
@@ -65,6 +66,7 @@ internal static class PrismRuntimeStateStore
         "Prism" => RelativePath,
         "Modrinth" => ModrinthRelativePath,
         "CurseForge" => CurseForgeRelativePath,
+        "Zip" => StandardRelativePath,
         _ => throw new InvalidDataException("不支持的运行计划来源。")
     };
 

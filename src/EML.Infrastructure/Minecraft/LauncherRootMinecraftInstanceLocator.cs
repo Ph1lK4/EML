@@ -89,7 +89,7 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
         IReadOnlyList<MinecraftVersionInfo> versions = [];
         if (!Directory.Exists(game)) warnings.Add("导入清单指定的游戏目录不存在。");
         if (prism) versions = ReadPrism(directory, warnings, token);
-        else if (Directory.Exists(Path.Combine(game, "versions"))) versions = ReadStandard(game, warnings, token);
+        else if (Directory.Exists(Path.Combine(game, "versions"))) versions = ReadStandard(game, warnings, token, hasImportedManifest: true);
         // Modrinth / CurseForge 正常只提供安装清单，缺少 versions 不能直接判定为导入损坏。
         var declaredVersions = ReadImportedVersions(manifest, manifestPath);
         versions = ApplyImportedVersionFallback(versions, declaredVersions, warnings);
@@ -212,12 +212,14 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
     }
 
     /// <summary>读取各版本 JSON，再解析继承关系和加载器，支持引用同目录中的父版本。</summary>
-    private static IReadOnlyList<MinecraftVersionInfo> ReadStandard(string game, List<string> warnings, CancellationToken token)
+    private static IReadOnlyList<MinecraftVersionInfo> ReadStandard(string game, List<string> warnings, CancellationToken token,
+        bool hasImportedManifest = false)
     {
         var root = Path.Combine(game, "versions");
         if (!Directory.Exists(root)) { warnings.Add("未找到 versions 目录，无法确认版本。"); return []; }
         if (IsLink(root)) { warnings.Add("跳过链接形式的 versions 目录。"); return []; }
         var metadata = new Dictionary<string, (JsonElement Json, string Path)>(StringComparer.OrdinalIgnoreCase);
+        var hasGeneratedProfiles = false;
         foreach (var directory in Directory.GetDirectories(root).Order(StringComparer.OrdinalIgnoreCase))
         {
             token.ThrowIfCancellationRequested();
@@ -227,7 +229,13 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
                 var id = Path.GetFileName(directory);
                 var path = Path.Combine(directory, id + ".json");
                 if (!File.Exists(path)) { warnings.Add(id + "：缺少同名版本 JSON。"); continue; }
-                metadata[id] = (ReadJson(path), path);
+                var json = ReadJson(path);
+                if (IsGeneratedLaunchProfile(json))
+                {
+                    hasGeneratedProfiles = true;
+                    continue;
+                }
+                metadata[id] = (json, path);
             }
             catch (Exception ex) when (IsDataError(ex)) { warnings.Add(Path.GetFileName(directory) + "：" + ex.Message); }
         }
@@ -243,9 +251,16 @@ public sealed class LauncherRootMinecraftInstanceLocator : IMinecraftInstanceLoc
                 string.Join(" + ", loaders), entry.Path));
             if (version is null) warnings.Add(id + "：无法从元数据确认 Minecraft 版本。");
         }
-        if (result.Count == 0 && warnings.Count == 0) warnings.Add("versions 中没有可识别的版本。");
+        // 只有 EML 派生配置的导入实例继续使用清单声明，不因隐藏内部配置制造未知版本警告。
+        if (result.Count == 0 && warnings.Count == 0 && !(hasImportedManifest && hasGeneratedProfiles))
+            warnings.Add("versions 中没有可识别的版本。");
         return result;
     }
+
+    /// <summary>依据生成器的两项元数据标记识别派生配置，不根据用户选择的目录名判断。</summary>
+    private static bool IsGeneratedLaunchProfile(JsonElement json) =>
+        Text(json, "emlRuntimeFingerprint") is { Length: 64 } fingerprint && fingerprint.All(Uri.IsHexDigit) &&
+        !string.IsNullOrWhiteSpace(Text(json, "emlLaunchProfile"));
 
     /// <summary>从补丁、继承关系或库坐标解析游戏本体版本；防止循环，无法确认时返回 null。</summary>
     private static string? ResolveVersion(string id,

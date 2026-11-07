@@ -391,6 +391,38 @@ public sealed class PrismInstanceInstallerTests : IDisposable
         Assert.Null(PrismRuntimeStateStore.Read(plan));
     }
 
+    /// <summary>Prism 真实运行安装完成后认可正常配置变化和已消耗标记，且保留原始清单及用户字节。</summary>
+    [Fact]
+    public async Task GameplayChangesAndConsumedMarkerDoNotBlockPreparedPrismRuntime()
+    {
+        var fixture = await CreateFixtureAsync();
+        var manifestPath = Path.Combine(fixture.Instance, InstanceImportManifest.FileName);
+        var manifest = InstanceManifestStore.Read(manifestPath);
+        const string marker = ".minecraft/config/modpack-update";
+        const string config = ".minecraft/serverutilities/serverutilities.cfg";
+        /// <summary>生成有原条目和 SHA-256 的普通包内测试快照。</summary>
+        InstanceFileRequirement Embedded(string path, string content) => new()
+        {
+            Path = path, ArchiveEntry = path, Source = InstanceFileSource.Embedded, Size = Encoding.UTF8.GetByteCount(content),
+            Hashes = new Dictionary<string, string> { ["sha256"] = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content))) }
+        };
+        manifest = manifest with { Files = [.. manifest.Files, Embedded(marker, ""), Embedded(config, "base")] };
+        await InstanceManifestStore.WriteAsync(manifestPath, manifest, CancellationToken.None);
+        var originalManifest = File.ReadAllBytes(manifestPath);
+        WriteFile(fixture.Instance, config, Encoding.UTF8.GetBytes("player settings"));
+        var downloader = new FixtureDownloader(fixture.Payloads);
+
+        var result = await new PrismInstanceInstaller(_root, downloader, new PlanResolver(_ => fixture.Plan)).InstallAsync(fixture.Instance);
+
+        Assert.True(result.LaunchReady, string.Join(Environment.NewLine, result.Issues));
+        Assert.True(result.RuntimeReady);
+        Assert.Empty(result.ContentIssues);
+        Assert.NotEmpty(downloader.Requests);
+        Assert.False(File.Exists(Path.Combine(fixture.Instance, marker)));
+        Assert.Equal("player settings", File.ReadAllText(Path.Combine(fixture.Instance, config)));
+        Assert.Equal(originalManifest, File.ReadAllBytes(manifestPath));
+    }
+
     /// <summary>构造有效 JAR、可选资源索引及必须保留的用户内容，并保存真实 Prism 导入清单。</summary>
     private async Task<Fixture> CreateFixtureAsync(bool includeAssets = false)
     {

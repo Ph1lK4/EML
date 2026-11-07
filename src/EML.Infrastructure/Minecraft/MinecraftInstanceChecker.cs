@@ -5,6 +5,7 @@ using EML.Infrastructure.Minecraft.Importing;
 using EML.Infrastructure.Minecraft.Modrinth;
 using EML.Infrastructure.Minecraft.CurseForge;
 using EML.Infrastructure.Minecraft.Prism;
+using EML.Infrastructure.Minecraft.Runtime;
 
 namespace EML.Infrastructure.Minecraft;
 
@@ -77,7 +78,8 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         var isPrism = manifest.SourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase);
         var isModrinth = manifest.SourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase);
         var isCurseForge = manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase);
-        var runtimeFormat = isPrism ? "Prism" : isModrinth ? "Modrinth" : isCurseForge ? "CurseForge" : null;
+        var runtimeFormat = isPrism ? "Prism" : isModrinth ? "Modrinth" : isCurseForge ? "CurseForge" :
+            manifest.SourceFormat.Equals("Zip", StringComparison.OrdinalIgnoreCase) ? "Zip" : null;
         string? launchProfile = null;
         if (runtimeFormat is not null)
             launchProfile = await AddRuntimeRequirementsAsync(root, manifest, effectiveRequirements, sourceSnapshot is not null, requirements,
@@ -91,10 +93,13 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
             token.ThrowIfCancellationRequested();
             var fileName = requirement.Path ?? $"CurseForge {requirement.ProjectId}/{requirement.FileId}";
             reporter.Report(results.Count, fileName);
-            results.Add((await CheckFileAsync(root, requirement, mode, reporter, results.Count, token).ConfigureAwait(false))
-                with { IsRuntimeFile = isRuntime,
-                    IsAllowedConfigurationChange = !isRuntime && InstanceFileChangePolicy.IsMutableConfiguration(
-                        requirement, manifest.GameDirectory, manifest.SourceFormat) });
+            var result = await CheckFileAsync(root, requirement, mode, reporter, results.Count, token).ConfigureAwait(false);
+            var allowsMissing = !isRuntime && InstanceFileChangePolicy.AllowsMissing(requirement, manifest.GameDirectory, manifest.SourceFormat);
+            if (result.State == InstanceFileState.Missing && allowsMissing)
+                result = result with { State = InstanceFileState.Consumed, Message = "原包空更新标记允许被游戏消耗；保留原始依据，不自动恢复。" };
+            results.Add(result with { IsRuntimeFile = isRuntime, IsAllowedMissing = allowsMissing,
+                IsAllowedConfigurationChange = !isRuntime && InstanceFileChangePolicy.IsMutableFile(
+                    requirement, manifest.GameDirectory, manifest.SourceFormat) });
             reporter.Report(results.Count, fileName);
             lastFile = fileName;
         }
@@ -145,10 +150,7 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
     {
         try
         {
-            IPrismRuntimeResolver resolver = manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)
-                ? new CurseForgeRuntimeResolver()
-                : manifest.SourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase)
-                    ? new ModrinthRuntimeResolver() : new PrismRuntimeResolver();
+            IPrismRuntimeResolver resolver = new InstanceRuntimeResolver();
             var plan = resolver.Resolve(root, manifest);
             if (!hasSourceSnapshot && plan.Files.Any(file => file.Requirement.Source == InstanceFileSource.Embedded))
                 issues.Add("本地运行文件的来源或用户替换记录无法验证，运行依赖尚未通过检查。");
@@ -260,23 +262,7 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
     }
 
     /// <summary>逐层拒绝符号链接、目录联接和把目录当文件的情况；权限错误不被当作缺失。</summary>
-    private static void ValidateFilePath(string root, string relative)
-    {
-        var current = root;
-        var rootAttributes = File.GetAttributes(root);
-        if ((rootAttributes & FileAttributes.ReparsePoint) != 0 || (rootAttributes & FileAttributes.Directory) == 0)
-            throw new IOException("实例目录已变化或包含链接。");
-        var segments = relative.Split('/');
-        for (var i = 0; i < segments.Length; i++)
-        {
-            current = Path.Combine(current, segments[i]);
-            var attributes = File.GetAttributes(current);
-            if ((attributes & FileAttributes.ReparsePoint) != 0) throw new IOException("路径含符号链接或目录联接。");
-            var isDirectory = (attributes & FileAttributes.Directory) != 0;
-            if (i < segments.Length - 1 && !isDirectory) throw new IOException("文件路径中的父目录实际是一个文件。");
-            if (i == segments.Length - 1 && isDirectory) throw new IOException("预期文件的位置实际是一个文件夹。");
-        }
-    }
+    private static void ValidateFilePath(string root, string relative) => InstanceContentVerifier.ValidateFilePath(root, relative);
 
     /// <summary>获取长度与修改时间快照；显式读取属性以保留拒绝访问等真实错误。</summary>
     private static (long Length, DateTime Modified) Snapshot(string path)

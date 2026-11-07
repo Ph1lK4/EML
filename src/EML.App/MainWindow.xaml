@@ -24,6 +24,9 @@
           <WrapPanel Grid.Row="1" Margin="0,12">
             <Button Content="刷新实例" Command="{Binding RefreshCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="导入实例" Command="{Binding ImportCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="支持 Prism ZIP、Modrinth mrpack、CurseForge ZIP 和通用游戏目录 ZIP"/>
+            <Button Content="启动游戏" Command="{Binding LaunchGameCommand}" Padding="12,6" Margin="0,0,8,4" FontWeight="SemiBold" ToolTip="完整检查后使用此实例的启动设置运行；不会自动执行整合包脚本"/>
+            <Button Content="取消启动准备" Command="{Binding CancelLaunchPreparationCommand}" Padding="12,6" Margin="0,0,8,4"/>
+            <Button Content="停止游戏" Command="{Binding StopGameCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="停止本次由 EML 启动的进程；建议优先在游戏内正常退出以保存进度"/>
             <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" Width="180" MaxLength="128" IsEnabled="{Binding CanInteract}" ToolTip="新的实例名称，同时修改文件夹名称" Margin="0,0,8,4" VerticalContentAlignment="Center"/>
             <Button Content="重命名" Command="{Binding RenameCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="删除实例" Command="{Binding DeleteCommand}" Padding="12,6" Margin="0,0,8,4"/>
@@ -112,6 +115,66 @@
                   <DataGridTextColumn Header="说明" Binding="{Binding Message}" Width="3*"/>
                 </DataGrid.Columns>
               </DataGrid>
+            </Grid>
+          </TabItem>
+          <!-- 新页面追加在末尾，保留详情、检查、补全的原有索引。 -->
+          <TabItem Header="启动设置">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8">
+              <StackPanel>
+                <TextBlock Text="设置按实例保存。玩家名称用于离线身份；需要正版身份认证的服务器须等待账号登录功能。" TextWrapping="Wrap" Foreground="DimGray" Margin="0,0,0,8"/>
+                <Grid IsEnabled="{Binding CanEditLaunchSettings}">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                  </Grid.ColumnDefinitions>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                  </Grid.RowDefinitions>
+                  <TextBlock Text="玩家名称" VerticalAlignment="Center"/>
+                  <TextBox Grid.Column="1" Text="{Binding PlayerName, UpdateSourceTrigger=PropertyChanged}" MaxLength="16" Margin="0,0,0,8" ToolTip="1–16 位英文字母、数字或下划线；默认 Steve"/>
+                  <TextBlock Grid.Row="1" Text="Java 路径" VerticalAlignment="Center"/>
+                  <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,8">
+                    <ComboBox IsEditable="True" IsTextSearchEnabled="False" ItemsSource="{Binding Java.Installations}" DisplayMemberPath="ExecutablePath" Text="{Binding SelectedJavaPath, UpdateSourceTrigger=PropertyChanged}" ToolTip="可选择已检测的 Java，或直接输入 java.exe 路径；清空后自动选择匹配版本"/>
+                    <TextBlock Text="留空自动匹配实例所需 Java；可在“Java 环境”页面重新检测。" FontSize="11" Foreground="DimGray" TextWrapping="Wrap"/>
+                  </StackPanel>
+                  <TextBlock Grid.Row="2" Text="初始内存（MB）" VerticalAlignment="Center"/>
+                  <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding MinMemoryMbText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                  <TextBlock Grid.Row="3" Text="最大内存（MB）" VerticalAlignment="Center"/>
+                  <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding MaxMemoryMbText, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,8"/>
+                  <TextBlock Grid.Row="4" Text="附加 JVM 参数" VerticalAlignment="Top"/>
+                  <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding AdditionalJvmArguments, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="60" VerticalScrollBarVisibility="Auto" ToolTip="支持带引号的参数；内存由上方字段统一管理，不能覆盖主类、classpath 或实例关键参数"/>
+                </Grid>
+                <WrapPanel Margin="0,8,0,0">
+                  <Button Content="保存设置" Command="{Binding SaveLaunchSettingsCommand}" Padding="10,4" Margin="0,0,8,6"/>
+                  <Button Content="重新读取" Command="{Binding ReloadLaunchSettingsCommand}" Padding="10,4" Margin="0,0,8,6" ToolTip="重新读取磁盘设置，放弃尚未保存的输入"/>
+                  <Button Content="使用当前设置启动" Command="{Binding LaunchGameCommand}" Padding="10,4" Margin="0,0,8,6"/>
+                </WrapPanel>
+                <TextBlock Text="{Binding LaunchSettingsStatus}" TextWrapping="Wrap"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+          <TabItem Header="运行日志">
+            <Grid Margin="8">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+              </Grid.RowDefinitions>
+              <TextBlock Text="{Binding RunningInstanceName, StringFormat=本次实例：{0}}" FontWeight="SemiBold"/>
+              <StackPanel Grid.Row="1" Margin="0,4,0,4">
+                <TextBlock Text="{Binding LaunchStatus}" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding LastExitCode, StringFormat=退出码：{0}, TargetNullValue=退出码：尚无}"/>
+              </StackPanel>
+              <StackPanel Grid.Row="2" Margin="0,0,0,6">
+                <TextBlock Text="完整日志位置（下方仅显示最近 1000 行）" Foreground="DimGray"/>
+                <TextBox Text="{Binding LaunchLogPath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
+              </StackPanel>
+              <ListBox Grid.Row="3" ItemsSource="{Binding LaunchLogLines}" FontFamily="Consolas" FontSize="12" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"/>
             </Grid>
           </TabItem>
           </TabControl>

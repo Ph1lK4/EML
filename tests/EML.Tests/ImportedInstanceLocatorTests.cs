@@ -103,6 +103,62 @@ public sealed class ImportedInstanceLocatorTests : IDisposable
         Assert.EndsWith(Path.Combine("actual", "actual.json"), Assert.Single(instance.Versions).MetadataPath);
     }
 
+    /// <summary>ZIP 首次准备后只显示原始版本；用户以 EML 命名的正常版本仍保留。</summary>
+    [Theory]
+    [InlineData("1.7.10")]
+    [InlineData("EML-Standard-my-custom")]
+    public async Task GeneratedLaunchProfileDoesNotDuplicateOriginalZipVersion(string sourceId)
+    {
+        var original = JsonSerializer.Serialize(new
+        {
+            id = sourceId, mainClass = "net.minecraft.client.main.Main",
+            patches = new[] { new { id = "game", version = "1.7.10" } }
+        });
+        Write($"pack/.minecraft/versions/{sourceId}/{sourceId}.json", original);
+        Write("pack/.minecraft/versions/EML-Standard-generated/EML-Standard-generated.json", JsonSerializer.Serialize(new
+        {
+            id = "EML-Standard-generated", mainClass = "net.minecraft.client.main.Main",
+            emlRuntimeFingerprint = new string('a', 64),
+            emlLaunchProfile = ".minecraft/versions/EML-Standard-generated/EML-Standard-generated.eml-launch.json"
+        }));
+        Manifest("pack", new() { SourceFormat = "Zip", MinecraftVersion = "1.7.10" });
+
+        var instance = Assert.Single(await Scan());
+
+        Assert.Equal(sourceId, Assert.Single(instance.VersionIds));
+        Assert.Equal("1.7.10", instance.MinecraftVersionDisplay);
+        Assert.Equal("原版", instance.LoaderDisplay);
+        Assert.DoesNotContain(instance.Warnings, warning => warning.Contains("无法从元数据确认"));
+        Assert.Equal(original, File.ReadAllText(Path.Combine(_root, "instances", "pack", ".minecraft", "versions", sourceId, sourceId + ".json")));
+    }
+
+    /// <summary>只含派生描述的已补全平台包继续显示清单声明，不显示内部 ID 或额外未知版本提示。</summary>
+    [Theory]
+    [InlineData("Modrinth")]
+    [InlineData("CurseForge")]
+    public async Task GeneratedOnlyProfilesKeepImportedManifestFallback(string sourceFormat)
+    {
+        var id = "EML-" + sourceFormat + "-generated";
+        Write($"pack/.minecraft/versions/{id}/{id}.json", JsonSerializer.Serialize(new
+        {
+            id, mainClass = "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            emlRuntimeFingerprint = new string('b', 64),
+            emlLaunchProfile = $".minecraft/versions/{id}/{id}.eml-launch.json"
+        }));
+        Manifest("pack", new()
+        {
+            SourceFormat = sourceFormat, MinecraftVersion = "1.20.1",
+            Components = [new("minecraft", "1.20.1"), new("fabric-loader", "0.16.0")]
+        });
+
+        var instance = Assert.Single(await Scan());
+
+        Assert.Equal("1.20.1", Assert.Single(instance.VersionIds));
+        Assert.Equal("Fabric 0.16.0", instance.LoaderDisplay);
+        Assert.EndsWith(InstanceImportManifest.FileName, Assert.Single(instance.Versions).MetadataPath);
+        Assert.DoesNotContain(instance.Warnings, warning => warning.Contains("无法从元数据确认") || warning.Contains("versions 中没有"));
+    }
+
     /// <summary>导入的 Prism 仍以 mmc-pack 和当前 instance.cfg 为准，不能显示导入前的旧名称或旧版本。</summary>
     [Fact]
     public async Task PrismUsesActualComponentAndCurrentConfiguredName()

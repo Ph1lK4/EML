@@ -7,11 +7,12 @@ namespace EML.Tests;
 /// <summary>执行真实界面命令，验证导入与自动补全的衔接；替身不读写磁盘，也不访问网络。</summary>
 public sealed class InstancesViewModelImportTests
 {
-    /// <summary>三种受支持整合包在导入提交后自动补全，并显示同一次补全的最终复查。</summary>
+    /// <summary>四种受支持整合包在导入提交后自动补全，并显示同一次补全的最终复查。</summary>
     [Theory]
     [InlineData("Prism")]
     [InlineData("Modrinth")]
     [InlineData("CurseForge")]
+    [InlineData("Zip")]
     public async Task SupportedImportAutomaticallyCompletesDependencies(string format)
     {
         var fixture = new Fixture(format);
@@ -27,17 +28,21 @@ public sealed class InstancesViewModelImportTests
         Assert.False(fixture.ViewModel.IsBusy);
     }
 
-    /// <summary>通用 ZIP 缺少平台安装依据时保持只导入，不猜测要下载的版本。</summary>
+    /// <summary>通用 ZIP 的运行描述缺失时保留导入结果和失败信息，允许用户补齐后重试。</summary>
     [Fact]
-    public async Task GenericZipDoesNotStartPlatformCompletion()
+    public async Task IncompleteZipKeepsImportedInstanceAndAllowsRetry()
     {
         var fixture = new Fixture("Zip");
+        fixture.Downloader.Download = (_, _) => Task.FromException<InstanceDownloadReport>(
+            new InvalidDataException("缺少版本 JSON，无法确定运行依赖。"));
 
         await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
 
         Assert.True(fixture.Importer.Committed);
-        Assert.Empty(fixture.Downloader.Paths);
+        Assert.Equal([fixture.Result.InstancePath], fixture.Downloader.Paths);
         Assert.Equal(fixture.Result.InstancePath, fixture.ViewModel.SelectedInstance?.InstancePath);
+        Assert.Contains("缺少版本 JSON", fixture.ViewModel.StatusText);
+        Assert.True(fixture.ViewModel.DownloadMissingCommand.CanExecute(null));
         Assert.False(fixture.ViewModel.IsBusy);
     }
 

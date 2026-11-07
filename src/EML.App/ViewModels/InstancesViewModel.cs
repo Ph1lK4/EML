@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EML.App.Services;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Launching;
 
 namespace EML.App.ViewModels;
 
@@ -22,7 +23,8 @@ public partial class InstancesViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand),
-        nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand))]
+        nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand),
+        nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand))]
     private MinecraftInstance? selectedInstance;
     [ObservableProperty] private string statusText = "正在准备检测本地实例。";
     [ObservableProperty] private string newName = "";
@@ -30,9 +32,10 @@ public partial class InstancesViewModel : ObservableObject
     [ObservableProperty] private string transferStatus = "";
     [ObservableProperty] private bool isExporting;
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanInteract))]
+    [NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanEditLaunchSettings))]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand),
-        nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand))]
+        nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand),
+        nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand))]
     private bool isBusy;
     /// <summary>没有实例操作正在执行时，允许修改输入和列表选择。</summary>
     public bool CanInteract => !IsBusy;
@@ -40,7 +43,9 @@ public partial class InstancesViewModel : ObservableObject
     /// <summary>接收依赖，构造时不扫描磁盘；首次扫描由窗口显示事件触发。</summary>
     public InstancesViewModel(IMinecraftInstanceLocator locator, IMinecraftInstanceManager manager,
         IMinecraftInstanceImporter importer, IInstanceDialogs dialogs, string instancesRoot,
-        IMinecraftInstanceChecker checker, IMinecraftInstanceDownloader instanceDownloader)
+        IMinecraftInstanceChecker checker, IMinecraftInstanceDownloader instanceDownloader,
+        IMinecraftGameLauncher? launcher = null, IMinecraftLaunchSettingsStore? launchSettingsStore = null,
+        JavaSettingsViewModel? java = null)
     {
         _locator = locator;
         _manager = manager;
@@ -49,6 +54,9 @@ public partial class InstancesViewModel : ObservableObject
         InstancesRoot = instancesRoot;
         _checker = checker;
         _instanceDownloader = instanceDownloader;
+        _launcher = launcher;
+        _launchSettingsStore = launchSettingsStore;
+        Java = java;
     }
 
     /// <summary>切换实例后更新名称，并清除属于上一个实例的检查和下载记录。</summary>
@@ -56,6 +64,7 @@ public partial class InstancesViewModel : ObservableObject
     {
         NewName = value?.Name ?? "";
         ClearCheckResults();
+        BeginLoadLaunchSettings(value);
     }
     /// <summary>判断当前是否允许重命名、删除或导出选中的实例。</summary>
     private bool CanManage() => !IsBusy && SelectedInstance is not null;
@@ -149,7 +158,7 @@ public partial class InstancesViewModel : ObservableObject
         finally { ++_transferRevision; IsExporting = false; IsBusy = false; }
     }
 
-    /// <summary>预览并导入新目录，再为 Prism、Modrinth 和 CurseForge 自动补全；下载失败保留已导入实例。</summary>
+    /// <summary>预览并导入新目录，再自动补全支持格式的运行依赖；下载失败保留已导入实例。</summary>
     [RelayCommand(CanExecute = nameof(CanRefresh), IncludeCancelCommand = true)]
     private async Task ImportAsync(CancellationToken token)
     {
@@ -185,12 +194,13 @@ public partial class InstancesViewModel : ObservableObject
             var sourceFormat = imported.Manifest.SourceFormat;
             if (sourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
                  sourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase) ||
-                 sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase))
+                 sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase) ||
+                 sourceFormat.Equals("Zip", StringComparison.OrdinalIgnoreCase))
             {
                 // 补全始终使用导入结果中的路径，不依赖扫描成功，也不在两阶段之间释放忙碌状态。
                 await RunDownloadAsync(imported.InstancePath, token, afterImport: true);
             }
-            else StatusText += " 通用 ZIP 已保存包内文件；如有下载清单，可点击“补全实例依赖”继续检查。";
+            else StatusText += " 当前格式已保存包内文件；可点击“补全实例依赖”继续检查。";
         }
         catch (OperationCanceledException)
         {
