@@ -47,7 +47,7 @@ public enum InstanceFileSource { Embedded, DirectDownload, CurseForge }
 public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport }
 
 /// <summary>文件用途独立于内容来源；可变配置和启动器状态不会改变原来源摘要的含义。</summary>
-public enum InstanceFileRole { Content, UserConfiguration, LauncherMetadata, DerivedState }
+public enum InstanceFileRole { Content, UserConfiguration, LauncherMetadata, DerivedState, UserData, ConsumableMarker }
 
 /// <summary>原平台文件的来源信息，不参与另一个来源文件的强制校验。</summary>
 public sealed record CurseForgeFileOrigin

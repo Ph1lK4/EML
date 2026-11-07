@@ -65,7 +65,11 @@ public sealed class MinecraftInstanceCheckerTests : IDisposable
         Assert.True(report.HasManifest);
         Assert.Equal(InstanceFileState.Verified, Assert.Single(report.Files).State);
         Assert.Equal("minecraft", Assert.Single(report.Components).Id);
-        Assert.Contains(report.Notes, note => note.Contains("不代表实例一定能启动"));
+        Assert.Equal("Zip", report.RuntimeSourceFormat);
+        Assert.True(report.ContentReady);
+        Assert.False(report.RuntimeReady);
+        Assert.False(report.LaunchReady);
+        Assert.NotEmpty(report.RuntimeIssues);
     }
 
     /// <summary>平台尚无元数据时只报告待下载组件，检查本身不创建缓存、不修改清单或模组。</summary>

@@ -24,7 +24,10 @@
   <ItemGroup>
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.cs" Link="App\InstancesViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Checking.cs" Link="App\InstancesViewModel.Checking.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Launching.cs" Link="App\InstancesViewModel.Launching.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\JavaSettingsViewModel.cs" Link="App\JavaSettingsViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\IInstanceDialogs.cs" Link="App\IInstanceDialogs.cs" />
+    <Compile Include="..\..\src\EML.App\Services\BoundedLaunchProgress.cs" Link="App\BoundedLaunchProgress.cs" />
   </ItemGroup>
 
   <ItemGroup>

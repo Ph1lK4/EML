@@ -11,11 +11,11 @@ public interface IMinecraftInstanceChecker
 /// <summary>快速检查只判断路径和大小；完整检查会同时校验所有已声明的哈希。</summary>
 public enum InstanceCheckMode { Quick, Full }
 
-/// <summary>文件检查状态；已变化与无法确认的情况不作为通过处理。</summary>
+/// <summary>文件检查事实；变化或正常消耗是否阻断，由独立来源与变更策略决定。</summary>
 public enum InstanceFileState
 {
     Verified, PresentUnverified, Missing, SizeMismatch, HashMismatch,
-    ChangedSinceImport, Unresolved, Unreadable, ChangedDuringCheck, MissingEmbeddedFile
+    ChangedSinceImport, Unresolved, Unreadable, ChangedDuringCheck, MissingEmbeddedFile, Consumed
 }
 
 /// <summary>保留文件需求和当前结果，供界面展示与后续下载计划使用。</summary>
@@ -23,8 +23,10 @@ public sealed record InstanceFileCheckResult(InstanceFileRequirement Requirement
 {
     /// <summary>运行解析器派生的依赖与导入文件分开处理，避免使用旧的直接下载筛选重复安装。</summary>
     public bool IsRuntimeFile { get; init; }
-    /// <summary>仅配置白名单中的包内变化可在最终准备检查时放行，不能把 JAR 变化误当成用户设置。</summary>
+    /// <summary>兼容原属性名；共享策略允许的包内配置或用户数据变化可放行，来源完整性保持严格。</summary>
     public bool IsAllowedConfigurationChange { get; init; }
+    /// <summary>只读检查确认是允许被游戏消耗的一次性标记，不能用此标志掩盖读取错误。</summary>
+    public bool IsAllowedMissing { get; init; }
     /// <summary>优先显示相对路径，未解析的 CurseForge 项显示项目和文件 ID。</summary>
     public string PathDisplay => Requirement.Path ?? $"CurseForge {Requirement.ProjectId}/{Requirement.FileId}";
 
@@ -38,6 +40,7 @@ public sealed record InstanceFileCheckResult(InstanceFileRequirement Requirement
         InstanceFileState.SizeMismatch => "大小不符",
         InstanceFileState.HashMismatch => "哈希不符",
         InstanceFileState.ChangedSinceImport => "导入后已变化",
+        InstanceFileState.Consumed => "一次性标记已消耗",
         InstanceFileState.Unresolved => "待解析来源",
         InstanceFileState.Unreadable => "无法读取",
         InstanceFileState.ChangedDuringCheck => "检查时发生变化",

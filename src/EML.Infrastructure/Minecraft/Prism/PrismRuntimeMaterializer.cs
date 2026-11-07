@@ -73,7 +73,7 @@ public sealed class PrismRuntimeMaterializer
         ValidateTraits(plan);
         var gameArguments = BuildGameArguments(plan);
         var jvmArguments = BuildJvmArguments(plan);
-        if (plan.VersionIdPrefix is not ("EML-Prism" or "EML-Modrinth" or "EML-CurseForge"))
+        if (plan.VersionIdPrefix is not ("EML-Prism" or "EML-Modrinth" or "EML-CurseForge" or "EML-Standard"))
             throw new InvalidDataException("运行计划的版本目录前缀无效。");
         var id = plan.VersionIdPrefix + "-" + plan.Fingerprint[..12].ToLowerInvariant();
         var versionRoot = GamePath(plan, "versions/" + id);

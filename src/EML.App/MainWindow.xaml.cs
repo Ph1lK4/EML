@@ -6,6 +6,7 @@ using EML.App.ViewModels;
 using EML.App.Services;
 using EML.Infrastructure.Java;
 using EML.Infrastructure.Minecraft;
+using EML.Infrastructure.Minecraft.Launching;
 using EML.Infrastructure.Downloads;
 
 namespace EML.App;
@@ -23,27 +24,41 @@ public partial class MainWindow : Window
         var launcherRoot = GetLauncherRoot();
         var locator = new LauncherRootMinecraftInstanceLocator(launcherRoot);
         var checker = new MinecraftInstanceChecker(launcherRoot);
+        var javaLocator = new WindowsJavaLocator();
+        var java = new JavaSettingsViewModel(javaLocator);
         DataContext = new MainViewModel(
-            new JavaSettingsViewModel(new WindowsJavaLocator()),
+            java,
             new InstancesViewModel(locator, new MinecraftInstanceManager(launcherRoot),
                 new MinecraftInstanceImporter(launcherRoot), new InstanceDialogs(this), locator.InstancesRoot,
-                checker, new MinecraftInstanceDownloader(launcherRoot, checker, _fileDownloader)));
+                checker, new MinecraftInstanceDownloader(launcherRoot, checker, _fileDownloader),
+                new MinecraftGameLauncher(launcherRoot, checker, javaLocator),
+                new MinecraftLaunchSettingsStore(launcherRoot), java));
         ContentRendered += OnFirstContentRendered;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
     }
 
-    /// <summary>关闭前取消并等待正在执行的文件操作，确保下载和导入有机会清理临时文件。</summary>
+    /// <summary>游戏仍在启动或运行时先明确确认；随后取消并等待活动任务清理完成再关闭。</summary>
     private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         if (_closingAfterCleanup) return;
         if (_waitingForCleanup) { e.Cancel = true; return; }
         if (DataContext is not MainViewModel viewModel) return;
+        if (viewModel.Instances.LaunchGameCommand.IsRunning && MessageBox.Show(this,
+            viewModel.Instances.IsGameRunning
+                ? "游戏仍在运行。是否停止游戏并退出 EML？\n建议先在游戏内正常退出，以保存进度。"
+                : "游戏启动尚未结束。是否取消启动并退出 EML？\n如果游戏进程刚刚创建，也会停止本次进程。",
+            "退出 EML", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+        {
+            e.Cancel = true;
+            return;
+        }
         IAsyncRelayCommand[] operations =
         [
             viewModel.Instances.QuickCheckCommand, viewModel.Instances.FullCheckCommand,
             viewModel.Instances.DownloadMissingCommand, viewModel.Instances.ImportCommand,
-            viewModel.Instances.ExportCommand, viewModel.Instances.RenameCommand, viewModel.Instances.DeleteCommand
+            viewModel.Instances.ExportCommand, viewModel.Instances.RenameCommand, viewModel.Instances.DeleteCommand,
+            viewModel.Instances.LaunchGameCommand, viewModel.Instances.SaveLaunchSettingsCommand
         ];
         var pending = operations.Where(command => command.IsRunning)
             .Select(command => command.ExecutionTask).OfType<Task>().ToArray();
@@ -51,7 +66,7 @@ public partial class MainWindow : Window
         e.Cancel = true;
         _waitingForCleanup = true;
         IsEnabled = false;
-        viewModel.Instances.StatusText = "正在结束文件操作并清理临时文件，随后关闭窗口……";
+        viewModel.Instances.StatusText = "正在结束游戏或文件操作并清理临时文件，随后关闭窗口……";
         foreach (var command in operations) command.Cancel();
         try { await Task.WhenAll(pending); }
         catch (Exception ex)

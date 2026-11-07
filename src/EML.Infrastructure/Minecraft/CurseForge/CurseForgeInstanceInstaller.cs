@@ -192,15 +192,12 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             var path = InstanceImportPaths.Within(root, file.Path ?? throw new InvalidDataException("文件缺少目标路径。"));
             InstanceImportPaths.EnsureNoLinks(path);
             var hashes = InstanceFileIntegrity.HashesFor(file);
-            try
-            {
-                if (await PrismInstanceInstaller.ExistingFileMatchesAsync(path, file, token).ConfigureAwait(false)) return null;
-            }
-            catch (InvalidDataException) when (InstanceFileChangePolicy.IsMutableConfiguration(file, manifest.GameDirectory, manifest.SourceFormat))
-            {
-                addNote("已保留导入后修改的配置：" + file.Path);
-                return null;
-            }
+            var existingState = await InstanceContentVerifier.CheckExistingAsync(root, manifest, file, token).ConfigureAwait(false);
+            if (existingState == InstanceFileState.Verified) return null;
+            if (existingState == InstanceFileState.ChangedSinceImport)
+            { addNote("已保留导入后修改的配置或用户数据：" + file.Path); return null; }
+            if (existingState == InstanceFileState.Consumed)
+            { addNote("一次性更新标记已消耗，不自动恢复：" + file.Path); return null; }
             if (file.Source == InstanceFileSource.Embedded)
             {
                 if (file.Origin == InstanceFileOrigin.UserLocalImport)

@@ -331,6 +331,8 @@ public sealed class MinecraftInstanceDownloaderTests : IDisposable
     [InlineData("Modrinth", true)]
     [InlineData("CurseForge", false)]
     [InlineData("CurseForge", true)]
+    [InlineData("Zip", false)]
+    [InlineData("Zip", true)]
     public async Task InitialQuickCheckFailureAfterFormatInstallPreservesCompletedRuntime(string sourceFormat, bool cancelCheck)
     {
         var instance = await CreateInstanceAsync([], sourceFormat: sourceFormat);
@@ -349,7 +351,8 @@ public sealed class MinecraftInstanceDownloaderTests : IDisposable
         var service = new MinecraftInstanceDownloader(_root, checker, downloader,
             prismInstaller: sourceFormat == "Prism" ? installer : null,
             modrinthInstaller: sourceFormat == "Modrinth" ? installer : null,
-            curseForgeInstaller: sourceFormat == "CurseForge" ? installer : null);
+            curseForgeInstaller: sourceFormat == "CurseForge" ? installer : null,
+            zipInstaller: sourceFormat == "Zip" ? installer : null);
 
         var report = await service.DownloadMissingAsync(instance, cancellationToken: cancellation.Token);
 
@@ -363,6 +366,32 @@ public sealed class MinecraftInstanceDownloaderTests : IDisposable
         Assert.Equal(cancelCheck, report.IsCanceled);
         if (cancelCheck) Assert.Null(report.CheckError);
         else Assert.Equal(FailInitialCheck.FailureMessage, report.CheckError);
+    }
+
+    /// <summary>通用 ZIP 先调用独立运行安装器，再完成清单下载和完整复查，不丢失运行结果。</summary>
+    [Fact]
+    public async Task ZipUsesRuntimeInstallerAndStillCompletesManifestDownloads()
+    {
+        var missing = Direct(".minecraft/mods/missing.jar");
+        var instance = await CreateInstanceAsync([missing]);
+        var completed = new InstanceDownloadFileResult(Direct(".minecraft/libraries/prepared.jar"),
+            InstanceDownloadState.Downloaded, "测试运行文件已准备。") { IsRuntimeFile = true };
+        var runtime = new PrismInstallResult { SourceFormat = "Zip", Files = [completed] };
+        var installer = new SuccessfulRuntimeInstaller(runtime);
+        var downloader = new FakeDownloader();
+        var service = new MinecraftInstanceDownloader(_root, new MinecraftInstanceChecker(_root), downloader,
+            zipInstaller: installer);
+
+        var report = await service.DownloadMissingAsync(instance);
+
+        Assert.Equal(instance, Assert.Single(installer.Instances));
+        Assert.Same(runtime, report.Runtime);
+        Assert.Contains(completed, report.Files);
+        Assert.Single(downloader.Requests);
+        Assert.Equal(Path.Combine(instance, ".minecraft", "mods", "missing.jar"), downloader.Requests[0].DestinationPath);
+        Assert.Equal(InstanceCheckMode.Full, report.CheckReport!.Mode);
+        Assert.Equal("Zip", report.CheckReport.RuntimeSourceFormat);
+        Assert.Contains(report.CheckReport.Files, file => file.Requirement.Path == missing.Path && file.State == InstanceFileState.Verified);
     }
 
     /// <summary>平台已报告失败的清单文件不被通用阶段再次下载，避免重复请求及绕过分发限制。</summary>
@@ -395,6 +424,7 @@ public sealed class MinecraftInstanceDownloaderTests : IDisposable
     [Theory]
     [InlineData("Modrinth")]
     [InlineData("CurseForge")]
+    [InlineData("Zip")]
     public async Task CanceledPlatformInstallerPreservesCompletedRecordsWithoutChecking(string format)
     {
         var instance = await CreateInstanceAsync([], sourceFormat: format);
@@ -406,7 +436,8 @@ public sealed class MinecraftInstanceDownloaderTests : IDisposable
         var downloader = new FakeDownloader();
         var service = new MinecraftInstanceDownloader(_root, checker, downloader,
             modrinthInstaller: format == "Modrinth" ? installer : null,
-            curseForgeInstaller: format == "CurseForge" ? installer : null);
+            curseForgeInstaller: format == "CurseForge" ? installer : null,
+            zipInstaller: format == "Zip" ? installer : null);
 
         var report = await service.DownloadMissingAsync(instance);
 
