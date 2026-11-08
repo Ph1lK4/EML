@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.VisualBasic.FileIO;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Migration;
 
 namespace EML.Infrastructure.Minecraft;
 
@@ -37,6 +38,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
             await Task.Run(() =>
             {
                 var source = ValidateInstance(instancePath);
+                using var lease = InstanceOperationLease.Acquire(source);
                 EnumerateContents(source, cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
                 _recycleDirectory(source);
@@ -71,6 +73,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
             throw new InvalidOperationException("只能操作 instances 文件夹的直接子实例。");
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException("实例目录已不存在，请刷新列表。");
         EnsureNoLinkedAncestors(path);
+        MigrationJournalStore.EnsureSettled(path);
         var manifestPath = Path.Combine(path, InstanceImportManifest.FileName);
         if (File.Exists(manifestPath))
         {
@@ -105,6 +108,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
     {
         ValidateName(newName);
         var source = ValidateInstance(instancePath);
+        using var lease = InstanceOperationLease.Acquire(source);
         EnumerateContents(source, token);
         var destination = Path.Combine(_instancesRoot, newName);
         var samePath = string.Equals(source, destination, StringComparison.OrdinalIgnoreCase);
@@ -245,6 +249,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         IProgress<InstanceExportProgress>? progress, CancellationToken token)
     {
         var source = ValidateInstance(instancePath);
+        using var lease = InstanceOperationLease.Acquire(source);
         var destination = Path.GetFullPath(destinationZip);
         if (!Path.GetExtension(destination).Equals(".zip", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("导出文件必须使用 .zip 扩展名。");

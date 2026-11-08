@@ -46,6 +46,7 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
         try
         {
             var root = ValidateInstance(instancePath);
+            Migration.MigrationJournalStore.EnsureSettled(root);
             var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
             if (!manifest.SourceFormat.Equals(_sourceFormat, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"此安装器只处理 {_sourceFormat} 实例。");

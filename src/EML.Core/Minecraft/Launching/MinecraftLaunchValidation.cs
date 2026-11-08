@@ -6,11 +6,11 @@ namespace EML.Core.Minecraft.Launching;
 /// <summary>设置界面、保存服务和启动计划共用的输入规则，不执行输入的命令或脚本。</summary>
 public static partial class MinecraftLaunchValidation
 {
-    /// <summary>验证离线名称、内存和附加参数；任何失败都不能沿用上次的有效输入。</summary>
+    /// <summary>离线模式验证自填名称；正版名称来自账号服务，仍统一验证内存和附加参数。</summary>
     public static void Validate(MinecraftLaunchSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        if (settings.PlayerName is null || !PlayerNamePattern().IsMatch(settings.PlayerName))
+        if (!settings.UseMicrosoftAccount && (settings.PlayerName is null || !PlayerNamePattern().IsMatch(settings.PlayerName)))
             throw new ArgumentException("离线玩家名须为 1–16 位英文字母、数字或下划线。");
         if (settings.MinMemoryMb < 256 || settings.MaxMemoryMb < 512 || settings.MaxMemoryMb > 1048576 ||
             settings.MinMemoryMb > settings.MaxMemoryMb)

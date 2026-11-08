@@ -30,14 +30,21 @@ internal static class InstanceBackupManifest
                 requirement = resolved.EmbeddedOverride is null ? resolved.Requirement : resolved.Requirement with
                 { Path = null, Downloads = [] };
             }
-            else if (original.Path is { } path && byPath.TryGetValue(path, out var selected))
+            else if (original.Path is { } path && byPath.TryGetValue(path, out var selected) &&
+                selected.Origin != InstanceFileOrigin.MigratedPlayerData)
                 requirement = selected;
             if (requirement.Source == InstanceFileSource.Embedded &&
                 requirement.Origin != InstanceFileOrigin.UserLocalImport && requirement.ArchiveEntry is not null)
                 requirement = requirement with { ArchiveEntry = requirement.Path };
             files.Add(requirement);
         }
-        var backup = manifest with { Files = files };
+        // 玩家用途记录独立携带，不能用迁入内容的摘要覆盖原包及官方来源依据。
+        // 额外模组的后续显式用户替换也随备份携带；只采用已确认要求，绝不按当前磁盘重新信任内容。
+        var migrated = effective.Migration.Files.Select(file => file.Rule == EML.Core.Minecraft.Migration.GtnhExtraModPolicy.Rule &&
+            byPath.TryGetValue(file.Path, out var chosen) && chosen.Origin == InstanceFileOrigin.UserLocalImport
+                ? file with { Size = chosen.Size!.Value, Sha256 = chosen.Hashes["sha256"] } : file).ToArray();
+        var backup = manifest with { Files = files,
+            MigratedPlayerFiles = migrated.Length == 0 ? null : migrated };
         InstanceManifestStore.Validate(backup);
         return new(manifest, backup, effective);
     }

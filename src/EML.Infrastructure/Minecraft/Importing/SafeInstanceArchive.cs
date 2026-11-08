@@ -14,6 +14,7 @@ internal static class SafeInstanceArchive
 {
     internal const int MaxEntries = 100_000;
     internal const long MaxUncompressedBytes = 50L * 1024 * 1024 * 1024;
+    // 平台原始元数据的限制；EML 全文件清单在读取入口显式传入自己的上限。
     internal const int MaxManifestBytes = 8 * 1024 * 1024;
 
     /// <summary>检查条目数量、总大小、链接和路径冲突，返回可供解析的条目列表。</summary>
@@ -42,16 +43,17 @@ internal static class SafeInstanceArchive
     }
 
     /// <summary>读取受大小和嵌套深度限制的 JSON 对象，返回关闭文档后仍可使用的副本。</summary>
-    internal static JsonElement ReadJson(SafeArchiveEntry entry)
+    internal static JsonElement ReadJson(SafeArchiveEntry entry, int maximumBytes = MaxManifestBytes)
     {
-        if (entry.Directory || entry.Entry.Length > MaxManifestBytes) throw new InvalidDataException("整合包清单超过 8 MiB 或不是文件。");
+        if (entry.Directory || entry.Entry.Length > maximumBytes)
+            throw new InvalidDataException($"整合包清单超过 {maximumBytes / (1024 * 1024)} MiB 或不是文件。");
         using var input = entry.Entry.Open();
         using var memory = new MemoryStream();
         var buffer = new byte[8192];
         int count;
         while ((count = input.Read(buffer, 0, buffer.Length)) > 0)
         {
-            if (memory.Length + count > MaxManifestBytes) throw new InvalidDataException("整合包清单过大。");
+            if (memory.Length + count > maximumBytes) throw new InvalidDataException("整合包清单过大。");
             memory.Write(buffer, 0, count);
         }
         if (memory.Length != entry.Entry.Length) throw new InvalidDataException("清单条目长度与实际内容不符。");

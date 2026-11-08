@@ -7,7 +7,9 @@ using EML.App.Services;
 using EML.Infrastructure.Java;
 using EML.Infrastructure.Minecraft;
 using EML.Infrastructure.Minecraft.Launching;
+using EML.Infrastructure.Minecraft.Migration;
 using EML.Infrastructure.Downloads;
+using EML.Infrastructure.Minecraft.Accounts;
 
 namespace EML.App;
 
@@ -15,6 +17,7 @@ namespace EML.App;
 public partial class MainWindow : Window
 {
     private readonly HttpFileDownloader _fileDownloader = new();
+    private readonly MinecraftAccountService _accountService = new(MicrosoftLoginOptions.Load(AppContext.BaseDirectory));
     private bool _waitingForCleanup;
     private bool _closingAfterCleanup;
     /// <summary>创建页面依赖、设置绑定对象，并注册首次显示事件。</summary>
@@ -26,13 +29,16 @@ public partial class MainWindow : Window
         var checker = new MinecraftInstanceChecker(launcherRoot);
         var javaLocator = new WindowsJavaLocator();
         var java = new JavaSettingsViewModel(javaLocator);
+        var accounts = new MinecraftAccountViewModel(_accountService, uri =>
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
         DataContext = new MainViewModel(
             java,
             new InstancesViewModel(locator, new MinecraftInstanceManager(launcherRoot),
                 new MinecraftInstanceImporter(launcherRoot), new InstanceDialogs(this), locator.InstancesRoot,
                 checker, new MinecraftInstanceDownloader(launcherRoot, checker, _fileDownloader),
-                new MinecraftGameLauncher(launcherRoot, checker, javaLocator),
-                new MinecraftLaunchSettingsStore(launcherRoot), java));
+                new MinecraftGameLauncher(launcherRoot, checker, javaLocator, _accountService),
+                new MinecraftLaunchSettingsStore(launcherRoot), java,
+                new GtnhInstanceMigrationService(launcherRoot), new InstanceMigrationDialogs(this)), accounts);
         ContentRendered += OnFirstContentRendered;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
@@ -58,8 +64,11 @@ public partial class MainWindow : Window
             viewModel.Instances.QuickCheckCommand, viewModel.Instances.FullCheckCommand,
             viewModel.Instances.DownloadMissingCommand, viewModel.Instances.ImportCommand,
             viewModel.Instances.ExportCommand, viewModel.Instances.RenameCommand, viewModel.Instances.DeleteCommand,
-            viewModel.Instances.LaunchGameCommand, viewModel.Instances.SaveLaunchSettingsCommand
+            viewModel.Instances.LaunchGameCommand, viewModel.Instances.SaveLaunchSettingsCommand,
+            viewModel.Instances.MigratePlayerDataCommand, viewModel.Instances.RestoreMigrationCommand
         ];
+        if (viewModel.Accounts is { } accounts)
+            operations = [.. operations, accounts.LoginCommand, accounts.LoadCommand, accounts.LogoutCommand];
         var pending = operations.Where(command => command.IsRunning)
             .Select(command => command.ExecutionTask).OfType<Task>().ToArray();
         if (pending.Length == 0) return;
@@ -83,7 +92,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>后台文件操作结束后释放窗口持有的下载器资源。</summary>
-    private void OnWindowClosed(object? sender, EventArgs e) => _fileDownloader.Dispose();
+    private void OnWindowClosed(object? sender, EventArgs e) { _fileDownloader.Dispose(); _accountService.Dispose(); }
 
     /// <summary>首次显示时并行检测 Java 和实例；已有检测任务则等待它完成。</summary>
     private async void OnFirstContentRendered(object? sender, EventArgs e)
@@ -100,7 +109,11 @@ public partial class MainWindow : Window
         var instancesTask = viewModel.Instances.RefreshCommand.IsRunning
             ? viewModel.Instances.RefreshCommand.ExecutionTask ?? Task.CompletedTask
             : viewModel.Instances.RefreshCommand.ExecuteAsync(null);
-        await Task.WhenAll(javaTask, instancesTask);
+        var accountTask = viewModel.Accounts is { } accounts
+            ? accounts.IsBusy ? accounts.LoadCommand.ExecutionTask ?? accounts.LoginCommand.ExecutionTask ?? accounts.LogoutCommand.ExecutionTask ?? Task.CompletedTask
+                : accounts.LoadCommand.ExecuteAsync(null)
+            : Task.CompletedTask;
+        await Task.WhenAll(javaTask, instancesTask, accountTask);
     }
 
     /// <summary>Debug 开发时向上查找 EML.slnx 以读取项目测试包；Release 或找不到解决方案时使用 EXE 目录。</summary>

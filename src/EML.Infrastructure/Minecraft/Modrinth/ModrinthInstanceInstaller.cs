@@ -67,6 +67,7 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
         {
             token.ThrowIfCancellationRequested();
             var root = ValidateInstance(instancePath);
+            Migration.MigrationJournalStore.EnsureSettled(root);
             var manifestPath = Path.Combine(root, InstanceImportManifest.FileName);
             var manifest = InstanceManifestStore.Read(manifestPath);
             if (!manifest.SourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase))

@@ -5,6 +5,7 @@ using EML.Infrastructure.Minecraft.Modrinth;
 using EML.Infrastructure.Minecraft.CurseForge;
 using EML.Infrastructure.Minecraft.Prism;
 using EML.Infrastructure.Minecraft.Standard;
+using EML.Infrastructure.Minecraft.Migration;
 
 namespace EML.Infrastructure.Minecraft;
 
@@ -49,6 +50,8 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
     {
         token.ThrowIfCancellationRequested();
         var root = ValidateInstance(instancePath);
+        using var lease = InstanceOperationLease.Acquire(root);
+        MigrationJournalStore.EnsureSettled(root);
         PrismInstallResult? runtime = null;
         // 平台安装器负责各自模组清单；通用阶段只复查，避免重复下载或绕过分发限制。
         var manifestPath = Path.Combine(root, InstanceImportManifest.FileName);

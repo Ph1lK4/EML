@@ -37,8 +37,10 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
         try
         {
             var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
+            using var lease = Migration.InstanceOperationLease.Acquire(root);
+            Migration.MigrationJournalStore.EnsureSettled(root);
             var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
-            var baseline = EmbeddedFileBaseline.Find(manifest, relativePath);
+            var baseline = FindBaseline(root, manifest, relativePath);
             var target = InstanceImportPaths.Within(root, baseline.Path!);
             InstanceImportPaths.EnsureNoLinks(target);
             Replacement replacement;
@@ -70,6 +72,7 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
         IReadOnlyList<InstanceFileRequirement> requirements)
     {
         var state = Read(instanceRoot, manifest);
+        requirements = Migration.MigrationDataStore.IncludeExtraMods(requirements, Migration.MigrationDataStore.Read(instanceRoot, manifest));
         if (state.Files.Count == 0) return new(requirements, state.Fingerprint);
         var byPath = state.Files.ToDictionary(item => item.Path, StringComparer.OrdinalIgnoreCase);
         var applied = requirements.Select(requirement => requirement.Path is not null &&
@@ -115,12 +118,13 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
             var fingerprint = Convert.ToHexStringLower(SHA256.HashData(input));
             if (state.ManifestFingerprint != EmbeddedFileBaseline.ManifestFingerprint(manifest)) return new([], fingerprint);
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var baselineManifest = WithExtraMods(instanceRoot, manifest);
             foreach (var file in state.Files)
             {
                 if (file is null || file.Path is null || !known.Add(InstanceImportPaths.Relative(file.Path)) ||
                     file.Size < 0 || file.Size > SafeInstanceArchive.MaxUncompressedBytes || !IsSha256(file.Sha256))
                     throw new InvalidDataException("用户替换文件记录无效或路径重复。");
-                var baseline = EmbeddedFileBaseline.Find(manifest, file.Path);
+                var baseline = EmbeddedFileBaseline.Find(baselineManifest, file.Path);
                 if (file.OriginalFingerprint != EmbeddedFileBaseline.RequirementFingerprint(baseline))
                     throw new InvalidDataException("用户替换记录与原始文件需求不一致。");
                 InstanceImportPaths.EnsureNoLinks(InstanceImportPaths.Within(instanceRoot, file.Path));
@@ -130,6 +134,17 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
         catch (FileNotFoundException) { return new([], null); }
         catch (DirectoryNotFoundException) { return new([], null); }
         catch (JsonException ex) { throw new InvalidDataException("用户替换记录 JSON 损坏。", ex); }
+    }
+
+    /// <summary>已迁入的额外模组具有独立严格基线，也允许用户随后显式接受新的本地版本。</summary>
+    private static InstanceFileRequirement FindBaseline(string root, InstanceImportManifest manifest, string relativePath)
+        => EmbeddedFileBaseline.Find(WithExtraMods(root, manifest), relativePath);
+
+    /// <summary>一批替换共用同一份模组记录，避免每个文件重新读取大型迁移清单。</summary>
+    private static InstanceImportManifest WithExtraMods(string root, InstanceImportManifest manifest)
+    {
+        var requirements = Migration.MigrationDataStore.IncludeExtraMods(manifest.Files, Migration.MigrationDataStore.Read(root, manifest));
+        return manifest with { Files = requirements };
     }
 
     /// <summary>将确认记录原子写入自有状态文件，提交前重新核对原清单并响应取消。</summary>

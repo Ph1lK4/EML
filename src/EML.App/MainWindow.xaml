@@ -24,7 +24,7 @@
           <WrapPanel Grid.Row="1" Margin="0,12">
             <Button Content="刷新实例" Command="{Binding RefreshCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="导入实例" Command="{Binding ImportCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="支持 Prism ZIP、Modrinth mrpack、CurseForge ZIP 和通用游戏目录 ZIP"/>
-            <Button Content="启动游戏" Command="{Binding LaunchGameCommand}" Padding="12,6" Margin="0,0,8,4" FontWeight="SemiBold" ToolTip="完整检查后使用此实例的启动设置运行；不会自动执行整合包脚本"/>
+            <Button Content="启动游戏" Command="{Binding LaunchGameCommand}" Padding="12,6" Margin="0,0,8,4" FontWeight="SemiBold" ToolTip="快速准备后使用此实例的启动设置运行；不会每次执行整包检查"/>
             <Button Content="取消启动准备" Command="{Binding CancelLaunchPreparationCommand}" Padding="12,6" Margin="0,0,8,4"/>
             <Button Content="停止游戏" Command="{Binding StopGameCommand}" Padding="12,6" Margin="0,0,8,4" ToolTip="停止本次由 EML 启动的进程；建议优先在游戏内正常退出以保存进度"/>
             <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" Width="180" MaxLength="128" IsEnabled="{Binding CanInteract}" ToolTip="新的实例名称，同时修改文件夹名称" Margin="0,0,8,4" VerticalContentAlignment="Center"/>
@@ -121,7 +121,8 @@
           <TabItem Header="启动设置">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8">
               <StackPanel>
-                <TextBlock Text="设置按实例保存。玩家名称用于离线身份；需要正版身份认证的服务器须等待账号登录功能。" TextWrapping="Wrap" Foreground="DimGray" Margin="0,0,0,8"/>
+                <TextBlock Text="设置按实例保存。正版登录请先到“微软账号”页面完成授权，正版玩家名由账号决定。切换离线与正版身份会改变 UUID，单人存档可能因此显示不同的背包和进度。" TextWrapping="Wrap" Foreground="DimGray" Margin="0,0,0,8"/>
+                <CheckBox Content="使用已登录的正版账号" IsChecked="{Binding UseMicrosoftAccount}" IsEnabled="{Binding CanEditLaunchSettings}" Margin="0,0,0,8"/>
                 <Grid IsEnabled="{Binding CanEditLaunchSettings}">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="110"/>
@@ -134,8 +135,8 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                   </Grid.RowDefinitions>
-                  <TextBlock Text="玩家名称" VerticalAlignment="Center"/>
-                  <TextBox Grid.Column="1" Text="{Binding PlayerName, UpdateSourceTrigger=PropertyChanged}" MaxLength="16" Margin="0,0,0,8" ToolTip="1–16 位英文字母、数字或下划线；默认 Steve"/>
+                  <TextBlock Text="离线玩家名称" VerticalAlignment="Center"/>
+                  <TextBox Grid.Column="1" Text="{Binding PlayerName, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEditOfflinePlayerName}" MaxLength="16" Margin="0,0,0,8" ToolTip="正版启动使用微软账号对应的 Minecraft 玩家名，此处仅保留离线设置"/>
                   <TextBlock Grid.Row="1" Text="Java 路径" VerticalAlignment="Center"/>
                   <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,8">
                     <ComboBox IsEditable="True" IsTextSearchEnabled="False" ItemsSource="{Binding Java.Installations}" DisplayMemberPath="ExecutablePath" Text="{Binding SelectedJavaPath, UpdateSourceTrigger=PropertyChanged}" ToolTip="可选择已检测的 Java，或直接输入 java.exe 路径；清空后自动选择匹配版本"/>
@@ -177,6 +178,22 @@
               <ListBox Grid.Row="3" ItemsSource="{Binding LaunchLogLines}" FontFamily="Consolas" FontSize="12" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"/>
             </Grid>
           </TabItem>
+          <TabItem Header="GTNH 数据迁移">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8">
+              <StackPanel>
+                <TextBlock Text="先在上方选中新版 GTNH 实例，再从旧实例迁入数据。请先完成新版依赖补全并试运行。" TextWrapping="Wrap"/>
+                <WrapPanel Margin="0,10,0,8">
+                  <Button Content="从旧 GTNH 迁入数据" Command="{Binding MigratePlayerDataCommand}" Padding="10,4" Margin="0,0,8,6"/>
+                  <Button Content="取消迁移" Command="{Binding MigratePlayerDataCancelCommand}" Padding="10,4" Margin="0,0,8,6"/>
+                  <Button Content="恢复上次迁移" Command="{Binding RestoreMigrationCommand}" Padding="10,4" Margin="0,0,8,6"/>
+                  <Button Content="取消恢复预检" Command="{Binding RestoreMigrationCancelCommand}" Padding="10,4" Margin="0,0,8,6"/>
+                </WrapPanel>
+                <TextBlock Text="{Binding MigrationStatus}" TextWrapping="Wrap"/>
+                <TextBlock Text="迁移记录及备份位置" Foreground="DimGray" Margin="0,8,0,4"/>
+                <TextBox Text="{Binding MigrationJournalPath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
           </TabControl>
           <StackPanel Grid.Row="4" Margin="0,12,0,0">
             <ProgressBar Value="{Binding TransferPercent}" Minimum="0" Maximum="100" Height="6"/>
@@ -186,6 +203,31 @@
             </ScrollViewer>
           </StackPanel>
         </Grid>
+      </TabItem>
+      <TabItem Header="微软账号" DataContext="{Binding Accounts}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="24">
+          <StackPanel>
+            <TextBlock Text="Minecraft Java 正版登录" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock Text="使用拥有 Java 版许可的个人微软账号。密码只在微软网页输入，EML 不保存密码。" TextWrapping="Wrap" Margin="0,12,0,8"/>
+            <TextBlock Text="{Binding ConfigurationStatus}" TextWrapping="Wrap" Foreground="DimGray"/>
+            <TextBlock Text="{Binding AccountName, StringFormat=当前玩家：{0}}" FontSize="18" Margin="0,16,0,8"/>
+            <TextBlock Text="{Binding AccountId, StringFormat=UUID：{0}}"/>
+            <WrapPanel Margin="0,16,0,8">
+              <Button Content="登录 / 更换微软账号" Command="{Binding LoginCommand}" Padding="12,6" Margin="0,0,8,8"/>
+              <Button Content="取消登录" Command="{Binding LoginCancelCommand}" Padding="12,6" Margin="0,0,8,8"/>
+              <Button Content="退出本机账号" Command="{Binding LogoutCommand}" Padding="12,6" Margin="0,0,8,8"/>
+              <Button Content="重新读取账号" Command="{Binding LoadCommand}" Padding="12,6" Margin="0,0,8,8"/>
+            </WrapPanel>
+            <TextBlock Text="微软验证网址"/>
+            <TextBox Text="{Binding VerificationAddress, Mode=OneWay}" IsReadOnly="True" Margin="0,4,0,8"/>
+            <TextBlock Text="验证码（仅在你主动发起的微软登录页面使用）"/>
+            <TextBox Text="{Binding UserCode, Mode=OneWay}" IsReadOnly="True" FontSize="24" Margin="0,4,0,8"/>
+            <Button Content="打开微软登录网页" Command="{Binding OpenLoginPageCommand}" HorizontalAlignment="Left" Padding="12,6"/>
+            <!-- 登录失败时可直接复制安全诊断；其中不包含认证令牌或原始服务端响应。 -->
+            <TextBox Text="{Binding StatusText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                     BorderThickness="0" Background="Transparent" Margin="0,16,0,8"/>
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
       <!-- Java 页继续复用原检测命令；启动自动检测不会替代手动刷新。 -->
       <TabItem Header="Java 环境" DataContext="{Binding Java}">
