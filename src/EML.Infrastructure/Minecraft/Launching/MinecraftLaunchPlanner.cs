@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using EML.Core.Java;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Launching;
 using EML.Infrastructure.Java;
@@ -24,15 +25,17 @@ public sealed partial class MinecraftLaunchPlanner
     private readonly Func<string, CancellationToken, Task<JavaInstallation>> _probe;
     private readonly SemaphoreSlim _javaLock = new(1, 1);
     private IReadOnlyList<JavaInstallation>? _knownJava;
+    private readonly IMinecraftAccountService? _accounts;
 
     /// <summary>只处理直接子实例；保留 checker 参数兼容旧调用方，启动不再调用完整检查器。</summary>
-    public MinecraftLaunchPlanner(string launcherRoot, IMinecraftInstanceChecker? checker = null, IJavaLocator? javaLocator = null)
-        : this(launcherRoot, new InstanceRuntimeResolver(), javaLocator ?? new WindowsJavaLocator(), ProbeJavaAsync) { }
+    public MinecraftLaunchPlanner(string launcherRoot, IMinecraftInstanceChecker? checker = null, IJavaLocator? javaLocator = null,
+        IMinecraftAccountService? accounts = null)
+        : this(launcherRoot, new InstanceRuntimeResolver(), javaLocator ?? new WindowsJavaLocator(), ProbeJavaAsync, accounts) { }
 
     /// <summary>测试注入 Java 版本查询，不运行玩家的 Java 或游戏进程。</summary>
     internal MinecraftLaunchPlanner(string launcherRoot, IPrismRuntimeResolver resolver, IJavaLocator javaLocator,
-        Func<string, CancellationToken, Task<JavaInstallation>> probe)
-    { _launcherRoot = launcherRoot; _resolver = resolver; _javaLocator = javaLocator; _probe = probe; }
+        Func<string, CancellationToken, Task<JavaInstallation>> probe, IMinecraftAccountService? accounts = null)
+    { _launcherRoot = launcherRoot; _resolver = resolver; _javaLocator = javaLocator; _probe = probe; _accounts = accounts; }
 
     /// <summary>只读验证已有配置、关键路径和 Java；不扫描整合包或计算内容文件哈希。</summary>
     public Task<MinecraftLaunchPlan> PrepareAsync(string instancePath, MinecraftLaunchSettings settings,
@@ -110,13 +113,26 @@ public sealed partial class MinecraftLaunchPlanner
         if (NormalizeArchitecture(java.Architecture) == "x86" && settings.MaxMemoryMb > 1536)
             throw new ArgumentException("32 位 Java 无法可靠使用此内存设置，请改用匹配实例的 64 位 Java。");
 
+        MinecraftAccountSession? session = null;
+        if (settings.UseMicrosoftAccount)
+        {
+            progress?.Report(new(MinecraftLaunchStage.Preparing, "正在验证微软账号会话……"));
+            session = await (_accounts ?? throw new MinecraftAuthenticationException("未配置微软账号服务。"))
+                .GetSessionAsync(token).ConfigureAwait(false);
+            if (session.ExpiresAt <= DateTimeOffset.UtcNow || string.IsNullOrWhiteSpace(session.AccessToken))
+                throw new MinecraftAuthenticationException("正版登录会话已过期，请重新登录。");
+        }
+        var playerName = session?.Account.Name ?? settings.PlayerName;
+        var playerId = session?.Account.Id ?? OfflineUuid(settings.PlayerName);
+        var accessToken = session?.AccessToken ?? "0";
         // 相对游戏目录的路径缩短 Windows 命令行，并避免中文实例目录反复出现在每项类库中。
         string GamePath(string path) => Path.GetRelativePath(game, Resolve(root, path));
         var values = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["auth_player_name"] = settings.PlayerName, ["auth_uuid"] = OfflineUuid(settings.PlayerName),
-            ["auth_access_token"] = "0", ["auth_session"] = "0", ["auth_xuid"] = "", ["clientid"] = "",
-            ["user_properties"] = "{}", ["user_type"] = "legacy", ["version_name"] = RequiredString(profile, "id"),
+            ["auth_player_name"] = playerName, ["auth_uuid"] = playerId,
+            ["auth_access_token"] = accessToken, ["auth_session"] = session is null ? "0" : $"token:{accessToken}:{playerId}",
+            ["auth_xuid"] = session?.Xuid ?? "", ["clientid"] = session?.ClientId ?? "",
+            ["user_properties"] = "{}", ["user_type"] = session is null ? "legacy" : "msa", ["version_name"] = RequiredString(profile, "id"),
             ["version_type"] = "release", ["game_directory"] = ".", ["assets_root"] = GamePath(RequiredString(profile, "assetsRoot")),
             ["assets_index_name"] = profile.TryGetProperty("assetIndexId", out var index) && index.ValueKind == JsonValueKind.String ? index.GetString()! : "",
             ["game_assets"] = GamePath(RequiredString(profile, "gameAssets")), ["natives_directory"] = Path.GetRelativePath(game, natives),
@@ -144,8 +160,9 @@ public sealed partial class MinecraftLaunchPlanner
         using var checkedStandard = await ReadVerifiedJsonAsync(root, standardPath, state, token).ConfigureAwait(false);
         using var checkedPortable = await ReadVerifiedJsonAsync(root, portablePath, state, token).ConfigureAwait(false);
         CheckCriticalFiles(root, runtime, state, sourceSnapshot.Requirements, profile, classPaths, token);
-        progress?.Report(new(MinecraftLaunchStage.Preparing, $"启动准备完成；Java {javaMajor}，玩家 {settings.PlayerName}（离线），最大内存 {settings.MaxMemoryMb} MB。"));
-        return new(root, game, java.ExecutablePath, javaMajor, arguments.ToArray()) { NativesDirectory = natives };
+        progress?.Report(new(MinecraftLaunchStage.Preparing, $"启动准备完成；Java {javaMajor}，玩家 {playerName}（{(session is null ? "离线" : "正版")}），最大内存 {settings.MaxMemoryMb} MB。"));
+        return new(root, game, java.ExecutablePath, javaMajor, arguments.ToArray())
+        { NativesDirectory = natives, SensitiveValues = session is null ? [] : [accessToken] };
     }
 
     /// <summary>缺少组件元数据或加载器尚不支持时明确失败，不降级到其他启动入口。</summary>

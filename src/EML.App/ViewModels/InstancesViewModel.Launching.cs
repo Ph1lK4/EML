@@ -28,6 +28,10 @@ public partial class InstancesViewModel
     public ObservableCollection<string> LaunchLogLines { get; } = [];
 
     [ObservableProperty] private string playerName = "Steve";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName))]
+    private bool useMicrosoftAccount;
+    public bool CanEditOfflinePlayerName => !UseMicrosoftAccount;
     [ObservableProperty] private string selectedJavaPath = "";
     [ObservableProperty] private string minMemoryMbText = "1024";
     [ObservableProperty] private string maxMemoryMbText = "8192";
@@ -112,6 +116,7 @@ public partial class InstancesViewModel
     private void ApplyLaunchSettings(MinecraftLaunchSettings settings)
     {
         PlayerName = settings.PlayerName;
+        UseMicrosoftAccount = settings.UseMicrosoftAccount;
         SelectedJavaPath = settings.JavaPath ?? "";
         MinMemoryMbText = settings.MinMemoryMb.ToString(CultureInfo.InvariantCulture);
         MaxMemoryMbText = settings.MaxMemoryMb.ToString(CultureInfo.InvariantCulture);
@@ -127,6 +132,7 @@ public partial class InstancesViewModel
         var settings = new MinecraftLaunchSettings
         {
             PlayerName = PlayerName.Trim(),
+            UseMicrosoftAccount = UseMicrosoftAccount,
             JavaPath = string.IsNullOrWhiteSpace(SelectedJavaPath) ? null : SelectedJavaPath.Trim(),
             MinMemoryMb = minimum,
             MaxMemoryMb = maximum,

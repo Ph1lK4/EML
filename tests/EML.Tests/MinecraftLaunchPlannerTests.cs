@@ -371,7 +371,8 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
 
     /// <summary>建立真实清单、运行状态与启动描述，只替代组件解析和 Java 进程查询。</summary>
     private async Task<Fixture> CreateAsync(string format = "Prism", string game = ".minecraft", string version = "25",
-        string arch = "x64（64 位）", string runtimeArchitecture = "x86_64")
+        string arch = "x64（64 位）", string runtimeArchitecture = "x86_64",
+        EML.Core.Minecraft.Accounts.IMinecraftAccountService? accounts = null)
     {
         var instance = Path.Combine(_root, "instances", "中文 测试实例");
         Directory.CreateDirectory(instance);
@@ -420,8 +421,96 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
             fixture.Calls++;
             fixture.BeforeProbe?.Invoke();
             return Task.FromResult(fixture.Probed);
-        });
+        }, accounts);
         return fixture;
+    }
+
+    /// <summary>正版身份在不同整合包格式中共用，不能仍使用离线名或占位令牌。</summary>
+    [Theory]
+    [InlineData("Prism")]
+    [InlineData("Modrinth")]
+    [InlineData("CurseForge")]
+    [InlineData("Zip")]
+    public async Task MicrosoftIdentityIsUsedAcrossPackFormats(string format)
+    {
+        var accounts = new OnlineAccountStub();
+        var fixture = await CreateAsync(format: format, accounts: accounts);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(fixture.PortablePath))!;
+        json["gameArguments"] = JsonSerializer.SerializeToNode(new[] { "--username", "${auth_player_name}", "--uuid", "${auth_uuid}",
+            "--accessToken", "${auth_access_token}", "--session", "${auth_session}", "--userType", "${user_type}", "--xuid", "${auth_xuid}", "--clientId", "${clientid}" });
+        File.WriteAllText(fixture.PortablePath, json.ToJsonString());
+        await fixture.RefreshStateAsync();
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance, new() { PlayerName = "OfflineSteve", UseMicrosoftAccount = true });
+        Assert.Contains("OnlineAlex", plan.Arguments);
+        Assert.Contains(MicrosoftMinecraftAuthTests.PlayerId, plan.Arguments);
+        Assert.Contains("online-secret", plan.Arguments);
+        Assert.Contains("token:online-secret:" + MicrosoftMinecraftAuthTests.PlayerId, plan.Arguments);
+        Assert.Contains("msa", plan.Arguments);
+        Assert.Contains("123", plan.Arguments);
+        Assert.Contains(MicrosoftMinecraftAuthTests.ClientId, plan.Arguments);
+        Assert.DoesNotContain("OfflineSteve", plan.Arguments);
+        Assert.Equal(new[] { "online-secret" }, plan.SensitiveValues);
+        Assert.DoesNotContain("online-secret", JsonSerializer.Serialize(plan));
+        Assert.DoesNotContain("online-secret", plan.ToString());
+        Assert.Equal(1, accounts.Calls);
+    }
+
+    /// <summary>正版刷新失败时不能继续生成离线启动计划。</summary>
+    [Fact]
+    public async Task MicrosoftFailureDoesNotFallBackToOffline()
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub { Fail = true });
+        await Assert.ThrowsAsync<EML.Core.Minecraft.Accounts.MinecraftAuthenticationException>(() =>
+            fixture.Planner.PrepareAsync(fixture.Instance, new() { UseMicrosoftAccount = true }));
+    }
+
+    /// <summary>未勾选正版时不调用账号或网络服务，旧配置继续使用原离线 UUID。</summary>
+    [Fact]
+    public async Task OfflineModeDoesNotCallAccountService()
+    {
+        var accounts = new OnlineAccountStub { Fail = true };
+        var fixture = await CreateAsync(accounts: accounts);
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance, new());
+        Assert.Equal(0, accounts.Calls);
+        Assert.Empty(plan.SensitiveValues);
+        Assert.Contains(MinecraftLaunchPlanner.OfflineUuid("Steve"), plan.Arguments);
+    }
+
+    /// <summary>正版启动不受已禁用的离线名称输入影响，使用账号验证后的名称。</summary>
+    [Fact]
+    public async Task MicrosoftModeIgnoresUnusedOfflineName()
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub());
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance, new() { UseMicrosoftAccount = true, PlayerName = "" });
+        Assert.Contains("OnlineAlex", plan.Arguments);
+    }
+
+    /// <summary>保存账号选择只保存布尔偏好，不把认证信息写进实例。</summary>
+    [Fact]
+    public async Task MicrosoftPreferenceRoundTripsWithoutCredentials()
+    {
+        var fixture = await CreateAsync();
+        var store = new MinecraftLaunchSettingsStore(_root);
+        await store.SaveAsync(fixture.Instance, new() { UseMicrosoftAccount = true });
+        Assert.True((await store.LoadAsync(fixture.Instance)).UseMicrosoftAccount);
+        Assert.DoesNotContain("token", File.ReadAllText(Path.Combine(fixture.Instance, MinecraftLaunchSettingsStore.RelativePath)), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class OnlineAccountStub : EML.Core.Minecraft.Accounts.IMinecraftAccountService
+    {
+        internal bool Fail;
+        internal int Calls;
+        public bool IsConfigured => true;
+        public Task<EML.Core.Minecraft.Accounts.MinecraftAccountSession> GetSessionAsync(CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            if (Fail) throw new EML.Core.Minecraft.Accounts.MinecraftAuthenticationException("test refresh failure");
+            return Task.FromResult(new EML.Core.Minecraft.Accounts.MinecraftAccountSession(
+                new(MicrosoftMinecraftAuthTests.PlayerId, "OnlineAlex"), "online-secret", DateTimeOffset.UtcNow.AddHours(1), MicrosoftMinecraftAuthTests.ClientId, "123"));
+        }
+        public Task<EML.Core.Minecraft.Accounts.MinecraftAccount?> LoadAccountAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<EML.Core.Minecraft.Accounts.MinecraftAccount> SignInAsync(IProgress<EML.Core.Minecraft.Accounts.MinecraftLoginPrompt>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task SignOutAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     /// <summary>为测试文件保存已知的生成基线，不用检查器伪造完整检查结果。</summary>

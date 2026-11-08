@@ -105,7 +105,7 @@ internal static class InstanceArchiveReader
     private static InstanceArchivePlan ReadEml(IReadOnlyList<SafeArchiveEntry> entries, PackageMarker marker,
         string archiveFileName)
     {
-        var manifest = InstanceManifestStore.Parse(SafeInstanceArchive.ReadJson(marker.Entry));
+        var manifest = InstanceManifestStore.Parse(SafeInstanceArchive.ReadJson(marker.Entry, InstanceManifestStore.MaximumBytes));
         var copies = CopyTree(entries, marker.Root, "")
             .Where(copy => !copy.TargetPath.Equals(InstanceImportManifest.FileName, StringComparison.OrdinalIgnoreCase))
             .ToArray();

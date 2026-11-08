@@ -49,6 +49,7 @@ public sealed class ZipInstanceInstaller : IPrismInstanceInstaller
         try
         {
             var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
+            Migration.MigrationJournalStore.EnsureSettled(root);
             try
             {
                 manifest = ReadManifest(root);

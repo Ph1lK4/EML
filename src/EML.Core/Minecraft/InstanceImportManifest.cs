@@ -29,6 +29,9 @@ public sealed record InstanceImportManifest
     public IReadOnlyList<string> Notes { get; init; } = [];
     /// <summary>导入不等于完整性检查；后续检查结果应独立保存，避免这份声明过期。</summary>
     public string IntegrityStatus { get; init; } = "NotChecked";
+    /// <summary>仅 EML 备份携带的玩家数据迁移记录；空值不改变既有清单指纹。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<Migration.MigratedPlayerFile>? MigratedPlayerFiles { get; init; }
 }
 
 /// <summary>保存解析后的组件 ID 与版本，供后续安装器选择处理方式。</summary>
@@ -44,7 +47,7 @@ public sealed record InstanceComponentRequirement(string Id, string Version)
 public enum InstanceFileSource { Embedded, DirectDownload, CurseForge }
 
 /// <summary>实际采用的内容来源；与旧 Source 的获取方式分开，旧清单未声明时继续按原规则读取。</summary>
-public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport }
+public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport, MigratedPlayerData }
 
 /// <summary>文件用途独立于内容来源；可变配置和启动器状态不会改变原来源摘要的含义。</summary>
 public enum InstanceFileRole { Content, UserConfiguration, LauncherMetadata, DerivedState, UserData, ConsumableMarker }

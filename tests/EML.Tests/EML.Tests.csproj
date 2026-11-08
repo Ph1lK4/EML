@@ -23,8 +23,11 @@
   <!-- 直接测试生产 ViewModel；这些文件不依赖 WPF，无需启动窗口或复制逻辑。 -->
   <ItemGroup>
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.cs" Link="App\InstancesViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\MinecraftAccountViewModel.cs" Link="App\MinecraftAccountViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Checking.cs" Link="App\InstancesViewModel.Checking.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Launching.cs" Link="App\InstancesViewModel.Launching.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Migration.cs" Link="App\InstancesViewModel.Migration.cs" />
+    <Compile Include="..\..\src\EML.App\Services\IInstanceMigrationDialogs.cs" Link="App\IInstanceMigrationDialogs.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\JavaSettingsViewModel.cs" Link="App\JavaSettingsViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\IInstanceDialogs.cs" Link="App\IInstanceDialogs.cs" />
     <Compile Include="..\..\src\EML.App\Services\BoundedLaunchProgress.cs" Link="App\BoundedLaunchProgress.cs" />

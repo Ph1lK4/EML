@@ -215,6 +215,53 @@ public sealed class MinecraftGameLauncherTests : IDisposable
         Assert.Equal(plan.JavaPath, info.FileName);
     }
 
+    /// <summary>游戏输出同时包含普通日志和令牌时，磁盘与界面都只能收到脱敏文本。</summary>
+    [Fact]
+    public async Task SensitiveGameOutputIsRedactedFromBothPipesAndLog()
+    {
+        var secret = "test-access-secret";
+        var plan = PowerShellPlan("[Console]::Out.Write(('x' * 4090) + 'test-access-secret'); [Console]::Error.WriteLine('token:test-access-secret:uuid'); exit 0")
+            with { SensitiveValues = [secret] };
+        var seen = new ConcurrentQueue<MinecraftLaunchProgress>();
+        var result = await new MinecraftGameLauncher(_root).RunPreparedAsync(plan, new InlineProgress(seen.Enqueue));
+        Assert.Equal(0, result.ExitCode);
+        var log = await File.ReadAllTextAsync(result.LogPath!);
+        Assert.DoesNotContain(secret, log);
+        Assert.Contains("[登录令牌已隐藏]", log);
+        Assert.All(seen, value => Assert.DoesNotContain(secret, value.Message));
+    }
+
+    /// <summary>所有可能的读取分割点都必须能识别完整令牌，不能泄露跨块片段。</summary>
+    [Fact]
+    public void OutputRedactorHandlesEveryTokenBoundary()
+    {
+        const string secret = "fake-access-token";
+        const string input = "prefix fake-access-token middle fake-access-token suffix";
+        for (var boundary = 0; boundary <= input.Length; boundary++)
+        {
+            var redactor = new LaunchOutputRedactor([secret]);
+            var result = redactor.Append(input[..boundary]) + redactor.Append(input[boundary..]) + redactor.Append("", true);
+            Assert.Equal("prefix [登录令牌已隐藏] middle [登录令牌已隐藏] suffix", result);
+        }
+    }
+
+    /// <summary>现代参数文件不包含令牌或组合 session，参数拼接后的原顺序保持一致。</summary>
+    [Theory]
+    [InlineData("access-secret")]
+    [InlineData("token:access-secret:uuid")]
+    public void ArgumentFileNeverReceivesAccessToken(string sensitiveArgument)
+    {
+        var plan = PowerShellPlan("unused") with { JavaMajorVersion = 25,
+            Arguments = ["-Xmx8192M", "-cp", "long-classpath", "Main", "--accessToken", sensitiveArgument, "--gameDir", "."],
+            SensitiveValues = ["access-secret"] };
+        var split = MinecraftGameLauncher.ArgumentFilePrefixLength(plan);
+        var prefix = plan.Arguments.Take(split).ToArray();
+        var bytes = MinecraftGameLauncher.EncodeArgumentFile(prefix, Encoding.UTF8);
+        Assert.DoesNotContain("access-secret", Encoding.UTF8.GetString(bytes));
+        Assert.Equal(plan.Arguments, prefix.Concat(plan.Arguments.Skip(split)));
+        Assert.Equal(5, split);
+    }
+
     /// <summary>构建测试专用系统进程计划；脚本文本在测试源码固定，不读取包内脚本。</summary>
     private MinecraftLaunchPlan PowerShellPlan(string script)
     {

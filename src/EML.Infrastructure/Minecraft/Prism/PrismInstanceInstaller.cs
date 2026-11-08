@@ -50,6 +50,7 @@ public sealed class PrismInstanceInstaller : IPrismInstanceInstaller
         {
             token.ThrowIfCancellationRequested();
             root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
+            Migration.MigrationJournalStore.EnsureSettled(root);
             try
             {
                 manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));

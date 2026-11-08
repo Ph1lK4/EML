@@ -17,7 +17,8 @@ public static class InstanceFileChangePolicy
     public static InstanceFileRole GetRole(InstanceFileRequirement file, string gameDirectory, string? sourceFormat = null)
     {
         if (file.Role is { } role && !Enum.IsDefined(role)) throw new InvalidDataException("未知的实例文件用途。");
-        var inferred = IsDerivedStatePath(file.Path) ? InstanceFileRole.DerivedState :
+        var inferred = Migration.GtnhPlayerDataPolicy.IsMigrated(file, gameDirectory) ? InstanceFileRole.UserData :
+            IsDerivedStatePath(file.Path) ? InstanceFileRole.DerivedState :
             IsPrismMetadata(file, sourceFormat) ? InstanceFileRole.LauncherMetadata :
             IsMarkerPath(file.Path, gameDirectory) ? InstanceFileRole.ConsumableMarker :
             IsKnownUserData(file.Path, gameDirectory) ? InstanceFileRole.UserData :
@@ -47,12 +48,14 @@ public static class InstanceFileChangePolicy
 
     /// <summary>普通包内配置、日志和世界状态允许正常变化；明确来源及内容用途始终严格校验。</summary>
     public static bool IsMutableFile(InstanceFileRequirement file, string gameDirectory, string? sourceFormat = null) =>
+        Migration.GtnhPlayerDataPolicy.IsMigrated(file, gameDirectory) ||
         IsMutableConfiguration(file, gameDirectory, sourceFormat) ||
         file.Source == InstanceFileSource.Embedded && file.Origin is null &&
         GetRole(file, gameDirectory, sourceFormat) == InstanceFileRole.UserData && IsKnownUserData(file.Path, gameDirectory);
 
     /// <summary>仅允许有原包空内容依据的一次性更新标记被游戏消耗，不能放行其他配置缺失。</summary>
     public static bool AllowsMissing(InstanceFileRequirement file, string gameDirectory, string? sourceFormat = null) =>
+        Migration.GtnhPlayerDataPolicy.IsMigrated(file, gameDirectory) ||
         IsConsumableMarker(file, gameDirectory) && GetRole(file, gameDirectory, sourceFormat) != InstanceFileRole.Content;
 
     /// <summary>DefaultKeys 会删除这个空标记；必须同时匹配普通包内来源、原条目和唯一空内容摘要。</summary>

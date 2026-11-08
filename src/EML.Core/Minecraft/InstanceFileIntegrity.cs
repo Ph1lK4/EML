@@ -8,7 +8,7 @@ public static class InstanceFileIntegrity
     {
         if (file.Origin is { } origin && !Enum.IsDefined(origin))
             throw new InvalidDataException("未知的文件内容来源。");
-        if (file.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport)
+        if (file.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport or InstanceFileOrigin.MigratedPlayerData)
         {
             if (file.Source != InstanceFileSource.Embedded || file.Size is null or < 0 ||
                 file.Hashes.Count != 1 || !file.Hashes.TryGetValue("sha256", out var hash) || !ValidHash(hash, 64) ||

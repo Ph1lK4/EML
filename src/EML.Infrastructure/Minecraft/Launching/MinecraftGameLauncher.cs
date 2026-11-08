@@ -4,9 +4,11 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
 using EML.Core.Java;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Launching;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Migration;
 
 namespace EML.Infrastructure.Minecraft.Launching;
 
@@ -18,10 +20,11 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
     private readonly MinecraftLaunchPlanner _planner;
 
     /// <summary>复用 Java 检测；保留 checker 参数兼容旧调用方，启动不进行完整检查。</summary>
-    public MinecraftGameLauncher(string launcherRoot, IMinecraftInstanceChecker? checker = null, IJavaLocator? javaLocator = null)
+    public MinecraftGameLauncher(string launcherRoot, IMinecraftInstanceChecker? checker = null, IJavaLocator? javaLocator = null,
+        IMinecraftAccountService? accounts = null)
     {
         _launcherRoot = Path.GetFullPath(launcherRoot);
-        _planner = new MinecraftLaunchPlanner(_launcherRoot, checker, javaLocator);
+        _planner = new MinecraftLaunchPlanner(_launcherRoot, checker, javaLocator, accounts);
     }
 
     /// <summary>只读验证启动前提，不创建进程、日志或临时文件。</summary>
@@ -35,6 +38,9 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
     {
         try
         {
+            var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
+            using var lease = InstanceOperationLease.Acquire(root);
+            MigrationJournalStore.EnsureSettled(root);
             var plan = await _planner.PrepareForRunAsync(instancePath, settings, progress, cancellationToken).ConfigureAwait(false);
             return await RunPreparedAsync(plan, progress, cancellationToken).ConfigureAwait(false);
         }
@@ -77,7 +83,9 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
                 var reference = "@" + Path.GetRelativePath(plan.GameDirectory, argumentFilePath);
                 // Java 启动器按本机编码解释原生参数，不以 Java 18 的默认文件编码代替它。
                 _ = encoding.GetBytes(reference);
-                var bytes = EncodeArgumentFile(plan.Arguments, encoding);
+                // 从首个敏感参数开始直接传给 Java，保证参数文件中没有 access token 或旧版 session。
+                var split = ArgumentFilePrefixLength(plan);
+                var bytes = EncodeArgumentFile(plan.Arguments.Take(split).ToArray(), encoding);
                 InstanceImportPaths.EnsureNoLinks(argumentFilePath);
                 await using (var output = new FileStream(argumentFilePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
@@ -85,6 +93,7 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
                     await output.WriteAsync(bytes, token).ConfigureAwait(false);
                 }
                 process.StartInfo.ArgumentList.Add(reference);
+                foreach (var argument in plan.Arguments.Skip(split)) process.StartInfo.ArgumentList.Add(argument);
             }
             else
             {
@@ -108,8 +117,8 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
                 started = process.Start();
                 if (!started) throw new IOException("未能创建 Java 进程。");
                 // 两条管道同时读取，不串行 ReadToEnd；长行分段，避免无换行输出无限增长。
-                readers = Task.WhenAll(ReadOutputAsync(process.StandardOutput, false, channel.Writer, readCancellation.Token),
-                    ReadOutputAsync(process.StandardError, true, channel.Writer, readCancellation.Token));
+                readers = Task.WhenAll(ReadOutputAsync(process.StandardOutput, false, channel.Writer, readCancellation.Token, plan.SensitiveValues),
+                    ReadOutputAsync(process.StandardError, true, channel.Writer, readCancellation.Token, plan.SensitiveValues));
                 Report(progress, new(MinecraftLaunchStage.Running, "Java 已启动，正在等待游戏初始化。", LogPath: logPath));
                 try { await process.WaitForExitAsync(token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -159,6 +168,14 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
         FileName = plan.JavaPath, WorkingDirectory = plan.GameDirectory, UseShellExecute = false,
         CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
     };
+
+    /// <summary>任意位置出现会话令牌时截断参数文件，后续参数保持顺序并直接传递。</summary>
+    internal static int ArgumentFilePrefixLength(MinecraftLaunchPlan plan)
+    {
+        for (var i = 0; i < plan.Arguments.Count; i++)
+            if (plan.SensitiveValues.Any(secret => !string.IsNullOrEmpty(secret) && plan.Arguments[i].Contains(secret, StringComparison.Ordinal))) return i;
+        return plan.Arguments.Count;
+    }
 
     /// <summary>以本机编码写 Java 9+ 参数文件；按字节转义，兼容多字节编码中出现的反斜杠字节。</summary>
     internal static byte[] EncodeArgumentFile(IReadOnlyList<string> arguments, Encoding encoding)
@@ -211,35 +228,43 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
 
     /// <summary>并发消费单条输出管道；固定缓冲及分段上限避免大日志耗尽内存。</summary>
     private static async Task ReadOutputAsync(StreamReader reader, bool standardError,
-        ChannelWriter<MinecraftLaunchProgress> output, CancellationToken token)
+        ChannelWriter<MinecraftLaunchProgress> output, CancellationToken token, IReadOnlyList<string> secrets)
     {
         var buffer = new char[4096];
         var line = new StringBuilder(OutputFragmentLength);
+        var redactor = new LaunchOutputRedactor(secrets);
         try
         {
             int count;
             while ((count = await reader.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false)) != 0)
             {
-                for (var index = 0; index < count; index++)
-                {
-                    var value = buffer[index];
-                    if (value == '\n')
-                    {
-                        if (line.Length > 0 && line[^1] == '\r') line.Length--;
-                        await EmitAsync().ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        line.Append(value);
-                        if (line.Length >= OutputFragmentLength && !char.IsHighSurrogate(value))
-                            await EmitAsync().ConfigureAwait(false);
-                    }
-                }
+                await ConsumeAsync(redactor.Append(new string(buffer, 0, count))).ConfigureAwait(false);
             }
+            await ConsumeAsync(redactor.Append("", completed: true)).ConfigureAwait(false);
             if (line.Length > 0) await EmitAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (IOException ex) { output.TryWrite(new(MinecraftLaunchStage.Output, "读取进程输出失败：" + ex.Message, true)); }
+        catch (IOException) { output.TryWrite(new(MinecraftLaunchStage.Output, "读取进程输出失败。", true)); }
+
+        // 先脱敏再按行分段，避免长行上限或多次 ReadAsync 将令牌拆开后写入日志。
+        async Task ConsumeAsync(string safeText)
+        {
+            for (var index = 0; index < safeText.Length; index++)
+            {
+                var value = safeText[index];
+                if (value == '\n')
+                {
+                    if (line.Length > 0 && line[^1] == '\r') line.Length--;
+                    await EmitAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    line.Append(value);
+                    if (line.Length >= OutputFragmentLength && !char.IsHighSurrogate(value))
+                        await EmitAsync().ConfigureAwait(false);
+                }
+            }
+        }
 
         /// <summary>提交一个有限长度的日志片段；队列满时等待消费，保持内存有界。</summary>
         async Task EmitAsync()

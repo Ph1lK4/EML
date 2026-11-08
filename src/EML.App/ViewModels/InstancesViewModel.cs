@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using EML.App.Services;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Launching;
+using EML.Core.Minecraft.Migration;
 
 namespace EML.App.ViewModels;
 
@@ -24,7 +25,8 @@ public partial class InstancesViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand),
         nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand),
-        nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand))]
+        nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand),
+        nameof(MigratePlayerDataCommand), nameof(RestoreMigrationCommand))]
     private MinecraftInstance? selectedInstance;
     [ObservableProperty] private string statusText = "正在准备检测本地实例。";
     [ObservableProperty] private string newName = "";
@@ -35,7 +37,8 @@ public partial class InstancesViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanEditLaunchSettings))]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand),
         nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand),
-        nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand))]
+        nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand),
+        nameof(MigratePlayerDataCommand), nameof(RestoreMigrationCommand))]
     private bool isBusy;
     /// <summary>没有实例操作正在执行时，允许修改输入和列表选择。</summary>
     public bool CanInteract => !IsBusy;
@@ -45,7 +48,8 @@ public partial class InstancesViewModel : ObservableObject
         IMinecraftInstanceImporter importer, IInstanceDialogs dialogs, string instancesRoot,
         IMinecraftInstanceChecker checker, IMinecraftInstanceDownloader instanceDownloader,
         IMinecraftGameLauncher? launcher = null, IMinecraftLaunchSettingsStore? launchSettingsStore = null,
-        JavaSettingsViewModel? java = null)
+        JavaSettingsViewModel? java = null, IMinecraftInstanceMigrationService? migration = null,
+        IInstanceMigrationDialogs? migrationDialogs = null)
     {
         _locator = locator;
         _manager = manager;
@@ -57,6 +61,7 @@ public partial class InstancesViewModel : ObservableObject
         _launcher = launcher;
         _launchSettingsStore = launchSettingsStore;
         Java = java;
+        _migration = migration; _migrationDialogs = migrationDialogs;
     }
 
     /// <summary>切换实例后更新名称，并清除属于上一个实例的检查和下载记录。</summary>
@@ -65,6 +70,8 @@ public partial class InstancesViewModel : ObservableObject
         NewName = value?.Name ?? "";
         ClearCheckResults();
         BeginLoadLaunchSettings(value);
+        MigrationJournalPath = "";
+        MigrationStateLoadTask = LoadMigrationStateAsync(value);
     }
     /// <summary>判断当前是否允许重命名、删除或导出选中的实例。</summary>
     private bool CanManage() => !IsBusy && SelectedInstance is not null;

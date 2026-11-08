@@ -1,9 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace EML.Core.Minecraft.Launching;
 
 /// <summary>每个实例独立保存的本机启动设置；不改变导入清单及官方完整性依据。</summary>
 public sealed record MinecraftLaunchSettings
 {
     public string PlayerName { get; init; } = "Steve";
+    /// <summary>仅保存身份选择，不保存账号令牌；旧设置默认仍使用离线身份。</summary>
+    public bool UseMicrosoftAccount { get; init; }
     /// <summary>空值自动选择符合实例要求的 Java，非空表示用户指定的 java.exe。</summary>
     public string? JavaPath { get; init; }
     public int MinMemoryMb { get; init; } = 1024;
@@ -13,10 +17,13 @@ public sealed record MinecraftLaunchSettings
 
 /// <summary>验证后的启动参数列表；参数作为数据直接传给 Java，不经过命令行解释器。</summary>
 public sealed record MinecraftLaunchPlan(string InstancePath, string GameDirectory, string JavaPath,
-    int JavaMajorVersion, IReadOnlyList<string> Arguments)
+    int JavaMajorVersion, [property: JsonIgnore] IReadOnlyList<string> Arguments)
 {
     /// <summary>补全生成并验证的本机库目录，仅在实际运行时创建各库所需的临时子目录。</summary>
     public required string NativesDirectory { get; init; }
+    /// <summary>只在执行层用于脱敏和参数隔离，禁止序列化到实例或日志。</summary>
+    [JsonIgnore] public IReadOnlyList<string> SensitiveValues { get; init; } = [];
+    public override string ToString() => $"Minecraft launch: Java {JavaMajorVersion}, {InstancePath}";
 }
 
 public enum MinecraftLaunchStage { Preparing, Running, Output }

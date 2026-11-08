@@ -96,7 +96,9 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
             var result = await CheckFileAsync(root, requirement, mode, reporter, results.Count, token).ConfigureAwait(false);
             var allowsMissing = !isRuntime && InstanceFileChangePolicy.AllowsMissing(requirement, manifest.GameDirectory, manifest.SourceFormat);
             if (result.State == InstanceFileState.Missing && allowsMissing)
-                result = result with { State = InstanceFileState.Consumed, Message = "原包空更新标记允许被游戏消耗；保留原始依据，不自动恢复。" };
+                result = result with { State = InstanceFileState.Consumed, Message = requirement.Origin == InstanceFileOrigin.MigratedPlayerData
+                    ? "迁入玩家数据已移除，保留迁移记录，不从旧实例自动恢复。"
+                    : "原包空更新标记允许被游戏消耗；保留原始依据，不自动恢复。" };
             results.Add(result with { IsRuntimeFile = isRuntime, IsAllowedMissing = allowsMissing,
                 IsAllowedConfigurationChange = !isRuntime && InstanceFileChangePolicy.IsMutableFile(
                     requirement, manifest.GameDirectory, manifest.SourceFormat) });
