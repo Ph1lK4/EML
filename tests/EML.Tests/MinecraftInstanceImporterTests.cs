@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Minecraft;
+using EML.Infrastructure.Minecraft.Importing;
 
 namespace EML.Tests;
 
@@ -243,6 +244,127 @@ public sealed class MinecraftInstanceImporterTests : IDisposable
         Assert.Equal(requirement.Hashes["sha256"], savedFile.GetProperty("hashes").GetProperty("sha256").GetString());
     }
 
+    /// <summary>四种导入格式均保留中文、全角标点及合法空格，磁盘名称和恢复条目不能被裁剪或替换。</summary>
+    [Theory]
+    [InlineData("Zip")]
+    [InlineData("Prism")]
+    [InlineData("Modrinth")]
+    [InlineData("CurseForge")]
+    public async Task ImportsLegalUnicodePathsWithoutRenaming(string format)
+    {
+        string[] gamePaths =
+        [
+            "journeymap/data/mp/中文服务器（生存）/waypoints/出生点，。！？：；“”‘’（）【】《》、·…—.json",
+            "config/中文.配置/带 空格.cfg",
+            "config/ 前导空格/ 文件.cfg",
+            "config/\u3000全角空格\u3000/\u3000文件.json\u3000",
+            "config/\u00a0不换行空格\u00a0/\u00a0文件.json\u00a0",
+            "config/全角符号＜＞：＂｜？＊／＼.cfg",
+            "config/半角括号(保留)和全角括号（保留）.cfg",
+            "config/重音é.cfg",
+            "config/重音e\u0301.cfg"
+        ];
+        var archivePrefix = format switch
+        {
+            "Modrinth" => "overrides/",
+            "CurseForge" => "custom-overrides/",
+            _ => ".minecraft/"
+        };
+        var entries = gamePaths.Select((path, index) => (Path: archivePrefix + path, Content: "原样保留 " + index)).ToList();
+        entries.Add((archivePrefix + "screenshots/\u3000空目录\u3000/", ""));
+        if (format == "Prism") entries.Add(("mmc-pack.json", PrismPack));
+        if (format == "Modrinth") entries.Add(("modrinth.index.json", ModrinthIndex()));
+        if (format == "CurseForge") entries.Add(("manifest.json", CurseForgeManifest()));
+        var archivePath = CreateArchive(entries.ToArray());
+        var importer = new MinecraftInstanceImporter(_root);
+
+        var preview = await importer.InspectAsync(archivePath);
+        Assert.Equal(format, preview.Format);
+        AssertNothingImported();
+        var imported = await importer.ImportAsync(archivePath, "中文实例（测试）");
+        using var saved = ReadSavedManifest(imported);
+        for (var index = 0; index < gamePaths.Length; index++)
+        {
+            var relative = ".minecraft/" + gamePaths[index];
+            var content = "原样保留 " + index;
+            var actual = Path.Combine(imported.InstancePath, relative.Replace('/', Path.DirectorySeparatorChar));
+            Assert.Equal(content, File.ReadAllText(actual));
+            Assert.Contains(Path.GetFileName(actual), Directory.EnumerateFiles(Path.GetDirectoryName(actual)!).Select(Path.GetFileName));
+            var requirement = Assert.Single(imported.Manifest.Files, file => file.Path == relative);
+            Assert.Equal(InstanceFileSource.Embedded, requirement.Source);
+            Assert.Equal(archivePrefix + gamePaths[index], requirement.ArchiveEntry);
+            Assert.Equal(Encoding.UTF8.GetByteCount(content), requirement.Size);
+            Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content))), requirement.Hashes["sha256"]);
+            var savedFile = Assert.Single(saved.RootElement.GetProperty("files").EnumerateArray(), file => file.GetProperty("path").GetString() == relative);
+            Assert.Equal(requirement.ArchiveEntry, savedFile.GetProperty("archiveEntry").GetString());
+        }
+        Assert.Contains("\u3000空目录\u3000", Directory.EnumerateDirectories(Path.Combine(imported.GameDirectory, "screenshots")).Select(Path.GetFileName));
+    }
+
+    /// <summary>尚待下载的 Modrinth 文件也保留合法 Unicode 路径，避免补全时找不到原清单指定的文件。</summary>
+    [Theory]
+    [InlineData("mods/中文模组（测试）：增强.jar")]
+    [InlineData("config/\u3000中文配置\u3000/\u00a0文件\u00a0")]
+    [InlineData("config/ 前导空格/ 文件.cfg")]
+    public async Task ModrinthRequirementsPreserveLegalUnicodePaths(string gamePath)
+    {
+        var path = CreateArchive(("modrinth.index.json", ModrinthIndex(ModrinthFile(gamePath, "待下载内容"))));
+        var importer = new MinecraftInstanceImporter(_root);
+        Assert.Equal(1, (await importer.InspectAsync(path)).DownloadFileCount);
+        var result = await importer.ImportAsync(path, "中文远程需求");
+        var requirement = Assert.Single(result.Manifest.Files, file => file.Source == InstanceFileSource.DirectDownload);
+        Assert.Equal(".minecraft/" + gamePath, requirement.Path);
+        Assert.Equal(Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes("待下载内容"))), requirement.Hashes["sha1"]);
+        using var saved = ReadSavedManifest(result);
+        Assert.Contains(saved.RootElement.GetProperty("files").EnumerateArray(), file =>
+            file.GetProperty("path").GetString() == ".minecraft/" + gamePath);
+        Assert.False(File.Exists(Path.Combine(result.GameDirectory, gamePath.Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    /// <summary>含中文和边缘空格的路径经过备份往返后，仍能按精确条目恢复缺失文件并保持原始哈希。</summary>
+    [Fact]
+    public async Task UnicodePathsSurviveBackupAndEmbeddedRecovery()
+    {
+        const string gamePath = "journeymap/data/mp/\u3000中文服务器\u3000/waypoints/ 出生点（家）：位置.json\u00a0";
+        const string content = "{\"name\":\"出生点\"}";
+        var originalArchive = CreateArchive((".minecraft/" + gamePath, content));
+        var importer = new MinecraftInstanceImporter(_root);
+        var original = await importer.ImportAsync(originalArchive, "中文原实例");
+        var baseline = Assert.Single(original.Manifest.Files, file => file.Path == ".minecraft/" + gamePath);
+        var backup = Path.Combine(_root, "中文备份（保留文件名）.zip");
+        await new MinecraftInstanceManager(_root).ExportAsync(original.InstancePath, backup);
+        var restored = await importer.ImportAsync(backup, "中文恢复实例");
+        var requirement = Assert.Single(restored.Manifest.Files, file => file.Path == baseline.Path);
+        Assert.Equal(baseline.Hashes["sha256"], requirement.Hashes["sha256"]);
+        Assert.Equal(baseline.Size, requirement.Size);
+        var destination = Path.Combine(restored.GameDirectory, gamePath.Replace('/', Path.DirectorySeparatorChar));
+        Assert.Equal(content, File.ReadAllText(destination));
+
+        File.Delete(destination);
+        Assert.True(await new EmbeddedFileRestorer(_root).RestoreAsync(restored.InstancePath, restored.Manifest, requirement, CancellationToken.None));
+        Assert.Equal(content, File.ReadAllText(destination));
+        Assert.Contains(Path.GetFileName(destination), Directory.EnumerateFiles(Path.GetDirectoryName(destination)!).Select(Path.GetFileName));
+    }
+
+    /// <summary>真正非法的字符应报告具体路径段和码点，避免用户误以为中文本身不受支持。</summary>
+    [Theory]
+    [InlineData("中文:坐标.json", "U+003A")]
+    [InlineData("中文?位置.json", "U+003F")]
+    [InlineData("中文\t位置.json", "U+0009")]
+    [InlineData("中文文件.json ", "U+0020")]
+    [InlineData("中文目录.", "U+002E")]
+    public async Task InvalidUnicodePathReportsActualOffendingCharacter(string segment, string codePoint)
+    {
+        var path = CreateArchive((".minecraft/config/" + segment, "内容"));
+        var importer = new MinecraftInstanceImporter(_root);
+        var previewError = await Assert.ThrowsAsync<InvalidDataException>(() => importer.InspectAsync(path));
+        Assert.Contains("中文", previewError.Message);
+        Assert.Contains(codePoint, previewError.Message);
+        var importError = await Assert.ThrowsAsync<InvalidDataException>(() => importer.ImportAsync(path, "不能导入"));
+        Assert.Contains(codePoint, importError.Message);
+        AssertNothingImported();
+    }
+
     /// <summary>拒绝穿越、绝对路径、反斜杠穿越、数据流和 Windows 设备名，不把 ZIP 内路径直接传给磁盘操作。</summary>
     [Theory]
     [InlineData("../escape.txt")]
@@ -251,6 +373,10 @@ public sealed class MinecraftInstanceImporterTests : IDisposable
     [InlineData(".minecraft\\..\\..\\escape.txt")]
     [InlineData(".minecraft/options.txt:payload")]
     [InlineData(".minecraft/CON.txt")]
+    [InlineData(".minecraft/CON .txt")]
+    [InlineData(".minecraft/LPT¹.txt")]
+    [InlineData(".minecraft/./file.txt")]
+    [InlineData(".minecraft/trailing /file.txt")]
     [InlineData(".minecraft/trailing./file.txt")]
     public async Task RejectsUnsafeArchivePaths(string maliciousPath)
     {

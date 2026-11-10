@@ -383,11 +383,40 @@ public sealed class FileDownloaderTests
         Assert.Empty(Directory.GetFiles(folder.Path));
     }
 
-    /// <summary>Windows 备用数据流、保留名称和尾随点不能成为下载目标。</summary>
+    /// <summary>下载保留中文、全角标点和合法空白，实际落盘名称与请求逐字相同。</summary>
+    [Theory]
+    [InlineData(" 旅行地图", "中文坐标（家）：矿脉？.json")]
+    [InlineData("\u3000地图目录\u3000", "\u3000中文坐标.json\u3000")]
+    [InlineData("\u00a0地图目录\u00a0", "\u00a0中文坐标.json\u00a0")]
+    [InlineData("配置。", "【中文】“家”，矿脉！；《记录》、.json")]
+    [InlineData("CON\u3000", "NUL\u00a0.json")]
+    public async Task Download_PreservesLegalUnicodeDestinationNames(string directory, string filename)
+    {
+        using var folder = new TestFolder();
+        byte[] bytes = [1, 2, 3];
+        using var handler = new StubHandler((_, _, _) => Task.FromResult(Response(bytes)));
+        using var downloader = CreateDownloader(handler);
+        var destination = Path.Combine(folder.Path, directory, filename);
+        var result = await downloader.DownloadAsync(Request(folder, bytes) with { DestinationPath = destination });
+
+        Assert.True(result.HashVerified);
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(destination));
+        Assert.Equal(directory, Path.GetFileName(Assert.Single(Directory.GetDirectories(folder.Path))));
+        Assert.Equal(filename, Path.GetFileName(Assert.Single(Directory.GetFiles(Path.GetDirectoryName(destination)!))));
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>Windows 备用数据流、保留名称和尾随点等非法目标在网络请求前被拒绝。</summary>
     [Theory]
     [InlineData("mod.jar:stream")]
     [InlineData("NUL.jar")]
+    [InlineData("CON .jar")]
+    [InlineData("COM¹.jar")]
     [InlineData("mod.jar.")]
+    [InlineData("中文模组.jar ")]
+    [InlineData("中文?.jar")]
+    [InlineData("中文\t.jar")]
+    [InlineData("../escape.jar")]
     public async Task Download_RejectsUnsafeDestinationNames(string filename)
     {
         using var folder = new TestFolder();
@@ -397,6 +426,24 @@ public sealed class FileDownloaderTests
         {
             DestinationPath = Path.Combine(folder.Path, filename)
         }));
+        Assert.Equal(0, handler.Calls);
+        Assert.Empty(Directory.GetFiles(folder.Path));
+    }
+
+    /// <summary>错误信息区分中文名称与真正非法的半角字符，并给出具体位置。</summary>
+    [Fact]
+    public async Task Download_ExplainsInvalidCharacterInChineseFilename()
+    {
+        using var folder = new TestFolder();
+        using var handler = new StubHandler((_, _, _) => Task.FromResult(Response([7])));
+        using var downloader = CreateDownloader(handler);
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => downloader.DownloadAsync(Request(folder, [7]) with
+        {
+            DestinationPath = Path.Combine(folder.Path, "中文坐标:矿脉.json")
+        }));
+
+        Assert.Contains("中文坐标:矿脉.json", error.Message);
+        Assert.Contains("U+003A", error.Message);
         Assert.Equal(0, handler.Calls);
         Assert.Empty(Directory.GetFiles(folder.Path));
     }

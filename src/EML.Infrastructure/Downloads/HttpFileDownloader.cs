@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using EML.Core.Downloads;
+using EML.Infrastructure.IO;
 using EML.Infrastructure.Minecraft.CurseForge.Api;
 
 namespace EML.Infrastructure.Downloads;
@@ -340,13 +341,8 @@ public sealed partial class HttpFileDownloader : IFileDownloader, IDisposable
         var parts = value[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
         foreach (var part in parts)
         {
-            if (part.Length == 0 || part != part.Trim() || part.EndsWith('.') ||
-                part.Any(c => c < 32 || "<>:\"|?*".Contains(c)))
-                throw new ArgumentException("下载目标含非法文件名。", nameof(value));
-            var stem = part.Split('.')[0].ToUpperInvariant();
-            if (stem is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$" ||
-                (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && "123456789¹²³".Contains(stem[3])))
-                throw new ArgumentException("下载目标含保留文件名。", nameof(value));
+            if (WindowsFileNameRules.InvalidReason(part) is { } reason)
+                throw new ArgumentException($"下载目标含非法文件名：{value}。文件名“{part}”：{reason}。", nameof(value));
         }
         return Path.GetFullPath(value);
     }
