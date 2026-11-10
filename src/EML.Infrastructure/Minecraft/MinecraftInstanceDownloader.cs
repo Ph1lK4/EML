@@ -52,6 +52,7 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
         var root = ValidateInstance(instancePath);
         using var lease = InstanceOperationLease.Acquire(root);
         MigrationJournalStore.EnsureSettled(root);
+        EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
         PrismInstallResult? runtime = null;
         // 平台安装器负责各自模组清单；通用阶段只复查，避免重复下载或绕过分发限制。
         var manifestPath = Path.Combine(root, InstanceImportManifest.FileName);
@@ -77,15 +78,24 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
                 new ForwardProgress<InstanceCheckProgress>(p => progress?.Report(new("准备", p.CompletedFiles, p.TotalFiles, p.FileName, Check: p))), token)
                 .ConfigureAwait(false);
             var pending = new List<InstanceFileRequirement>();
+            var importManifest = File.Exists(manifestPath) ? InstanceManifestStore.Read(manifestPath) : null;
+            var onlinePaths = importManifest is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
+                Mods.ModManagementStore.OnlineDownloadPaths(Mods.ModManagementStore.Read(root, importManifest),
+                    MigrationDataStore.Read(root, importManifest));
             foreach (var file in before.Files.Where(f => !isModrinth && !isCurseForge && f.Requirement.Required && !f.IsRuntimeFile))
             {
                 token.ThrowIfCancellationRequested();
                 var requirement = file.Requirement;
                 if (file.State == InstanceFileState.Missing)
                 {
-                    if (requirement.Source == InstanceFileSource.DirectDownload && requirement.Path is not null &&
+                    if ((requirement.Source == InstanceFileSource.DirectDownload ||
+                         requirement.Path is not null && onlinePaths.Contains(requirement.Path) &&
+                         requirement.Source == InstanceFileSource.CurseForge) && requirement.Path is not null &&
                         requirement.Downloads.Count > 0 && requirement.Hashes.Count > 0)
+                    {
+                        if (onlinePaths.Contains(requirement.Path)) Mods.ModManagementStore.ValidateOnlineBaseline(requirement);
                         pending.Add(requirement);
+                    }
                     else results.Add(new(requirement, InstanceDownloadState.Unavailable, MissingSourceReason(requirement)));
                 }
                 else if (InstanceFileStatePolicy.IsBlocking(file))
@@ -109,7 +119,8 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
                     var downloaded = await _downloader.DownloadAsync(new FileDownloadRequest
                     {
                         DestinationPath = destination, Urls = file.Downloads,
-                        ExpectedSize = file.Size, Hashes = file.Hashes
+                        ExpectedSize = file.Size, Hashes = file.Hashes,
+                        DisplayName = file.Path, GroupName = Path.GetFileName(root) + " · 实例补全"
                     }, new ForwardProgress<FileDownloadProgress>(p => progress?.Report(
                         new("下载", completed, pending.Count, file.Path!, p))), token).ConfigureAwait(false);
                     if (!downloaded.HashVerified || file.Size is { } expected && downloaded.BytesWritten != expected)

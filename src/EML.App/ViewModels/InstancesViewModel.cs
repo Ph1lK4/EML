@@ -1,10 +1,16 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EML.App.Services;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Launching;
 using EML.Core.Minecraft.Migration;
+using EML.Core.Minecraft.Mods;
+using EML.Core.Minecraft.Mods.Online;
+using EML.Core.Minecraft.Gtnh;
+using EML.Core.Minecraft.Catalog;
+using EML.Core.Downloads;
 
 namespace EML.App.ViewModels;
 
@@ -21,6 +27,10 @@ public partial class InstancesViewModel : ObservableObject
     public string InstancesRoot { get; }
     /// <summary>供列表绑定的扫描结果；增删会通知界面刷新。</summary>
     public ObservableCollection<MinecraftInstance> Instances { get; } = [];
+    /// <summary>独立在线目录，不在启动检测时查询远程项目。</summary>
+    public OnlineModsViewModel? OnlineMods { get; }
+    /// <summary>GTNH 专区把推荐模组与迁移组织在同一目标实例下。</summary>
+    public GtnhHubViewModel? Gtnh { get; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand),
@@ -49,7 +59,11 @@ public partial class InstancesViewModel : ObservableObject
         IMinecraftInstanceChecker checker, IMinecraftInstanceDownloader instanceDownloader,
         IMinecraftGameLauncher? launcher = null, IMinecraftLaunchSettingsStore? launchSettingsStore = null,
         JavaSettingsViewModel? java = null, IMinecraftInstanceMigrationService? migration = null,
-        IInstanceMigrationDialogs? migrationDialogs = null)
+        IInstanceMigrationDialogs? migrationDialogs = null,
+        ILocalModManager? localMods = null, IModManagementDialogs? modDialogs = null,
+        IOnlineModCatalog? onlineCatalog = null, IOnlineModInstaller? onlineInstaller = null,
+        IModIconCache? modIcons = null, Action<Uri>? openModWebsite = null,
+        IOnlineModLocalization? modLocalization = null, IGtnhAddonService? gtnhAddons = null)
     {
         _locator = locator;
         _manager = manager;
@@ -62,6 +76,14 @@ public partial class InstancesViewModel : ObservableObject
         _launchSettingsStore = launchSettingsStore;
         Java = java;
         _migration = migration; _migrationDialogs = migrationDialogs;
+        _localMods = localMods; _modDialogs = modDialogs;
+        if (onlineCatalog is not null && onlineInstaller is not null)
+            OnlineMods = new OnlineModsViewModel(onlineCatalog, onlineInstaller, modIcons,
+                () => !IsBusy, busy => IsBusy = busy,
+                () => { ClearCheckResults(); ResetModSelection(); }, openModWebsite, modLocalization);
+        if (migration is not null && gtnhAddons is not null)
+            Gtnh = new GtnhHubViewModel(this, migration, gtnhAddons,
+                () => { ClearCheckResults(); ResetModSelection(); }, openModWebsite);
     }
 
     /// <summary>切换实例后更新名称，并清除属于上一个实例的检查和下载记录。</summary>
@@ -72,6 +94,8 @@ public partial class InstancesViewModel : ObservableObject
         BeginLoadLaunchSettings(value);
         MigrationJournalPath = "";
         MigrationStateLoadTask = LoadMigrationStateAsync(value);
+        ResetModSelection();
+        OnlineMods?.SetInstance(value);
     }
     /// <summary>判断当前是否允许重命名、删除或导出选中的实例。</summary>
     private bool CanManage() => !IsBusy && SelectedInstance is not null;
@@ -171,18 +195,61 @@ public partial class InstancesViewModel : ObservableObject
     {
         if (IsBusy) return;
         IsBusy = true;
+        try
+        {
+            var archive = _dialogs.ChooseImportPath();
+            if (archive is not null) await ImportArchiveCoreAsync(archive, token);
+        }
+        catch (OperationCanceledException) { TransferStatus = "已取消导入"; StatusText = "没有新增实例。"; }
+        catch (Exception ex) { TransferStatus = "导入失败"; StatusText = ex.Message; }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>在线下载、导入和补全共用一段忙碌期间；任何阶段取消都保留已提交实例。</summary>
+    public async Task<string> DownloadInstanceAsync(IInstanceArchiveService archives, InstanceCatalogProvider provider,
+        string projectId, string releaseId, IProgress<FileDownloadProgress>? progress, CancellationToken token)
+    {
+        if (IsBusy) throw new InvalidOperationException("正在执行实例操作，请等待完成。");
+        IsBusy = true;
+        ClearCheckResults();
+        TransferPercent = 0;
+        TransferStatus = "正在下载已选版本……";
+        try
+        {
+            var prepared = await archives.PrepareAsync(provider, projectId, releaseId, progress, token);
+            token.ThrowIfCancellationRequested();
+            var imported = await ImportArchiveCoreAsync(prepared.ArchivePath, token, prepared.ExpectedFormat, prepared.SuggestedName);
+            return TransferStatus + "\n" + StatusText + (imported ? "\n" + DownloadSummary : "");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            TransferStatus = "已取消实例下载";
+            return StatusText = "尚未导入新实例；已经校验的原包会保留在缓存中。";
+        }
+        catch (Exception ex)
+        {
+            TransferStatus = "实例下载未完成";
+            return StatusText = ex.Message;
+        }
+        finally { IsBusy = false; }
+    }
+
+    /// <summary>本地导入与在线下载共用预览、命名、提交和自动补全；调用方持续持有忙碌状态。</summary>
+    private async Task<bool> ImportArchiveCoreAsync(string archive, CancellationToken token, string? expectedFormat = null, string? suggestedName = null)
+    {
         var revision = ++_transferRevision;
         InstanceImportResult? imported = null;
         try
         {
-            var archive = _dialogs.ChooseImportPath();
-            if (archive is null) return;
             TransferPercent = 0;
             TransferStatus = "正在分析整合包……";
             var preview = await _importer.InspectAsync(archive, token);
+            if (expectedFormat is not null && !preview.Format.Equals(expectedFormat, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"下载来源与压缩包格式不符：预期 {expectedFormat}，实际 {preview.Format}。");
+            if (!string.IsNullOrWhiteSpace(suggestedName)) preview = preview with { SuggestedName = suggestedName };
             token.ThrowIfCancellationRequested();
             var name = _dialogs.ConfirmImport(preview);
-            if (name is null) { TransferStatus = "已取消导入"; return; }
+            if (name is null) { TransferStatus = "已取消导入"; StatusText = "没有新增实例。"; return false; }
             StatusText = "正在导入包内文件……";
             var progress = new Progress<InstanceImportProgress>(p =>
             {
@@ -219,7 +286,8 @@ public partial class InstancesViewModel : ObservableObject
             TransferStatus = imported is null ? "导入失败" : "实例已导入，后续操作未完成";
             StatusText = (imported is null ? "" : "已导入实例保留，可点击“补全实例依赖”继续。") + ex.Message;
         }
-        finally { ++_transferRevision; IsBusy = false; }
+        finally { ++_transferRevision; }
+        return imported is not null;
     }
 
     /// <summary>刷新失败或扫描暂未发现时仍展示已提交实例，保证自动补全结果属于正确条目。</summary>

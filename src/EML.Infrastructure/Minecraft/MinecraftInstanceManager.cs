@@ -74,6 +74,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         if (!Directory.Exists(path)) throw new DirectoryNotFoundException("实例目录已不存在，请刷新列表。");
         EnsureNoLinkedAncestors(path);
         MigrationJournalStore.EnsureSettled(path);
+        Mods.ModOperationJournal.EnsureSettled(path);
         var manifestPath = Path.Combine(path, InstanceImportManifest.FileName);
         if (File.Exists(manifestPath))
         {

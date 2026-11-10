@@ -68,6 +68,7 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
             token.ThrowIfCancellationRequested();
             var root = ValidateInstance(instancePath);
             Migration.MigrationJournalStore.EnsureSettled(root);
+            EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
             var manifestPath = Path.Combine(root, InstanceImportManifest.FileName);
             var manifest = InstanceManifestStore.Read(manifestPath);
             if (!manifest.SourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase))
@@ -85,6 +86,8 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
                 notes.Add("本轮跳过内容文件处理，保留现有文件；来源解析恢复前不会标记为可启动。");
             }
             var files = (snapshot?.Requirements ?? []).Where(file => file.Required).ToArray();
+            var onlinePaths = snapshot is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
+                Mods.ModManagementStore.OnlineDownloadPaths(snapshot.Mods, snapshot.Migration);
             var optionalCount = manifest.Files.Count(file => !file.Required);
             if (optionalCount > 0) notes.Add($"已跳过 {optionalCount} 个可选文件；可选模组选择功能尚未启用。");
             var completed = 0;
@@ -98,6 +101,7 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
                 try
                 {
                     result = await EnsureManifestFileAsync(root, manifest, file,
+                        file.Path is not null && onlinePaths.Contains(file.Path),
                         new InlineProgress<FileDownloadProgress>(value => progress?.Report(new(
                             "下载整合包文件", Volatile.Read(ref completed), files.Length, file.Path ?? "", value))),
                         note => { lock (resultGate) notes.Add(note); },
@@ -173,7 +177,7 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
 
     /// <summary>校验并复用已有文件；仅下载有明确地址和哈希的缺失文件，保留所有不匹配的原文件。</summary>
     private async Task<InstanceDownloadFileResult?> EnsureManifestFileAsync(string root, InstanceImportManifest manifest,
-        InstanceFileRequirement file, IProgress<FileDownloadProgress>? progress, Action<string> addNote, CancellationToken token)
+        InstanceFileRequirement file, bool managedOnline, IProgress<FileDownloadProgress>? progress, Action<string> addNote, CancellationToken token)
     {
         try
         {
@@ -196,13 +200,15 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
                     return new(file, InstanceDownloadState.RestoredEmbeddedFile, "已从原 mrpack 条目恢复，并验证导入时大小及 SHA-256。");
                 return new(file, InstanceDownloadState.MissingEmbeddedFile, "找不到可恢复的原 mrpack 压缩包或条目，请提供原包；不会改用其他来源内容。");
             }
-            if (file.Source != InstanceFileSource.DirectDownload || file.Downloads.Count == 0)
+            if (managedOnline) Mods.ModManagementStore.ValidateOnlineBaseline(file);
+            if ((!managedOnline && file.Source != InstanceFileSource.DirectDownload) || file.Downloads.Count == 0)
                 return new(file, InstanceDownloadState.Unavailable, "文件没有可用于 Modrinth 安装的直接下载地址。");
             if (hashes.Count == 0)
                 return new(file, InstanceDownloadState.Unavailable, "下载清单缺少文件哈希，无法验证来源内容。");
             var download = await _downloader.DownloadAsync(new FileDownloadRequest
             {
-                DestinationPath = path, Urls = file.Downloads, ExpectedSize = file.Size, Hashes = hashes
+                DestinationPath = path, Urls = file.Downloads, ExpectedSize = file.Size, Hashes = hashes,
+                DisplayName = file.Path, GroupName = Path.GetFileName(root) + " · Modrinth 补全"
             }, progress, token).ConfigureAwait(false);
             if (!download.HashVerified) throw new InvalidDataException("下载器未确认清单指定的文件哈希。");
             return new(file, InstanceDownloadState.Downloaded, "已下载并校验整合包文件。");

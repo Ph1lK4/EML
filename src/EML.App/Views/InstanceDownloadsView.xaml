@@ -1,0 +1,114 @@
+<UserControl x:Class="EML.App.Views.InstanceDownloadsView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:EML.App.Views">
+ <UserControl.Resources>
+  <BooleanToVisibilityConverter x:Key="Visible"/>
+  <local:OnlineModLabelConverter x:Key="Labels"/>
+ </UserControl.Resources>
+ <Grid DataContext="{Binding Downloads}">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <StackPanel Margin="0,0,0,18">
+   <TextBlock Text="下载实例" Style="{StaticResource PageTitle}"/>
+   <TextBlock Text="发现整合包，或从官方安装一个全新的原版世界。" Style="{StaticResource PageSubtitle}" Margin="0,8,0,0"/>
+  </StackPanel>
+  <Border Grid.Row="1" Style="{StaticResource CardBorder}" Padding="18" Margin="0,0,0,16">
+   <StackPanel IsEnabled="{Binding CanBrowse}">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <ComboBox ItemsSource="{Binding Providers}" SelectedIndex="{Binding ProviderIndex}" AutomationProperties.Name="实例下载来源"/>
+     <TextBox x:Name="SearchInput" Grid.Column="2" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" MaxLength="256"
+        ToolTip="输入平台上的整合包名称或 Minecraft 版本号；中文关键词由所选平台搜索" AutomationProperties.Name="搜索整合包或原版版本"/>
+     <Button Grid.Column="3" Content="搜索" Command="{Binding SearchCommand}" Style="{StaticResource PrimaryButton}" Margin="12,0,0,0"/>
+    </Grid>
+    <WrapPanel Margin="0,14,0,0" Visibility="{Binding IsModpack, Converter={StaticResource Visible}}">
+     <StackPanel Width="145" Margin="0,0,14,0"><TextBlock Text="Minecraft 版本（可留空）" FontSize="12" Margin="0,0,0,6"/>
+      <TextBox Text="{Binding GameVersion, UpdateSourceTrigger=PropertyChanged}" MaxLength="32" AutomationProperties.Name="整合包游戏版本"/></StackPanel>
+     <StackPanel Width="130" Margin="0,0,14,0"><TextBlock Text="加载器" FontSize="12" Margin="0,0,0,6"/>
+      <ComboBox ItemsSource="{Binding Loaders}" SelectedItem="{Binding Loader}" AutomationProperties.Name="整合包加载器">
+       <ComboBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Converter={StaticResource Labels}, ConverterParameter=Loader}"/></DataTemplate></ComboBox.ItemTemplate>
+      </ComboBox></StackPanel>
+     <StackPanel Width="150"><TextBlock Text="排序" FontSize="12" Margin="0,0,0,6"/>
+      <ComboBox ItemsSource="{Binding Sorts}" SelectedIndex="{Binding SortIndex}" AutomationProperties.Name="整合包排序"/></StackPanel>
+    </WrapPanel>
+    <CheckBox Content="包含快照 / 预发布版本（可能不稳定）" IsChecked="{Binding IncludeSnapshots}" Margin="0,14,0,0"
+       Visibility="{Binding IsMinecraft, Converter={StaticResource Visible}}"/>
+   </StackPanel>
+  </Border>
+  <Grid Grid.Row="2">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="5*"/><ColumnDefinition Width="16"/><ColumnDefinition Width="4*"/></Grid.ColumnDefinitions>
+   <Border Style="{StaticResource CardBorder}" Padding="16">
+    <Grid>
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,12"/>
+     <ListBox Grid.Row="1" ItemsSource="{Binding Projects}" SelectedItem="{Binding SelectedProject}" IsEnabled="{Binding CanBrowse}"
+        HorizontalContentAlignment="Stretch" BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+        VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling">
+      <ListBox.ItemTemplate><DataTemplate>
+       <Grid Margin="8,10">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Border Width="46" Height="46" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Top">
+         <Grid><TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource AccentBrush}" FontSize="20" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+          <Image Source="{Binding IconPath}" Stretch="Uniform" Width="40" Height="40"/></Grid>
+        </Border>
+        <StackPanel Grid.Column="1"><TextBlock Text="{Binding DisplayName}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
+         <TextBlock Text="{Binding Project.Author}" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Margin="0,5,0,5"/>
+         <TextBlock Text="{Binding DisplaySummary}" TextWrapping="Wrap" MaxHeight="54" TextTrimming="CharacterEllipsis" FontSize="12" Foreground="{DynamicResource MutedTextBrush}"/>
+        </StackPanel>
+       </Grid>
+      </DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+     <Button Grid.Row="2" Content="加载更多结果" Command="{Binding LoadMoreCommand}" Margin="0,10,0,0" Visibility="{Binding HasMore, Converter={StaticResource Visible}}"/>
+    </Grid>
+   </Border>
+   <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="20">
+    <Grid>
+     <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0">
+      <StackPanel>
+       <TextBlock Text="版本与安装" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,14"/>
+       <TextBlock Text="{Binding ProjectInformation}" TextWrapping="Wrap" Margin="0,0,0,18"/>
+       <TextBlock Text="{Binding VersionStatus}" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,8"/>
+       <ComboBox ItemsSource="{Binding Releases}" SelectedItem="{Binding SelectedRelease}" DisplayMemberPath="DisplayName" IsEnabled="{Binding CanBrowse}" AutomationProperties.Name="整合包或原版发布版本"/>
+       <Button Content="加载更多版本" Command="{Binding LoadMoreVersionsCommand}" Style="{StaticResource QuietButton}" Margin="0,8,0,0" Visibility="{Binding HasMoreVersions, Converter={StaticResource Visible}}"/>
+       <TextBlock Text="{Binding ReleaseInformation}" TextWrapping="Wrap" Margin="0,16,0,16"/>
+       <TextBlock Text="整合包下载后会显示导入预览并自动补全。Java 和账号仍需在相应页面设置。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
+       <Expander Header="项目介绍" IsExpanded="True" Margin="0,20,0,0" Visibility="{Binding IsModpack, Converter={StaticResource Visible}}">
+        <StackPanel Margin="0,10,0,0">
+         <DockPanel Margin="0,0,0,8" LastChildFill="True">
+          <Button DockPanel.Dock="Right" Content="刷新介绍" Command="{Binding RefreshDescriptionCommand}"
+             Style="{StaticResource QuietButton}" Margin="8,0,0,0" VerticalAlignment="Top"/>
+          <TextBlock Text="{Binding DescriptionStatus}" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center"/>
+         </DockPanel>
+         <TextBox x:Name="ProjectDescriptionText" Text="{Binding ProjectDescription, Mode=OneWay}" IsReadOnly="True"
+            TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+            MaxHeight="320" MinHeight="0" Padding="0" Background="Transparent" BorderThickness="0"
+            Visibility="{Binding HasProjectDescription, Converter={StaticResource Visible}}" AutomationProperties.Name="平台项目完整介绍"/>
+        </StackPanel>
+       </Expander>
+      </StackPanel>
+     </ScrollViewer>
+     <WrapPanel Grid.Row="1" Margin="0,16,0,0">
+      <Button Content="下载并创建实例" Command="{Binding InstallCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+      <Button Content="查看项目网页" Command="{Binding OpenWebsiteCommand}" Style="{StaticResource QuietButton}" Margin="0,0,0,8"/>
+     </WrapPanel>
+    </Grid>
+   </Border>
+  </Grid>
+  <Border Grid.Row="3" Background="{DynamicResource AccentSoftBrush}" CornerRadius="12" Padding="16,12" Margin="0,16,0,0">
+   <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <ScrollViewer MaxHeight="126" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,10,0">
+     <StackPanel>
+      <ProgressBar Value="{Binding ArchivePercent, Mode=OneWay}" Maximum="100" Height="3" Visibility="{Binding IsInstalling, Converter={StaticResource Visible}}"/>
+      <TextBlock Text="{Binding ArchiveProgress}" TextWrapping="Wrap" FontSize="12"/>
+      <TextBox Text="{Binding InstallStatus, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0"/>
+      <StackPanel Visibility="{Binding IsInstalling, Converter={StaticResource Visible}}">
+       <ProgressBar Value="{Binding DataContext.Instances.TransferPercent, Mode=OneWay, RelativeSource={RelativeSource AncestorType=UserControl}}" Maximum="100" Height="3" Margin="0,8,0,4"/>
+       <TextBlock Text="{Binding DataContext.Instances.TransferStatus, RelativeSource={RelativeSource AncestorType=UserControl}}" TextWrapping="Wrap" FontSize="12"/>
+      </StackPanel>
+     </StackPanel>
+    </ScrollViewer>
+    <Button Grid.Column="1" Content="取消下载 / 安装" Command="{Binding InstallCancelCommand}" Margin="12,0,0,0" VerticalAlignment="Center" Visibility="{Binding IsInstalling, Converter={StaticResource Visible}}"/>
+   </Grid>
+  </Border>
+ </Grid>
+</UserControl>

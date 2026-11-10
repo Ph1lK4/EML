@@ -1,0 +1,67 @@
+<UserControl x:Class="EML.App.Views.AccountsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="0,0,12,0">
+      <TextBlock Text="微软账号" Style="{StaticResource PageTitle}"/>
+      <TextBlock Text="连接你的 Minecraft Java 版账号，在这里管理登录与授权。"
+                 Style="{StaticResource PageSubtitle}" Margin="0,6,0,24"/>
+      <Border Style="{StaticResource CardBorder}" Padding="24" Margin="0,0,0,18">
+        <Grid>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+          <Border Width="52" Height="52" CornerRadius="16" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Top">
+            <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="24"
+                       Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+          </Border>
+          <StackPanel Grid.Column="1">
+            <TextBlock Text="当前玩家" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,4"/>
+            <TextBlock Text="{Binding AccountName}" FontSize="25" FontWeight="SemiBold" TextWrapping="Wrap"/>
+            <TextBox Text="{Binding AccountId, Mode=OneWay, StringFormat=UUID：{0}}" IsReadOnly="True"
+                     BorderThickness="0" Background="Transparent" Padding="0,6" TextWrapping="Wrap"
+                     Foreground="{DynamicResource MutedTextBrush}" MinHeight="0"/>
+            <WrapPanel Margin="0,16,0,0">
+              <Button Content="登录 / 更换微软账号" Command="{Binding LoginCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,8"/>
+              <Button Content="重新读取账号" Command="{Binding LoadCommand}" Margin="0,0,10,8"/>
+              <Button Content="退出本机账号" Command="{Binding LogoutCommand}" Style="{StaticResource QuietButton}" Margin="0,0,0,8"/>
+            </WrapPanel>
+          </StackPanel>
+        </Grid>
+      </Border>
+      <Border Style="{StaticResource CardBorder}" Padding="24" Margin="0,0,0,18">
+        <StackPanel>
+          <DockPanel Margin="0,0,0,14">
+            <Button DockPanel.Dock="Right" Content="取消登录" Command="{Binding LoginCancelCommand}" Style="{StaticResource QuietButton}"/>
+            <StackPanel>
+              <TextBlock Text="网页授权" FontSize="18" FontWeight="SemiBold"/>
+              <TextBlock Text="发起登录后，在微软网页输入下方验证码。" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,6,12,0"/>
+            </StackPanel>
+          </DockPanel>
+          <TextBlock Text="微软验证网址" FontWeight="SemiBold" Margin="0,0,0,7"/>
+          <TextBox Text="{Binding VerificationAddress, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" Margin="0,0,0,16"
+                   AutomationProperties.Name="微软验证网址"/>
+          <TextBlock Text="验证码" FontWeight="SemiBold" Margin="0,0,0,7"/>
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <TextBox Text="{Binding UserCode, Mode=OneWay}" IsReadOnly="True" FontSize="25" FontFamily="Consolas"
+                     Margin="0,0,14,0" AutomationProperties.Name="微软登录验证码"/>
+            <Button Grid.Column="1" Content="打开微软登录网页" Command="{Binding OpenLoginPageCommand}" VerticalAlignment="Center"/>
+          </Grid>
+          <TextBlock Text="仅在你主动发起的微软登录页面使用此验证码。密码只在微软网页输入，EML 不保存密码。"
+                     Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,14,0,0"/>
+        </StackPanel>
+      </Border>
+      <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="12" Padding="20">
+        <StackPanel>
+          <TextBlock Text="登录状态" FontWeight="SemiBold" Margin="0,0,0,8"/>
+          <!-- 安全诊断保留可复制文字，方便用户反馈问题；不包含令牌。 -->
+          <TextBox Text="{Binding StatusText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                   BorderThickness="0" Background="Transparent" Padding="0" MinHeight="0"/>
+          <TextBlock Text="{Binding ConfigurationStatus}" Foreground="{DynamicResource MutedTextBrush}"
+                     TextWrapping="Wrap" Margin="0,12,0,0"/>
+        </StackPanel>
+      </Border>
+      <TextBlock Text="需要拥有 Minecraft Java 版许可的个人微软账号。登录后，可在实例右键菜单的“启动设置”中启用正版账号。"
+                 Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="4,18,4,8"/>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

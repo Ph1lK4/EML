@@ -19,6 +19,17 @@ public interface ICurseForgeApiClient
 
     /// <summary>按游戏版本、类型、分类和加载器等条件搜索项目。</summary>
     Task<CurseForgeSearchResult> SearchAsync(CurseForgeSearchOptions options, CancellationToken cancellationToken = default);
+
+    /// <summary>分页读取项目的兼容文件；旧客户端必须明确报告未支持，不能将 latestFiles 当成完整版本列表。</summary>
+    Task<CurseForgeFilePage> GetModFilesAsync(long projectId, CurseForgeFileFilter filter,
+        CancellationToken cancellationToken = default) => throw new NotSupportedException("当前 CurseForge 客户端不支持版本列表。");
+
+    /// <summary>读取项目正文；返回 HTML 由展示层转为纯文本，不执行其中内容。</summary>
+    Task<string> GetModDescriptionAsync(long projectId, CancellationToken cancellationToken = default) => Task.FromResult("");
+
+    /// <summary>读取官方 Minecraft 模组分类，筛选不依赖硬编码分类编号。</summary>
+    Task<IReadOnlyList<CurseForgeCategory>> GetModCategoriesAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<CurseForgeCategory>>([]);
 }
 
 /// <summary>服务器实际返回的限流信息；未声明的字段保持为空。</summary>
@@ -46,6 +57,15 @@ public sealed record CurseForgeSearchOptions
     public CurseForgeSortField SortField { get; init; } = CurseForgeSortField.Popularity;
     public bool SortDescending { get; init; } = true;
     public string? Slug { get; init; }
+    public int Index { get; init; }
+    public int PageSize { get; init; } = 20;
+}
+
+/// <summary>项目文件分页条件，加载器筛选与 Minecraft 版本共同使用。</summary>
+public sealed record CurseForgeFileFilter
+{
+    public string? GameVersion { get; init; }
+    public CurseForgeModLoaderType? ModLoaderType { get; init; }
     public int Index { get; init; }
     public int PageSize { get; init; } = 20;
 }

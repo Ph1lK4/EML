@@ -8,7 +8,7 @@ using EML.Infrastructure.Minecraft.CurseForge.Api;
 namespace EML.Infrastructure.Downloads;
 
 /// <summary>HTTPS 流式下载器：支持镜像、有限重试、取消和哈希校验，只发布验证完成的新文件。</summary>
-public sealed class HttpFileDownloader : IFileDownloader, IDisposable
+public sealed partial class HttpFileDownloader : IFileDownloader, IDisposable
 {
     private const string CleanupErrorKey = "TemporaryFileCleanupError";
     private static readonly HttpClient SharedClient = CreateClient(new SocketsHttpHandler
@@ -21,18 +21,21 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
     private readonly FileDownloadOptions _options;
     private readonly bool _ownsClient;
     private readonly ICurseForgeApiKeyProvider _curseForgeKeys;
+    private readonly IDownloadBandwidthLimiter? _bandwidthLimiter;
 
     /// <summary>使用共享连接池创建下载器，各次下载仍有独立的超时和取消令牌。</summary>
-    public HttpFileDownloader(FileDownloadOptions? options = null, ICurseForgeApiKeyProvider? curseForgeKeys = null)
+    public HttpFileDownloader(FileDownloadOptions? options = null, ICurseForgeApiKeyProvider? curseForgeKeys = null,
+        IDownloadBandwidthLimiter? bandwidthLimiter = null)
     {
         _client = SharedClient;
         _options = ValidateOptions(options ?? new FileDownloadOptions());
         _curseForgeKeys = curseForgeKeys ?? new EmbeddedCurseForgeApiKeyProvider();
+        _bandwidthLimiter = bandwidthLimiter;
     }
 
     /// <summary>注入测试或自定义传输；传输不得自行跟随重定向，且仍由调用方负责释放。</summary>
     public HttpFileDownloader(HttpMessageHandler handler, FileDownloadOptions? options = null,
-        ICurseForgeApiKeyProvider? curseForgeKeys = null)
+        ICurseForgeApiKeyProvider? curseForgeKeys = null, IDownloadBandwidthLimiter? bandwidthLimiter = null)
     {
         ArgumentNullException.ThrowIfNull(handler);
         DisableAutomaticRedirects(handler);
@@ -40,6 +43,7 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
         _client = CreateClient(handler, false);
         _ownsClient = true;
         _curseForgeKeys = curseForgeKeys ?? new EmbeddedCurseForgeApiKeyProvider();
+        _bandwidthLimiter = bandwidthLimiter;
     }
 
     /// <summary>逐个尝试地址；临时文件校验完成后以禁止覆盖的方式改名为最终文件。</summary>
@@ -65,6 +69,10 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
         Directory.CreateDirectory(parent);
         EnsureNoLinks(parent);
 
+        if (_options.CacheDirectory is not null && hashes.Count > 0)
+            return await DownloadCachedAsync(destination, urls, request.ExpectedSize, maximumBytes, hashes,
+                progress, cancellationToken).ConfigureAwait(false);
+
         Exception? lastFailure = null;
         var attemptNumber = 0;
         foreach (var url in urls)
@@ -78,7 +86,7 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
                 try
                 {
                     return await DownloadAttemptAsync(destination, url, request.ExpectedSize, maximumBytes, hashes,
-                        progress, ++attemptNumber, deadline.Token).ConfigureAwait(false);
+                        progress, ++attemptNumber, deadline.Token, deadline).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
                 {
@@ -105,7 +113,7 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
     /// <summary>下载一个候选地址，边写入边计算所有声明的哈希，失败时清理自己的临时文件。</summary>
     private async Task<FileDownloadResult> DownloadAttemptAsync(string destination, Uri url, long? expectedSize, long maximumBytes,
         IReadOnlyList<HashExpectation> expectations, IProgress<FileDownloadProgress>? progress,
-        int attempt, CancellationToken cancellationToken)
+        int attempt, CancellationToken cancellationToken, CancellationTokenSource deadline)
     {
         var temporary = Path.Combine(Path.GetDirectoryName(destination)!, $".eml-download-{Guid.NewGuid():N}.part");
         var ownsTemporary = false;
@@ -137,6 +145,7 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
                     {
                         var count = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
                         if (count == 0) break;
+                        await ThrottleAsync(count, deadline, cancellationToken).ConfigureAwait(false);
                         received = checked(received + count);
                         if (received > maximumBytes || (expectedSize.HasValue && received > expectedSize.Value))
                             throw new InvalidDataException("下载内容超过允许的文件大小。");
@@ -154,6 +163,7 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
                 if ((expectedSize.HasValue && received != expectedSize.Value) ||
                     (advertisedSize.HasValue && received != advertisedSize.Value))
                     throw new InvalidDataException("下载的实际文件大小与要求不符。");
+                progress?.Report(new FileDownloadProgress(received, expectedSize ?? advertisedSize, attempt) { Phase = FileDownloadPhase.Verifying });
                 hashes.Verify();
                 await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -162,6 +172,7 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
             EnsureNoLinks(temporary);
             File.Move(temporary, destination, overwrite: false);
             ownsTemporary = false;
+            ReportCompleted(progress, received, attempt, false, 0);
             return new FileDownloadResult(destination, received, expectations.Count > 0);
         }
         catch (Exception ex)
@@ -194,12 +205,19 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
 
     /// <summary>每一跳新建请求并重新判断凭据范围；CurseForge 文件不能跳转到未批准的主机。</summary>
     private async Task<HttpResponseMessage> SendAsync(Uri initialUrl, DownloadAuthenticationState authentication,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, long? resumeOffset = null, string? ifRange = null, bool allowRange = false)
     {
         var url = initialUrl;
         for (var redirects = 0; ; redirects++)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (allowRange) request.Headers.AcceptEncoding.ParseAdd("identity");
+            if (resumeOffset is > 0)
+            {
+                request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(resumeOffset, null);
+                if (ifRange is not null) request.Headers.IfRange = new System.Net.Http.Headers.RangeConditionHeaderValue(
+                    System.Net.Http.Headers.EntityTagHeaderValue.Parse(ifRange));
+            }
             if (CurseForgeRequestHeaders.IsCdnUri(url))
             {
                 authentication.IsProtected = true;
@@ -207,6 +225,8 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
             }
             var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
                 .ConfigureAwait(false);
+            if (allowRange && (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable))
+                return response;
             if (response.IsSuccessStatusCode)
             {
                 if (response.StatusCode != HttpStatusCode.PartialContent && response.Content.Headers.ContentRange is null)
@@ -242,6 +262,16 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
             options.AttemptTimeout > TimeSpan.FromDays(1) || options.RetryDelay < TimeSpan.Zero ||
             options.MaximumRetryDelay < TimeSpan.Zero || options.MaximumRetryDelay > TimeSpan.FromMinutes(5))
             throw new ArgumentOutOfRangeException(nameof(options), "下载参数超出允许范围。");
+        if (options.CacheDirectory is not null)
+        {
+            if (string.IsNullOrWhiteSpace(options.CacheDirectory) || !Path.IsPathFullyQualified(options.CacheDirectory))
+                throw new ArgumentException("下载缓存目录必须是绝对路径。", nameof(options));
+            var cache = Path.TrimEndingDirectorySeparator(options.CacheDirectory);
+            // 复用普通路径检查，不接受设备路径、备用数据流或保留名。
+            _ = ValidateDestination(Path.Combine(cache, "cache-path-check"));
+            EnsureNoLinks(Path.GetFullPath(cache));
+            return options with { CacheDirectory = Path.GetFullPath(cache) };
+        }
         return options;
     }
 
@@ -388,6 +418,15 @@ public sealed class HttpFileDownloader : IFileDownloader, IDisposable
             ? Math.Max(0, delay.TotalMilliseconds)
             : _options.RetryDelay.TotalMilliseconds * Math.Pow(2, attempt - 1);
         return TimeSpan.FromMilliseconds(Math.Min(suggested, _options.MaximumRetryDelay.TotalMilliseconds));
+    }
+
+    /// <summary>主动限速等待不计入网络超时；有限速器时每个数据块重新开始网络空闲期限。</summary>
+    private async ValueTask ThrottleAsync(int count, CancellationTokenSource deadline, CancellationToken token)
+    {
+        if (_bandwidthLimiter is null) return;
+        deadline.CancelAfter(Timeout.InfiniteTimeSpan);
+        try { await _bandwidthLimiter.WaitAsync(count, token).ConfigureAwait(false); }
+        finally { if (!deadline.IsCancellationRequested) deadline.CancelAfter(_options.AttemptTimeout); }
     }
 
     /// <summary>只释放本对象创建的客户端包装器；共享连接池及注入的传输不受影响。</summary>

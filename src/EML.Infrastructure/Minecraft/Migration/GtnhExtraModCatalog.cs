@@ -1,9 +1,9 @@
-using System.IO.Compression;
-using System.Text.Json;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Migration;
+using EML.Core.Minecraft.Mods;
 using EML.Infrastructure.Minecraft.CurseForge;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Mods;
 
 namespace EML.Infrastructure.Minecraft.Migration;
 
@@ -20,6 +20,7 @@ internal static class GtnhExtraModCatalog
             ? CurseForgeFileStateStore.Read(root, manifest) : null;
         var requirements = resolution is null ? manifest.Files : CurseForgeFileStateStore.EffectiveRequirements(manifest, resolution);
         return requirements.Select(file => file.Path).Concat(MigrationDataStore.Read(root, manifest).Files.Select(file => file.Path))
+            .Concat(ModManagementStore.Read(root, manifest).Files.Select(record => record.Baseline.Path))
             .Where(path => path is not null && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             .Select(path => path![prefix.Length..]).Where(GtnhExtraModPolicy.Allows)
             .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -33,8 +34,12 @@ internal static class GtnhExtraModCatalog
         var imported = manifest.Files.Where(file => file.Path is not null).Select(file => file.Path!).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var migrated = MigrationDataStore.Read(source.InstancePath, manifest).Files.Where(file => file.Rule == GtnhExtraModPolicy.Rule)
             .Select(file => file.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var managed = ModManagementStore.Read(source.InstancePath, manifest).Files.ToDictionary(
+            record => LocalModPathPolicy.EnabledPath(record.Baseline.Path!), StringComparer.OrdinalIgnoreCase);
         return Paths(source.GameDirectory, token).Select(path => new MigrationGroup(GtnhExtraModPolicy.GroupPrefix + path,
-            path + (migrated.Contains(prefix + path) ? "（此前手动迁入）" : imported.Contains(prefix + path)
+            path + (managed.TryGetValue(LocalModPathPolicy.EnabledPath(prefix + path), out var record)
+                ? record.State == LocalModState.Removed ? "（已移除记录的外部副本，需先确认）" : "（玩家已登记管理）"
+                : migrated.Contains(prefix + path) ? "（此前手动迁入）" : imported.Contains(prefix + path)
                 ? "（导入时已存在，需确认是自己添加）" : "（导入后新增）"), false)).ToArray();
     }
 
@@ -51,27 +56,14 @@ internal static class GtnhExtraModCatalog
     {
         if (!GtnhExtraModPolicy.Allows(relative)) throw new InvalidDataException("不支持的额外模组路径。");
         var path = MigrationIO.SafePath(game, relative);
-        var before = await MigrationIO.SnapshotAsync(path, token) ?? throw new IOException("选中模组已不存在：" + relative);
-        var ids = ReadIds(path);
-        var after = await MigrationIO.SnapshotAsync(path, token);
-        if (after != before) throw new IOException("读取时模组发生变化：" + relative);
-        return new(relative, before.Size, before.Hash, ids);
+        var snapshot = await ModArchiveInspector.ReadAsync(path, relative, token);
+        return new(relative, snapshot.Size, snapshot.Sha256, snapshot.Metadata.Ids);
     }
 
     /// <summary>按文件名（忽略禁用后缀）、相同内容和已知 modid 拦截重复，不用文件名推断版本兼容性。</summary>
     internal static string? Collision(Mod candidate, IEnumerable<Mod> others, IEnumerable<string> declaredPaths)
-    {
-        var name = Name(candidate.Path);
-        if (declaredPaths.Any(path => Name(path).Equals(name, StringComparison.OrdinalIgnoreCase)))
-            return "新版已有同名模组记录，保留新版来源（即使文件暂时缺失）。";
-        foreach (var other in others)
-        {
-            if (Name(other.Path).Equals(name, StringComparison.OrdinalIgnoreCase)) return "已有同名模组：" + other.Path;
-            if (candidate.Sha256.Equals(other.Sha256, StringComparison.OrdinalIgnoreCase)) return "已有相同内容的模组：" + other.Path;
-            if (candidate.Ids.Intersect(other.Ids, StringComparer.OrdinalIgnoreCase).Any()) return "已有相同 modid 的模组：" + other.Path;
-        }
-        return null;
-    }
+        => ModArchiveInspector.Collision(candidate.Path, candidate.Sha256, candidate.Ids,
+            others.Select(other => (other.Path, (string?)other.Sha256, other.Ids)), declaredPaths);
 
     /// <summary>只遍历 Forge 当前游戏版本使用的位置，不遍历 mods 内的缓存或其他版本目录。</summary>
     private static IReadOnlyList<string> Paths(string game, CancellationToken token)
@@ -94,42 +86,4 @@ internal static class GtnhExtraModCatalog
         return result.Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    /// <summary>沿用 FML 的数组或 modList 对象形式；缺少可读标识时不宣称已经排除重复模组。</summary>
-    private static IReadOnlyList<string> ReadIds(string path)
-    {
-        try
-        {
-            using var archive = ZipFile.OpenRead(path);
-            var entry = archive.GetEntry("mcmod.info");
-            if (entry is null || entry.Length > 1024 * 1024) return [];
-            using var input = entry.Open();
-            using var memory = new MemoryStream();
-            var buffer = new byte[8192];
-            int count;
-            while ((count = input.Read(buffer)) > 0)
-            {
-                if (memory.Length + count > 1024 * 1024) return [];
-                memory.Write(buffer, 0, count);
-            }
-            memory.Position = 0;
-            using var document = JsonDocument.Parse(memory, new JsonDocumentOptions { MaxDepth = 32 });
-            var list = document.RootElement;
-            if (list.ValueKind == JsonValueKind.Object && !list.TryGetProperty("modList", out list)) return [];
-            if (list.ValueKind != JsonValueKind.Array || list.GetArrayLength() > 256) return [];
-            return list.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object &&
-                item.TryGetProperty("modid", out var id) && id.ValueKind == JsonValueKind.String)
-                .Select(item => item.GetProperty("modid").GetString()!)
-                .Where(id => id.Length is > 0 and <= 128 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.'))
-                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray();
-        }
-        catch (JsonException) { return []; }
-        catch (InvalidDataException) { return []; }
-    }
-
-    /// <summary>启用/禁用版本和两个 Forge 模组目录都不能形成重复安装。</summary>
-    private static string Name(string path)
-    {
-        var name = path.Split('/')[^1];
-        return name.EndsWith(".disabled", StringComparison.OrdinalIgnoreCase) ? name[..^9] : name;
-    }
 }

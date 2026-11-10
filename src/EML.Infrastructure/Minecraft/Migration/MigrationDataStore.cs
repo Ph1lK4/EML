@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Migration;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Mods;
 
 namespace EML.Infrastructure.Minecraft.Migration;
 
@@ -55,6 +56,12 @@ internal static class MigrationDataStore
                 throw new InvalidDataException("额外模组迁移记录不能替代原包已有文件来源。");
             if (file.SupersededLocalSha256 is { } prior && (prior.Length != 64 || !prior.All(Uri.IsHexDigit)))
                 throw new InvalidDataException("迁移前的用户选择摘要无效。");
+            if (file.OnlineModBaseline is { } online)
+            {
+                if (file.Rule != GtnhExtraModPolicy.Rule || online.Path != file.Path || online.Size != file.Size)
+                    throw new InvalidDataException("在线模组来源不能应用到其他迁移文件。");
+                ModManagementStore.ValidateOnlineBaseline(online);
+            }
         }
         InstanceImportPaths.ValidateLayout(files.Select(file => (file.Path, false)));
     }
@@ -68,16 +75,19 @@ internal static class MigrationDataStore
             selected.Hashes.TryGetValue("sha256", out var selectedHash) && string.Equals(selectedHash, file.SupersededLocalSha256, StringComparison.OrdinalIgnoreCase))
             .ToDictionary(file => file.Path, StringComparer.OrdinalIgnoreCase);
         var result = original.Where(file => file.Path is null || !migrated.ContainsKey(file.Path)).ToList();
-        result.AddRange(migrated.Values.Select(file => new InstanceFileRequirement
-        {
-            Path = file.Path, Source = InstanceFileSource.Embedded,
-            Origin = file.Rule == GtnhExtraModPolicy.Rule ? InstanceFileOrigin.UserLocalImport : InstanceFileOrigin.MigratedPlayerData,
-            Role = file.Rule == GtnhExtraModPolicy.Rule ? InstanceFileRole.Content : InstanceFileRole.UserData,
-            Required = file.Rule == GtnhExtraModPolicy.Rule, Size = file.Size,
-            Hashes = new Dictionary<string, string> { ["sha256"] = file.Sha256 }
-        }));
+        result.AddRange(migrated.Values.Select(Requirement));
         return result;
     }
+
+    /// <summary>只为旧的本地迁移生成 SHA-256 基线，在线模组继续采用其自身官方完整性要求。</summary>
+    internal static InstanceFileRequirement Requirement(MigratedPlayerFile file) => file.OnlineModBaseline ?? new()
+    {
+        Path = file.Path, Source = InstanceFileSource.Embedded,
+        Origin = file.Rule == GtnhExtraModPolicy.Rule ? InstanceFileOrigin.UserLocalImport : InstanceFileOrigin.MigratedPlayerData,
+        Role = file.Rule == GtnhExtraModPolicy.Rule ? InstanceFileRole.Content : InstanceFileRole.UserData,
+        Required = file.Rule == GtnhExtraModPolicy.Rule, Size = file.Size,
+        Hashes = new Dictionary<string, string> { ["sha256"] = file.Sha256 }
+    };
 
     /// <summary>在用户替换层前加入严格模组基线，使后续明确接受的替换对检查、安装和备份一致生效。</summary>
     internal static IReadOnlyList<InstanceFileRequirement> IncludeExtraMods(IReadOnlyList<InstanceFileRequirement> original, Snapshot snapshot)

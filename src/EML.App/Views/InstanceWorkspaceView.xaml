@@ -1,0 +1,205 @@
+<UserControl x:Class="EML.App.Views.InstanceWorkspaceView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- 索引沿用既有业务命令；功能入口在实例右键菜单中，不再显示内层标签栏。 -->
+  <TabControl SelectedIndex="{Binding SelectedDetailTab}" BorderThickness="0" Background="Transparent"
+              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+    <TabControl.Template>
+      <ControlTemplate TargetType="TabControl">
+        <ContentPresenter x:Name="PART_SelectedContentHost" ContentSource="SelectedContent"
+                          HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                          KeyboardNavigation.TabNavigation="Local"/>
+      </ControlTemplate>
+    </TabControl.Template>
+    <TabItem Header="实例详情">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8">
+      <StackPanel>
+        <TextBlock Text="实例路径" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <TextBox Text="{Binding SelectedInstance.InstancePath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
+        <TextBlock Text="游戏目录" FontWeight="SemiBold" Margin="0,18,0,6"/>
+        <TextBox Text="{Binding SelectedInstance.GameDirectory, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
+        <ItemsControl ItemsSource="{Binding SelectedInstance.Versions}" Margin="0,8,0,0">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate><StackPanel Margin="0,0,0,6">
+              <TextBlock Text="{Binding VersionId, StringFormat=版本配置 ID：{0}}"/>
+              <TextBlock Text="{Binding MetadataPath}" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
+            </StackPanel></DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <TextBlock Text="扫描 / 导入说明（本次检查结果见“文件检查”）" Margin="0,6,0,0"/>
+        <TextBlock Text="{Binding SelectedInstance.WarningDisplay}" Foreground="#9B4D00" TextWrapping="Wrap"/>
+      </StackPanel>
+    </ScrollViewer>
+    </TabItem>
+    <TabItem Header="文件检查">
+      <Grid Margin="8">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <WrapPanel>
+          <Button Style="{StaticResource PrimaryButton}" Content="快速检查" Command="{Binding QuickCheckCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="检查文件存在性和大小，不计算哈希"/>
+          <Button Content="完整检查" Command="{Binding FullCheckCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="读取清单文件并校验所有声明的哈希"/>
+          <Button Content="取消快速检查" Command="{Binding QuickCheckCancelCommand}" Padding="10,4" Margin="0,0,6,6"/>
+          <Button Content="取消完整检查" Command="{Binding FullCheckCancelCommand}" Padding="10,4" Margin="0,0,6,6"/>
+        </WrapPanel>
+        <ScrollViewer Grid.Row="1" MaxHeight="92" VerticalScrollBarVisibility="Auto">
+          <StackPanel>
+            <TextBlock Text="{Binding CheckSummary}" TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding CheckNotes}" TextWrapping="Wrap" Foreground="#9B4D00" Margin="0,4,0,6"/>
+          </StackPanel>
+        </ScrollViewer>
+        <DataGrid Grid.Row="2" ItemsSource="{Binding CheckFiles}" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="文件 / 引用" Binding="{Binding PathDisplay}" Width="2*"/>
+            <DataGridTextColumn Header="要求" Binding="{Binding RequiredDisplay}" Width="55"/>
+            <DataGridTextColumn Header="状态" Binding="{Binding StateDisplay}" Width="115"/>
+            <DataGridTextColumn Header="说明" Binding="{Binding Message}" Width="3*"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </Grid>
+    </TabItem>
+    <TabItem Header="补全实例依赖">
+      <Grid Margin="8">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <WrapPanel>
+          <Button Style="{StaticResource PrimaryButton}" Content="补全实例依赖" Command="{Binding DownloadMissingCommand}" Padding="10,4" Margin="0,0,6,6" ToolTip="按整合包声明下载必需模组及支持的运行依赖；CurseForge 使用内置授权直接下载，受限制文件会提供手动处理提示"/>
+          <Button Content="取消下载 / 复查" Command="{Binding CancelDependencyDownloadCommand}" Padding="10,4" Margin="0,0,6,6"/>
+        </WrapPanel>
+        <!-- 下载错误和完整配置路径可能较长，限制摘要高度并保留滚动阅读。 -->
+        <ScrollViewer Grid.Row="1" MaxHeight="80" VerticalScrollBarVisibility="Auto" Margin="0,0,0,6">
+          <TextBlock Text="{Binding DownloadSummary}" TextWrapping="Wrap"/>
+        </ScrollViewer>
+        <DataGrid Grid.Row="2" ItemsSource="{Binding DownloadFiles}" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="文件 / 引用" Binding="{Binding PathDisplay}" Width="2*"/>
+            <DataGridTextColumn Header="结果" Binding="{Binding StateDisplay}" Width="115"/>
+            <DataGridTextColumn Header="说明" Binding="{Binding Message}" Width="3*"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </Grid>
+    </TabItem>
+    <!-- 保留内部索引，启动设置已移到独立主页面。 -->
+    <TabItem Header="启动设置">
+      <StackPanel Margin="8">
+        <TextBlock Text="启动参数已移到左侧“启动设置”页面。" Margin="0,0,0,12"/>
+        <Button Content="前往启动设置" HorizontalAlignment="Left"
+                Command="{Binding DataContext.OpenLaunchSettingsCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+      </StackPanel>
+    </TabItem>
+    <TabItem Header="运行日志">
+      <Grid Margin="8">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <DockPanel LastChildFill="True">
+            <WrapPanel DockPanel.Dock="Right">
+              <Button Content="取消启动准备" Command="{Binding CancelLaunchPreparationCommand}" Margin="0,0,8,6"/>
+              <Button Content="停止游戏" Command="{Binding StopGameCommand}" Style="{StaticResource DangerButton}" Margin="0,0,0,6" ToolTip="建议优先在游戏内正常退出以保存进度"/>
+            </WrapPanel>
+            <TextBlock Text="{Binding RunningInstanceName, StringFormat=本次实例：{0}}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </DockPanel>
+        <StackPanel Grid.Row="1" Margin="0,4,0,4">
+          <TextBlock Text="{Binding LaunchStatus}" TextWrapping="Wrap"/>
+          <TextBlock Text="{Binding LastExitCode, StringFormat=退出码：{0}, TargetNullValue=退出码：尚无}"/>
+        </StackPanel>
+        <StackPanel Grid.Row="2" Margin="0,0,0,6">
+          <TextBlock Text="完整日志位置（下方仅显示最近 1000 行）" Foreground="{DynamicResource MutedTextBrush}"/>
+          <TextBox Text="{Binding LaunchLogPath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
+        </StackPanel>
+        <ListBox Grid.Row="3" ItemsSource="{Binding LaunchLogLines}" FontFamily="Consolas" FontSize="12" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"/>
+      </Grid>
+    </TabItem>
+    <!-- 保留内部索引，迁移内容已移到 GTNH 主页面，避免改变模组和重命名页的现有绑定。 -->
+    <TabItem Header="GTNH 专区">
+      <StackPanel Margin="8">
+        <TextBlock Text="数据迁移已移到 GTNH 专区。" Margin="0,0,0,12"/>
+        <Button Content="前往 GTNH 数据迁移" HorizontalAlignment="Left"
+                Command="{Binding DataContext.OpenGtnhMigrationCommand, RelativeSource={RelativeSource AncestorType=Window}}"/>
+      </StackPanel>
+    </TabItem>
+    <!-- 模组页只在选中时读取，原有页面索引保持不变。 -->
+    <TabItem Header="模组管理">
+      <Grid Margin="8">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="Auto"/>
+          <RowDefinition Height="*"/>
+          <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <WrapPanel>
+          <Button Content="刷新列表" Command="{Binding RefreshModsCommand}" Padding="8,4" Margin="0,0,6,6"/>
+          <Button Style="{StaticResource PrimaryButton}" Content="添加本地模组" Command="{Binding AddLocalModsCommand}" Padding="8,4" Margin="0,0,6,6"/>
+          <Button Content="启用" Command="{Binding EnableModCommand}" Padding="8,4" Margin="0,0,6,6"/>
+          <Button Content="禁用" Command="{Binding DisableModCommand}" Padding="8,4" Margin="0,0,6,6"/>
+          <Button Content="移入回收区" Command="{Binding RemoveModCommand}" Padding="8,4" Margin="0,0,6,6"/>
+          <Button Content="恢复" Command="{Binding RestoreModCommand}" Padding="8,4" Margin="0,0,6,6" ToolTip="恢复到移除前的启用或禁用状态，不覆盖已有文件"/>
+          <Button Content="接管额外模组" Command="{Binding AdoptModCommand}" Padding="8,4" Margin="0,0,6,6" ToolTip="明确确认自行添加的文件后，才能在 EML 中禁用或移除；原包声明的模组受保护"/>
+          <Button Content="打开文件夹" Command="{Binding OpenModsFolderCommand}" Padding="8,4" Margin="0,0,6,6"/>
+          <Button Content="取消操作" Command="{Binding CancelModOperationCommand}" Padding="8,4" Margin="0,0,6,6"/>
+        </WrapPanel>
+        <DockPanel Grid.Row="1" Margin="0,0,0,6" IsEnabled="{Binding CanInteract}">
+          <TextBlock Text="搜索" VerticalAlignment="Center" Margin="0,0,8,0"/>
+          <ComboBox DockPanel.Dock="Right" ItemsSource="{Binding ModFilters}" SelectedIndex="{Binding ModFilterIndex}" Width="100" Margin="8,0,0,0"/>
+          <TextBlock DockPanel.Dock="Right" Text="{Binding ModCountText}" Foreground="{DynamicResource MutedTextBrush}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+          <TextBox Text="{Binding ModSearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="搜索模组名称、文件名、版本或模组 ID"/>
+        </DockPanel>
+        <DataGrid Grid.Row="2" ItemsSource="{Binding ModFiles}" SelectedItem="{Binding SelectedMod}" IsEnabled="{Binding CanInteract}"
+                  AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionMode="Single"
+                  EnableRowVirtualization="True" EnableColumnVirtualization="True" MinHeight="60">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="模组名称" Binding="{Binding Name}" Width="2*"/>
+            <DataGridTextColumn Header="版本" Binding="{Binding Version}" Width="100"/>
+            <DataGridTextColumn Header="状态" Binding="{Binding StateText}" Width="70"/>
+            <DataGridTextColumn Header="来源" Binding="{Binding SourceDescription}" Width="130"/>
+            <DataGridTextColumn Header="文件名" Binding="{Binding FileName}" Width="2*"/>
+            <DataGridTextColumn Header="提示" Binding="{Binding Problem}" Width="2*"/>
+          </DataGrid.Columns>
+        </DataGrid>
+        <StackPanel Grid.Row="3" Margin="0,6,0,0">
+          <ScrollViewer MaxHeight="54" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+              <TextBlock Text="{Binding ModListStatus}" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
+              <TextBlock Text="{Binding ModStatus}" TextWrapping="Wrap"/>
+            </StackPanel>
+          </ScrollViewer>
+          <Expander Header="列表状态与选中文件详情">
+            <ScrollViewer MaxHeight="100" VerticalScrollBarVisibility="Auto">
+              <StackPanel>
+                <TextBlock Text="{Binding ModCatalogNotes}" TextWrapping="Wrap" Foreground="#9B4D00"/>
+                <TextBox Text="{Binding ModSelectionDetails, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Margin="0,4,0,4"/>
+                <TextBlock Text="启禁或增删额外模组可能影响存档与依赖，识别信息不代表兼容性验证。原包声明的模组仅供查看。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
+                <Button Content="恢复未完成的模组操作" Command="{Binding RecoverModOperationsCommand}" HorizontalAlignment="Left" Padding="8,4" Margin="0,6,0,0"/>
+              </StackPanel>
+            </ScrollViewer>
+          </Expander>
+        </StackPanel>
+      </Grid>
+    </TabItem>
+
+    <TabItem Header="重命名实例">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="8">
+        <StackPanel MaxWidth="640" HorizontalAlignment="Left">
+          <TextBlock Text="为实例起一个容易辨认的名字。" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,8"/>
+          <TextBlock Text="名称会同时用于实例文件夹。正在运行游戏或进行文件操作时不能修改。"
+                     Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,0,0,20"/>
+          <TextBlock Text="实例名称" FontWeight="SemiBold" Margin="0,0,0,8"/>
+          <TextBox Text="{Binding NewName, UpdateSourceTrigger=PropertyChanged}" MaxLength="128"
+                   MinWidth="340" IsEnabled="{Binding CanInteract}" AutomationProperties.Name="新的实例名称"/>
+          <Button Content="保存名称" Command="{Binding RenameCommand}" Style="{StaticResource PrimaryButton}"
+                  HorizontalAlignment="Left" Margin="0,16,0,12"/>
+          <TextBox Text="{Binding StatusText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                   BorderThickness="0" Background="Transparent"/>
+        </StackPanel>
+      </ScrollViewer>
+    </TabItem>
+  </TabControl>
+</UserControl>

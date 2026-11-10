@@ -32,6 +32,9 @@ public sealed record InstanceImportManifest
     /// <summary>仅 EML 备份携带的玩家数据迁移记录；空值不改变既有清单指纹。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<Migration.MigratedPlayerFile>? MigratedPlayerFiles { get; init; }
+    /// <summary>EML 备份携带的额外模组基线及用户启禁/移除选择；旧实例省略时维持原有行为。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<Mods.ManagedModRecord>? ManagedMods { get; init; }
 }
 
 /// <summary>保存解析后的组件 ID 与版本，供后续安装器选择处理方式。</summary>
@@ -47,7 +50,7 @@ public sealed record InstanceComponentRequirement(string Id, string Version)
 public enum InstanceFileSource { Embedded, DirectDownload, CurseForge }
 
 /// <summary>实际采用的内容来源；与旧 Source 的获取方式分开，旧清单未声明时继续按原规则读取。</summary>
-public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport, MigratedPlayerData }
+public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport, MigratedPlayerData, GithubReleaseDownload }
 
 /// <summary>文件用途独立于内容来源；可变配置和启动器状态不会改变原来源摘要的含义。</summary>
 public enum InstanceFileRole { Content, UserConfiguration, LauncherMetadata, DerivedState, UserData, ConsumableMarker }
@@ -59,6 +62,24 @@ public sealed record CurseForgeFileOrigin
     public long FileId { get; init; }
     public long? Size { get; init; }
     public IReadOnlyDictionary<string, string> Hashes { get; init; } = new Dictionary<string, string>();
+}
+
+/// <summary>Modrinth 固定文件身份；与当前文件摘要分开保存，备用下载和备份不丢失平台出处。</summary>
+public sealed record ModrinthFileOrigin
+{
+    public string ProjectId { get; init; } = "";
+    public string VersionId { get; init; } = "";
+    public string FileName { get; init; } = "";
+}
+
+/// <summary>原作者 GitHub 发行文件的固定身份；来源与官方 SHA-256 一起随管理、迁移和备份保留。</summary>
+public sealed record GithubReleaseFileOrigin
+{
+    public string Repository { get; init; } = "";
+    public string Tag { get; init; } = "";
+    public long ReleaseId { get; init; }
+    public long AssetId { get; init; }
+    public string FileName { get; init; } = "";
 }
 
 /// <summary>统一文件需求；CurseForge 未解析时路径和大小可为 null，哈希集合可为空。</summary>
@@ -77,6 +98,12 @@ public sealed record InstanceFileRequirement
     /// <summary>被包内覆盖或用户选择替代的官方固定文件信息，不作为当前内容的校验条件。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CurseForgeFileOrigin? CurseForgeOrigin { get; init; }
+    /// <summary>实际采用或原先记录的 Modrinth 项目、固定版本与文件身份；不参与另一来源的校验。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModrinthFileOrigin? ModrinthOrigin { get; init; }
+    /// <summary>实际采用的原作者发行资产；旧实例省略时保持原始序列化指纹不变。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GithubReleaseFileOrigin? GithubReleaseOrigin { get; init; }
     /// <summary>是否为必需文件；false 的文件留待用户选择是否安装。</summary>
     public bool Required { get; init; } = true;
     /// <summary>未压缩的字节数；未知时为 null。</summary>

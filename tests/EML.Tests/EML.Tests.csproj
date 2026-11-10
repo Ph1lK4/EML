@@ -23,10 +23,21 @@
   <!-- 直接测试生产 ViewModel；这些文件不依赖 WPF，无需启动窗口或复制逻辑。 -->
   <ItemGroup>
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.cs" Link="App\InstancesViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\MainViewModel.cs" Link="App\MainViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\InstanceDownloadsViewModel.cs" Link="App\InstanceDownloadsViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\DownloadCenterViewModel.cs" Link="App\DownloadCenterViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\Services\InstanceCatalogDisplayText.cs" Link="App\InstanceCatalogDisplayText.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\GtnhHubViewModel.cs" Link="App\GtnhHubViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\MinecraftAccountViewModel.cs" Link="App\MinecraftAccountViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Checking.cs" Link="App\InstancesViewModel.Checking.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Launching.cs" Link="App\InstancesViewModel.Launching.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Migration.cs" Link="App\InstancesViewModel.Migration.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Mods.cs" Link="App\InstancesViewModel.Mods.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\OnlineModsViewModel.cs" Link="App\OnlineModsViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\Services\IModIconCache.cs" Link="App\IModIconCache.cs" />
+    <Compile Include="..\..\src\EML.App\Services\ModIconCache.cs" Link="App\ModIconCache.cs" />
+    <Compile Include="..\..\src\EML.App\Services\OnlineModDisplayText.cs" Link="App\OnlineModDisplayText.cs" />
+    <Compile Include="..\..\src\EML.App\Services\IModManagementDialogs.cs" Link="App\IModManagementDialogs.cs" />
     <Compile Include="..\..\src\EML.App\Services\IInstanceMigrationDialogs.cs" Link="App\IInstanceMigrationDialogs.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\JavaSettingsViewModel.cs" Link="App\JavaSettingsViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\IInstanceDialogs.cs" Link="App\IInstanceDialogs.cs" />

@@ -373,3 +373,7 @@ FodyWeavers.xsd
 
 # Developer-only encrypted build credentials; never distribute with the launcher.
 .eml-build/
+
+# Download cache
+# Runtime cache
+cache/

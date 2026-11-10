@@ -17,6 +17,9 @@ internal sealed record MigrationJournal
     public required string GameDirectory { get; init; }
     public required string ManifestFingerprint { get; init; }
     public string? LocalReplacementFingerprint { get; init; }
+    /// <summary>恢复迁移前确认玩家没有随后管理模组，避免撤回仍被管理记录引用的文件。</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModManagementFingerprint { get; init; }
     public required string SourceName { get; init; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public string Status { get; set; } = "Preparing";
@@ -44,6 +47,8 @@ internal static class MigrationJournalStore
             throw new InvalidDataException("迁移日志格式无效。");
         if (journal.LocalReplacementFingerprint is { } replacement && !ValidHash(replacement))
             throw new InvalidDataException("迁移日志中的用户选择指纹无效。");
+        if (journal.ModManagementFingerprint is { } mods && !ValidHash(mods))
+            throw new InvalidDataException("迁移日志中的模组管理指纹无效。");
         var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
         if (manifest.GameDirectory != journal.GameDirectory || EmbeddedFileBaseline.ManifestFingerprint(manifest) != journal.ManifestFingerprint)
             throw new InvalidDataException("迁移日志与当前实例清单不一致，不能自动恢复。");

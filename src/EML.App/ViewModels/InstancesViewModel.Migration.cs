@@ -60,7 +60,7 @@ public partial class InstancesViewModel
     {
         if (!CanMigrate()) return;
         var target = _migrationTarget!;
-        IsBusy = true; SelectedDetailTab = 5; MigrationJournalPath = "";
+        IsBusy = true; MigrationJournalPath = "";
         var revision = ++_transferRevision;
         string? outcome = null;
         try
@@ -110,7 +110,7 @@ public partial class InstancesViewModel
         if (!CanRestoreMigration()) return;
         var instance = SelectedInstance!; var recovery = _migrationRecovery!;
         if (!_migrationDialogs!.ConfirmRestore(instance.Name, recovery)) return;
-        IsBusy = true; SelectedDetailTab = 5;
+        IsBusy = true;
         var revision = ++_transferRevision;
         string? outcome = null;
         try

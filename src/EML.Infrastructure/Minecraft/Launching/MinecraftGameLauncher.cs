@@ -41,6 +41,7 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
             var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
             using var lease = InstanceOperationLease.Acquire(root);
             MigrationJournalStore.EnsureSettled(root);
+            EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
             var plan = await _planner.PrepareForRunAsync(instancePath, settings, progress, cancellationToken).ConfigureAwait(false);
             return await RunPreparedAsync(plan, progress, cancellationToken).ConfigureAwait(false);
         }

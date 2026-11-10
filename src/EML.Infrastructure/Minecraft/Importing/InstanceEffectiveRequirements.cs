@@ -3,6 +3,7 @@ using System.Text.Json;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Minecraft.CurseForge;
 using EML.Infrastructure.Minecraft.Migration;
+using EML.Infrastructure.Minecraft.Mods;
 
 namespace EML.Infrastructure.Minecraft.Importing;
 
@@ -13,7 +14,7 @@ internal static class InstanceEffectiveRequirements
     internal sealed record Snapshot(IReadOnlyList<InstanceFileRequirement> Requirements,
         IReadOnlyList<string> ContentIssues, IReadOnlyList<string> Notes,
         string ManifestFingerprint, InstanceLocalReplacementService.AppliedRequirements Replacements,
-        bool IsCurseForge, string? ResolutionFingerprint, MigrationDataStore.Snapshot Migration);
+        bool IsCurseForge, string? ResolutionFingerprint, MigrationDataStore.Snapshot Migration, ModManagementStore.Snapshot Mods);
 
     /// <summary>只读选取平台固定需求、原包覆盖及用户替换，最后排除 EML 派生状态。</summary>
     internal static Snapshot Build(string root, InstanceImportManifest manifest,
@@ -21,6 +22,7 @@ internal static class InstanceEffectiveRequirements
     {
         InstanceManifestStore.Validate(manifest);
         MigrationJournalStore.EnsureSettled(root);
+        ModOperationJournal.EnsureSettled(root);
         var issues = new List<string>();
         var notes = new List<string>();
         IReadOnlyList<InstanceFileRequirement> files = manifest.Files;
@@ -50,26 +52,32 @@ internal static class InstanceEffectiveRequirements
         }
         var replacements = InstanceLocalReplacementService.ApplyWithSnapshot(root, manifest, files);
         var migration = MigrationDataStore.Read(root, manifest);
-        var effective = MigrationDataStore.Apply(replacements.Requirements, migration)
+        var mods = ModManagementStore.Read(root, manifest);
+        var effective = ModManagementStore.Apply(MigrationDataStore.Apply(replacements.Requirements, migration), mods)
             .Where(file => !InstanceFileChangePolicy.IsDerivedStatePath(file.Path))
             .Select(file => file with { Role = InstanceFileChangePolicy.GetRole(file, manifest.GameDirectory, manifest.SourceFormat) })
             .ToArray();
         // 原始清单及可移植迁移记录已分别验证；此处验证展开后的单一有效视图，不再把迁入模组当成原包文件。
-        InstanceManifestStore.Validate(manifest with { Files = effective, MigratedPlayerFiles = null });
+        InstanceManifestStore.Validate(manifest with { Files = effective, MigratedPlayerFiles = null, ManagedMods = null });
+        if (mods.Files.Count > 0)
+            notes.Add($"已应用 {mods.Files.Count} 项玩家模组管理记录；禁用和主动移除不会被补全撤销，模组兼容性仍需实际验证。");
         return new(effective, issues.Distinct().ToArray(), notes.Distinct().ToArray(),
-            EmbeddedFileBaseline.ManifestFingerprint(manifest), replacements, isCurseForge, Fingerprint(resolution), migration);
+            EmbeddedFileBaseline.ManifestFingerprint(manifest), replacements, isCurseForge, Fingerprint(resolution), migration, mods);
     }
 
     /// <summary>防止安装期间改动清单、平台映射或用户选择后，沿用旧检查结果宣称就绪。</summary>
     internal static void EnsureUnchanged(string root, InstanceImportManifest manifest, Snapshot snapshot)
     {
         MigrationJournalStore.EnsureSettled(root);
+        ModOperationJournal.EnsureSettled(root);
         var current = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
         if (EmbeddedFileBaseline.ManifestFingerprint(current) != snapshot.ManifestFingerprint)
             throw new IOException("实例清单在操作期间发生变化，请重新检查。");
         InstanceLocalReplacementService.EnsureUnchanged(root, manifest, snapshot.Replacements);
         if (MigrationDataStore.Read(root, manifest).LocalFingerprint != snapshot.Migration.LocalFingerprint)
             throw new IOException("玩家数据迁移记录在操作期间发生变化，请重新检查。");
+        if (ModManagementStore.Read(root, manifest).LocalFingerprint != snapshot.Mods.LocalFingerprint)
+            throw new IOException("模组管理选择在操作期间发生变化，请重新检查。");
         if (snapshot.IsCurseForge && Fingerprint(CurseForgeFileStateStore.Read(root, manifest)) != snapshot.ResolutionFingerprint)
             throw new IOException("平台文件来源在操作期间发生变化，请重新检查。");
     }

@@ -16,6 +16,9 @@ internal static class InstanceBackupManifest
         var resolution = manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)
             ? CurseForgeFileStateStore.Read(root, manifest) : null;
         var effective = InstanceEffectiveRequirements.Build(root, manifest, resolution);
+        // 先按稳定身份取可信基线，再保留启禁位置；不能把 .disabled 的新路径写回原包声明。
+        var beforeManagement = Migration.MigrationDataStore.Apply(effective.Replacements.Requirements, effective.Migration)
+            .Where(file => file.Path is not null).ToDictionary(file => file.Path!, StringComparer.OrdinalIgnoreCase);
         var byPath = effective.Requirements.Where(file => file.Path is not null)
             .ToDictionary(file => file.Path!, StringComparer.OrdinalIgnoreCase);
         var byId = resolution?.Files.ToDictionary(entry => (entry.Requirement.ProjectId, entry.Requirement.FileId));
@@ -41,10 +44,15 @@ internal static class InstanceBackupManifest
         // 玩家用途记录独立携带，不能用迁入内容的摘要覆盖原包及官方来源依据。
         // 额外模组的后续显式用户替换也随备份携带；只采用已确认要求，绝不按当前磁盘重新信任内容。
         var migrated = effective.Migration.Files.Select(file => file.Rule == EML.Core.Minecraft.Migration.GtnhExtraModPolicy.Rule &&
-            byPath.TryGetValue(file.Path, out var chosen) && chosen.Origin == InstanceFileOrigin.UserLocalImport
+            beforeManagement.TryGetValue(file.Path, out var chosen) && chosen.Origin == InstanceFileOrigin.UserLocalImport
                 ? file with { Size = chosen.Size!.Value, Sha256 = chosen.Hashes["sha256"] } : file).ToArray();
+        var managed = effective.Mods.Files.Select(file => file with
+        {
+            Baseline = beforeManagement.TryGetValue(file.Baseline.Path!, out var chosen) ? chosen : file.Baseline
+        }).ToArray();
         var backup = manifest with { Files = files,
-            MigratedPlayerFiles = migrated.Length == 0 ? null : migrated };
+            MigratedPlayerFiles = migrated.Length == 0 ? null : migrated,
+            ManagedMods = managed.Length == 0 ? null : managed };
         InstanceManifestStore.Validate(backup);
         return new(manifest, backup, effective);
     }

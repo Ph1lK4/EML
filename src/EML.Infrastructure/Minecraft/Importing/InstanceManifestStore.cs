@@ -93,6 +93,7 @@ internal static class InstanceManifestStore
             throw new InvalidDataException("不支持或损坏的 EML 实例清单。");
         if (manifest.GameDirectory != ".") InstanceImportPaths.Relative(manifest.GameDirectory);
         if (manifest.MigratedPlayerFiles is not null) MigrationDataStore.Validate(manifest, manifest.MigratedPlayerFiles);
+        if (manifest.ManagedMods is not null) Mods.ModManagementStore.Validate(manifest, manifest.ManagedMods);
         var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var component in manifest.Components)
             if (component is null || string.IsNullOrWhiteSpace(component.Id) || string.IsNullOrWhiteSpace(component.Version))
@@ -123,6 +124,8 @@ internal static class InstanceManifestStore
             }
             // 未解析平台引用可以暂缺大小/摘要；实际文件验证阶段再执行来源完整性约束。
             if (file.Origin is { } origin && !Enum.IsDefined(origin)) throw new InvalidDataException("未知的文件内容来源。");
+            if (file.Origin == InstanceFileOrigin.GithubReleaseDownload || file.GithubReleaseOrigin is not null)
+                _ = InstanceFileIntegrity.HashesFor(file);
             if (file.Origin == InstanceFileOrigin.MigratedPlayerData)
             {
                 if (!EML.Core.Minecraft.Migration.GtnhPlayerDataPolicy.IsMigrated(file, manifest.GameDirectory) || file.Required)

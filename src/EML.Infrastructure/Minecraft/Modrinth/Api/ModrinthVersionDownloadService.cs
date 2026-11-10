@@ -48,7 +48,8 @@ public sealed class ModrinthVersionDownloadService
         return new FileDownloadRequest
         {
             DestinationPath = Path.Combine(Path.GetFullPath(destinationDirectory), file.Filename),
-            Urls = [url.AbsoluteUri], ExpectedSize = file.Size, Hashes = hashes
+            Urls = [url.AbsoluteUri], ExpectedSize = file.Size, Hashes = hashes,
+            DisplayName = file.Filename, GroupName = "Modrinth 文件下载"
         };
     }
 

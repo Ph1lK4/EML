@@ -22,6 +22,9 @@ public sealed record MigrationFile(string Group, string SourcePath, string Targe
     /// <summary>说明额外模组的跳过原因；不会被普通“覆盖冲突”开关改变。</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Detail { get; init; }
+    /// <summary>额外在线模组的官方来源随预览固定，复制字节的 SHA-256 不替代其官方摘要。</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public InstanceFileRequirement? OnlineModBaseline { get; init; }
     public string ActionDisplay => Action switch { MigrationFileAction.Copy when Group == "language" => "合并语言项",
         MigrationFileAction.Copy => "复制", MigrationFileAction.Identical => "相同，跳过",
         MigrationFileAction.Skip => "跳过，保留新版模组", _ => "冲突，默认保留新版" };
@@ -39,6 +42,9 @@ public sealed record MigratedPlayerFile(string Path, long Size, string Sha256, s
     /// <summary>本次迁移明确取代的旧用户选择；后续新确认的替换仍可收紧为严格校验。</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? SupersededLocalSha256 { get; init; }
+    /// <summary>新版继续识别在线模组的固定平台身份；旧迁移记录省略时沿用本地基线。</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public InstanceFileRequirement? OnlineModBaseline { get; init; }
 }
 public sealed record MigrationRecoveryInfo(string Id, string Status, DateTimeOffset CreatedAt);
 

@@ -71,6 +71,7 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             token.ThrowIfCancellationRequested();
             var root = ValidateInstance(instancePath);
             Migration.MigrationJournalStore.EnsureSettled(root);
+            EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
             var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
             if (!manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("此安装器只处理 CurseForge 实例。");
@@ -94,6 +95,8 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             if (fallbackCount > 0) notes.Add($"{fallbackCount} 个文件已匹配 Modrinth 同内容来源，保留原版本、文件名和安装目录。");
             var resolvedById = (resolution?.Files ?? []).ToDictionary(file => (file.Requirement.ProjectId, file.Requirement.FileId));
             var effectiveRequirements = snapshot?.Requirements ?? [];
+            var onlinePaths = snapshot is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
+                Mods.ModManagementStore.OnlineDownloadPaths(snapshot.Mods, snapshot.Migration);
             var required = effectiveRequirements.Where(file => file.Required).ToArray();
             var overrideCount = required.Count(file => file.Origin == InstanceFileOrigin.EmbeddedOverride);
             if (overrideCount > 0) notes.Add($"{overrideCount} 个包内覆盖文件使用原包大小与 SHA-256；官方文件信息仅保留为来源记录。");
@@ -109,12 +112,13 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             }, async (file, fileToken) =>
             {
                 var resolved = file.Source == InstanceFileSource.CurseForge
-                    ? resolvedById[(file.ProjectId, file.FileId)] : null;
+                    ? resolvedById.GetValueOrDefault((file.ProjectId, file.FileId)) : null;
                 var effective = file; // 已由来源优先级选择，不能再换回同路径官方需求。
                 InstanceDownloadFileResult? result = null;
                 try
                 {
                     result = await EnsureFileAsync(root, manifest, effective, resolved,
+                        file.Path is not null && onlinePaths.Contains(file.Path),
                         new InlineProgress<FileDownloadProgress>(value => progress?.Report(new(
                             resolved?.ModrinthFallback is not null ? "从 Modrinth 补全同内容文件" : "下载 CurseForge 整合包文件",
                             Volatile.Read(ref completed), required.Length,
@@ -181,7 +185,7 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
 
     /// <summary>先验证现有文件，允许人工放入被限制分发的文件；只下载 API 明确授权且有 SHA-1 的内容。</summary>
     private async Task<InstanceDownloadFileResult?> EnsureFileAsync(string root, InstanceImportManifest manifest,
-        InstanceFileRequirement file, CurseForgeResolvedFile? resolved, IProgress<FileDownloadProgress>? progress,
+        InstanceFileRequirement file, CurseForgeResolvedFile? resolved, bool managedOnline, IProgress<FileDownloadProgress>? progress,
         Action<string> addNote, CancellationToken token)
     {
         try
@@ -207,19 +211,21 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
                     return new(file, InstanceDownloadState.RestoredEmbeddedFile, "已从原始整合包条目恢复，并验证导入时大小及 SHA-256。");
                 return new(file, InstanceDownloadState.MissingEmbeddedFile, "找不到可恢复的原始整合包或条目，请提供原包；不会使用不同内容的官方文件替代。");
             }
-            if (file.Source != InstanceFileSource.CurseForge || resolved is null)
+            if (!managedOnline && (file.Source != InstanceFileSource.CurseForge || resolved is null))
                 return new(file, InstanceDownloadState.Unavailable, "CurseForge 导入清单包含不支持的文件来源。");
+            if (managedOnline) Mods.ModManagementStore.ValidateOnlineBaseline(file);
             if (file.Downloads.Count == 0)
                 return new(file, InstanceDownloadState.Unavailable,
-                    $"作者限制第三方分发或平台未提供下载地址。{resolved.FallbackMessage}请从官方文件页面 {resolved.ManualDownloadUrl} 下载指定版本并放入 {file.Path}，再执行补全。");
-            if (!hashes.ContainsKey("sha1"))
+                    $"作者限制第三方分发或平台未提供下载地址。{resolved?.FallbackMessage}请从官方文件页面 {resolved?.ManualDownloadUrl} 下载指定版本并放入 {file.Path}，再执行补全。");
+            if (!managedOnline && !hashes.ContainsKey("sha1"))
                 return new(file, InstanceDownloadState.Unavailable, "CurseForge 文件缺少 SHA-1，无法校验指定版本。");
             var download = await _downloader.DownloadAsync(new FileDownloadRequest
             {
-                DestinationPath = path, Urls = file.Downloads, ExpectedSize = file.Size, Hashes = hashes
+                DestinationPath = path, Urls = file.Downloads, ExpectedSize = file.Size, Hashes = hashes,
+                DisplayName = file.Path, GroupName = Path.GetFileName(root) + " · CurseForge 补全"
             }, progress, token).ConfigureAwait(false);
-            if (!download.HashVerified) throw new InvalidDataException("下载器未确认 CurseForge 文件 SHA-1。");
-            return new(file, InstanceDownloadState.Downloaded, resolved.ModrinthFallback is null
+            if (!download.HashVerified) throw new InvalidDataException("下载器未确认文件的官方哈希。");
+            return new(file, InstanceDownloadState.Downloaded, managedOnline ? "已按登记的平台来源补全并校验在线模组。" : resolved?.ModrinthFallback is null
                 ? "已下载并校验 CurseForge 固定版本文件。"
                 : "已从 Modrinth 下载同内容文件，并按原 CurseForge 清单哈希校验。");
         }

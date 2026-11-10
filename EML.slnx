@@ -8,6 +8,7 @@
     <Project Path="src/EML.Build.Secrets/EML.Build.Secrets.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/EML.App.Tests/EML.App.Tests.csproj" />
     <Project Path="tests/EML.Tests/EML.Tests.csproj" />
   </Folder>
 </Solution>

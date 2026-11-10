@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using EML.Core.Minecraft;
+using EML.Infrastructure.Minecraft.Mods;
 
 namespace EML.Infrastructure.Minecraft.Importing;
 
@@ -39,9 +40,17 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
             var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
             using var lease = Migration.InstanceOperationLease.Acquire(root);
             Migration.MigrationJournalStore.EnsureSettled(root);
+            ModOperationJournal.EnsureSettled(root);
             var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
-            var baseline = FindBaseline(root, manifest, relativePath);
-            var target = InstanceImportPaths.Within(root, baseline.Path!);
+            // 禁用只改变存放位置；替换记录仍绑定原始文件身份，重新启用后继续生效。
+            var managed = ModManagementStore.Read(root, manifest).Files.SingleOrDefault(file =>
+                string.Equals(ModManagementStore.CurrentPath(file), relativePath, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(file.Baseline.Path, relativePath, StringComparison.OrdinalIgnoreCase));
+            if (managed?.State == EML.Core.Minecraft.Mods.LocalModState.Removed)
+                throw new InvalidOperationException("请先恢复已移除的模组，再确认替换文件。");
+            var baseline = FindBaseline(root, manifest, managed?.Baseline.Path ?? relativePath);
+            var currentPath = managed is null ? baseline.Path! : ModManagementStore.CurrentPath(managed)!;
+            var target = InstanceImportPaths.Within(root, currentPath);
             InstanceImportPaths.EnsureNoLinks(target);
             Replacement replacement;
             using (var input = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read,
@@ -58,7 +67,7 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
                 .Append(replacement).ToArray();
             await WriteAsync(root, manifest, new(1, EmbeddedFileBaseline.ManifestFingerprint(manifest), files),
                 cancellationToken).ConfigureAwait(false);
-            return UseReplacement(baseline, replacement);
+            return UseReplacement(baseline, replacement) with { Path = currentPath };
         }
         finally { _operationLock.Release(); }
     }
@@ -73,6 +82,7 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
     {
         var state = Read(instanceRoot, manifest);
         requirements = Migration.MigrationDataStore.IncludeExtraMods(requirements, Migration.MigrationDataStore.Read(instanceRoot, manifest));
+        requirements = ModManagementStore.IncludeAdditions(requirements, ModManagementStore.Read(instanceRoot, manifest));
         if (state.Files.Count == 0) return new(requirements, state.Fingerprint);
         var byPath = state.Files.ToDictionary(item => item.Path, StringComparer.OrdinalIgnoreCase);
         var applied = requirements.Select(requirement => requirement.Path is not null &&
@@ -144,6 +154,7 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
     private static InstanceImportManifest WithExtraMods(string root, InstanceImportManifest manifest)
     {
         var requirements = Migration.MigrationDataStore.IncludeExtraMods(manifest.Files, Migration.MigrationDataStore.Read(root, manifest));
+        requirements = ModManagementStore.IncludeAdditions(requirements, ModManagementStore.Read(root, manifest));
         return manifest with { Files = requirements };
     }
 

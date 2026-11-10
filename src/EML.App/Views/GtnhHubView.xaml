@@ -1,0 +1,123 @@
+<UserControl x:Class="EML.App.Views.GtnhHubView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <UserControl.Resources><BooleanToVisibilityConverter x:Key="VisibleWhenTrue"/></UserControl.Resources>
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+  <Grid Margin="0,0,0,18">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="280"/></Grid.ColumnDefinitions>
+   <StackPanel Margin="0,0,20,0">
+    <TextBlock Text="GTNH 专区" Style="{StaticResource PageTitle}"/>
+    <TextBlock Text="为下一段长途冒险，准备好工具和行囊。" Style="{StaticResource PageSubtitle}"/>
+   </StackPanel>
+   <StackPanel Grid.Column="1">
+    <TextBlock Text="目标 GTNH 实例" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,6"/>
+    <ComboBox ItemsSource="{Binding Targets}" SelectedItem="{Binding SelectedTarget}" IsEnabled="{Binding CanInteract}" AutomationProperties.Name="GTNH 目标实例">
+     <ComboBox.ItemTemplate><DataTemplate><TextBlock TextTrimming="CharacterEllipsis"><TextBlock.Text><MultiBinding StringFormat="{}{0} · {1}"><Binding Path="Name"/><Binding Path="Version"/></MultiBinding></TextBlock.Text></TextBlock></DataTemplate></ComboBox.ItemTemplate>
+    </ComboBox>
+   </StackPanel>
+  </Grid>
+  <StackPanel Grid.Row="1" Margin="0,0,0,14">
+   <TextBlock Text="{Binding TargetStatus}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+   <DockPanel>
+    <Button DockPanel.Dock="Right" Content="刷新 GTNH 实例" Command="{Binding RefreshTargetsCommand}" Style="{StaticResource QuietButton}"/>
+    <StackPanel Orientation="Horizontal">
+     <Button Content="推荐模组" Command="{Binding ShowRecommendationsCommand}" Margin="0,0,8,0">
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsRecommendations}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+     </Button>
+     <Button Content="数据迁移" Command="{Binding ShowMigrationCommand}">
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsMigration}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+     </Button>
+    </StackPanel>
+   </DockPanel>
+  </StackPanel>
+  <Grid Grid.Row="2" Visibility="{Binding IsRecommendations, Converter={StaticResource VisibleWhenTrue}}">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="260"/><ColumnDefinition Width="14"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <Border Style="{StaticResource CardBorder}" Padding="14">
+    <DockPanel>
+     <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+      <TextBlock Text="适配项目" FontWeight="SemiBold" Margin="0,0,0,10"/>
+      <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanInteract}" ToolTip="搜索名称、用途或项目仓库" AutomationProperties.Name="搜索 GTNH 推荐模组"/>
+     </StackPanel>
+     <Button DockPanel.Dock="Bottom" Content="查看 Wiki 可添加模组指南 ↗" Command="{Binding OpenGuideCommand}" Style="{StaticResource QuietButton}" FontSize="12" Margin="0,8,0,0"/>
+     <ListBox ItemsSource="{Binding Addons}" SelectedItem="{Binding SelectedAddon}" IsEnabled="{Binding CanInteract}"
+       BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
+      <ListBox.ItemTemplate><DataTemplate>
+       <StackPanel Margin="2,8">
+        <TextBlock Text="{Binding Category}" Foreground="{DynamicResource AccentBrush}" FontSize="11" Margin="0,0,0,4"/>
+        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,6"/>
+        <TextBlock Text="{Binding Summary}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap"/>
+       </StackPanel>
+      </DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+    </DockPanel>
+   </Border>
+   <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="20">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+     <StackPanel>
+      <TextBlock Text="{Binding SelectedAddon.Name, TargetNullValue=选择一个适配项目}" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"/>
+      <TextBlock Text="{Binding SelectedAddon.Summary}" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,8,0,12"/>
+      <TextBlock Text="{Binding SelectedAddon.Repository}" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
+      <WrapPanel Margin="0,8,0,16"><Button Content="作者主页 ↗" Command="{Binding OpenAddonWebsiteCommand}" Style="{StaticResource QuietButton}"/><Button Content="刷新发行版本" Command="{Binding RefreshReleasesCommand}" Style="{StaticResource QuietButton}"/></WrapPanel>
+      <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="9" Padding="12">
+       <StackPanel><TextBlock Text="安装前看这里" FontWeight="SemiBold" Margin="0,0,0,6"/>
+        <TextBlock Text="{Binding SelectedAddon.Notes, TargetNullValue=这里收录专门适配 GTNH 的项目。请先选择目标实例，再核对作者的版本说明。}" TextWrapping="Wrap"/>
+       </StackPanel>
+      </Border>
+      <TextBlock Text="发行版本" FontWeight="SemiBold" Margin="0,18,0,8"/>
+      <ComboBox ItemsSource="{Binding Releases}" SelectedItem="{Binding SelectedRelease}" DisplayMemberPath="DisplayName" IsEnabled="{Binding CanInteract}" MaxDropDownHeight="260" AutomationProperties.Name="GTNH 模组发行版本"/>
+      <TextBlock Text="{Binding ReleaseStatus}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,10"/>
+      <TextBlock Text="{Binding SelectedRelease.Problem}" Foreground="{DynamicResource DangerBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
+      <Expander Header="发行说明与文件信息" Margin="0,0,0,12">
+       <StackPanel Margin="0,8,0,0">
+        <TextBlock Text="{Binding SelectedRelease.FileName}" TextWrapping="Wrap"/>
+        <TextBlock Text="{Binding SelectedRelease.Size, StringFormat=大小：{0:N0} 字节}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
+        <TextBlock Text="{Binding SelectedRelease.Published, StringFormat=发布于 {0:yyyy-MM-dd}}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
+        <TextBox Text="{Binding SelectedRelease.Notes, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxHeight="180" Margin="0,8,0,8"/>
+        <Button Content="打开完整发行说明 ↗" Command="{Binding OpenReleaseWebsiteCommand}" Style="{StaticResource QuietButton}" HorizontalAlignment="Left"/>
+       </StackPanel>
+      </Expander>
+      <CheckBox IsChecked="{Binding CompatibilityConfirmed}" IsEnabled="{Binding CanInteract}" Margin="0,4,0,14">
+       <TextBlock Text="我已核对目标 GTNH 版本、Java 要求和前置依赖，确认安装这个版本。" TextWrapping="Wrap"/>
+      </CheckBox>
+      <WrapPanel>
+       <Button Content="下载并安装到所选实例" Command="{Binding InstallCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+       <Button Content="取消下载" Command="{Binding InstallCancelCommand}" Margin="0,0,0,8" Visibility="{Binding IsInstalling, Converter={StaticResource VisibleWhenTrue}}"/>
+      </WrapPanel>
+      <ProgressBar Value="{Binding DownloadPercent, Mode=OneWay}" Maximum="100" Height="4" Margin="0,8,0,8"/>
+      <TextBlock Text="{Binding DownloadText}" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
+      <TextBox Text="{Binding InstallStatus, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0,8"/>
+      <TextBlock Text="安装后的额外模组可在实例的“模组管理”中启用、禁用或移除。原包模组不会被覆盖；服务器游玩请同时核对服务端要求。" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"/>
+     </StackPanel>
+    </ScrollViewer>
+   </Border>
+  </Grid>
+  <Border Grid.Row="2" Style="{StaticResource CardBorder}" Visibility="{Binding IsMigration, Converter={StaticResource VisibleWhenTrue}}">
+   <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <StackPanel>
+     <TextBlock Text="把熟悉的世界，带到新版 GTNH" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"/>
+     <TextBlock Text="上方选中的实例是接收数据的新版。请同时保留旧版实例，先补全并试运行新版，再选择要迁入的数据。" Style="{StaticResource PageSubtitle}" TextWrapping="Wrap" Margin="0,10,0,20"/>
+     <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="10" Padding="16" Margin="0,0,0,18">
+      <StackPanel>
+       <TextBlock Text="1  选择新版实例作为目标" FontWeight="SemiBold" Margin="0,0,0,10"/>
+       <TextBlock Text="2  选择旧版实例，预览存档、地图、服务器记录等数据" TextWrapping="Wrap" Margin="0,0,0,10"/>
+       <TextBlock Text="3  确认迁移范围与冲突，再开始复制" TextWrapping="Wrap"/>
+      </StackPanel>
+     </Border>
+     <TextBlock Text="语言偏好会保留，旧版完整汉化包不会复制到新版。额外模组迁移需单独选择并确认兼容风险；不要直接跨越多个大版本迁移存档。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,18"/>
+     <WrapPanel IsEnabled="{Binding HasTarget}">
+      <Button Content="从旧 GTNH 迁入数据" Command="{Binding Instances.MigratePlayerDataCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+      <Button Content="取消迁移" Command="{Binding Instances.MigratePlayerDataCancelCommand}" Margin="0,0,8,8"/>
+      <Button Content="恢复上次迁移" Command="{Binding Instances.RestoreMigrationCommand}" Margin="0,0,8,8"/>
+      <Button Content="取消恢复预检" Command="{Binding Instances.RestoreMigrationCancelCommand}" Margin="0,0,0,8"/>
+     </WrapPanel>
+     <ProgressBar Value="{Binding Instances.TransferPercent, Mode=OneWay}" Maximum="100" Height="4" Margin="0,12,0,8"/>
+     <TextBlock Text="{Binding Instances.TransferStatus}" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap"/>
+     <TextBox Text="{Binding Instances.MigrationStatus, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0,12"/>
+     <TextBlock Text="迁移记录及备份位置" FontWeight="SemiBold" Margin="0,16,0,8"/>
+     <TextBox Text="{Binding Instances.MigrationJournalPath, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"/>
+    </StackPanel>
+   </ScrollViewer>
+  </Border>
+ </Grid>
+</UserControl>

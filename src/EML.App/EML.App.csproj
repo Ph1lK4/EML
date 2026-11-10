@@ -8,6 +8,7 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <None Update="microsoft-login.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <InternalsVisibleTo Include="EML.App.Tests" />
   </ItemGroup>
 
   <PropertyGroup>
