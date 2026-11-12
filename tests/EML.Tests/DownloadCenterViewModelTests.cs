@@ -1,11 +1,85 @@
 using System.Collections.Concurrent;
 using EML.App.ViewModels;
+using EML.App.Services;
 using EML.Core.Downloads;
 
 namespace EML.Tests;
 
 public sealed class DownloadCenterViewModelTests
 {
+    /// <summary>单个文件控制操作带上固定目标路径，状态竞争和异常不会误报成功。</summary>
+    [Fact]
+    public void FileOperationsNotifySuccessWarningAndFailureWithTargetPath()
+    {
+        var notices = new Notices();
+        var snapshot = Snapshot(DownloadTaskState.Queued);
+        var center = new Center { Snapshots = [snapshot] };
+        using var model = new DownloadCenterViewModel(center, new UiQueue(), notices);
+        model.SelectedTask = Assert.Single(model.Tasks);
+        model.PauseCommand.Execute(null);
+        center.AcceptOperations = false;
+        model.ResumeCommand.Execute(null);
+        center.OperationError = new IOException("任务文件无法访问");
+        model.CancelCommand.Execute(null);
+        Assert.Equal(new[] { OperationNoticeKind.Success, OperationNoticeKind.Warning, OperationNoticeKind.Failure },
+            notices.Items.Select(item => item.Kind));
+        Assert.All(notices.Items, item => Assert.Equal(snapshot.DestinationPath, Assert.Single(item.Paths)));
+        Assert.Contains("任务文件无法访问", notices.Items[^1].Message);
+    }
+
+    /// <summary>设置验证失败、保存成功和磁盘失败均有明确反馈，失败不会污染设置。</summary>
+    [Fact]
+    public void SettingsReportValidationSuccessAndSaveFailure()
+    {
+        const string settingsPath = @"C:\启动器\settings\downloads.json";
+        var notices = new Notices();
+        var center = new Center();
+        using var model = new DownloadCenterViewModel(center, new UiQueue(), notices, settingsPath);
+        model.MaxConcurrentText = "9";
+        model.SaveSettingsCommand.Execute(null);
+        model.MaxConcurrentText = "4";
+        model.SaveSettingsCommand.Execute(null);
+        center.OperationError = new IOException("下载设置文件只读");
+        model.SaveSettingsCommand.Execute(null);
+        Assert.Equal(new[] { OperationNoticeKind.Failure, OperationNoticeKind.Success, OperationNoticeKind.Failure },
+            notices.Items.Select(item => item.Kind));
+        Assert.Equal(1, center.SettingsWrites);
+        Assert.Contains("只读", notices.Items[^1].Message);
+        Assert.Equal(settingsPath, Assert.Single(notices.Items[^1].Paths));
+    }
+
+    /// <summary>重复快照故障只弹一次，恢复后新故障仍会被报告。</summary>
+    [Fact]
+    public void SnapshotFailuresAreDeduplicatedUntilRecovery()
+    {
+        var notices = new Notices();
+        var queue = new UiQueue();
+        var center = new Center { SnapshotError = new IOException("队列暂不可用") };
+        using var model = new DownloadCenterViewModel(center, queue, notices);
+        for (var index = 0; index < 3; index++) { center.Publish(); queue.Drain(); }
+        Assert.Single(notices.Items);
+        center.SnapshotError = null; center.Publish(); queue.Drain();
+        center.SnapshotError = new IOException("新的故障"); center.Publish(); queue.Drain();
+        Assert.Equal(2, notices.Items.Count);
+        Assert.Contains("新的故障", notices.Items[1].Message);
+    }
+
+    /// <summary>文件完成由上层整合包事务汇总，不按后台每个文件制造弹窗。</summary>
+    [Fact]
+    public void BackgroundFileCompletionDoesNotEmitPerFileNotices()
+    {
+        var notices = new Notices();
+        var queue = new UiQueue();
+        var snapshot = Snapshot(DownloadTaskState.Downloading);
+        var center = new Center { Snapshots = [snapshot] };
+        using var model = new DownloadCenterViewModel(center, queue, notices);
+        center.Snapshots = [snapshot with { State = DownloadTaskState.Completed }];
+        center.Publish(); queue.Drain();
+        Assert.Empty(notices.Items);
+        model.ClearFinishedCommand.Execute(null);
+        Assert.Equal(OperationNoticeKind.Success, Assert.Single(notices.Items).Kind);
+    }
+
     /// <summary>页面读取共享设置和已有任务，不因打开页面而启动或暂停下载。</summary>
     [Fact]
     public void OpeningPageReadsCurrentQueueAndSettingsWithoutChangingService()
@@ -300,6 +374,14 @@ public sealed class DownloadCenterViewModelTests
         center.SnapshotError = null; center.Snapshots = [Snapshot(DownloadTaskState.Downloading)];
         center.Publish(); queue.Drain();
         Assert.Single(model.Tasks);
+    }
+
+    /// <summary>只记录最终通知，不启动真实窗口。</summary>
+    private sealed class Notices : IOperationNotifications
+    {
+        public List<OperationNotice> Items { get; } = [];
+        /// <summary>保存结果种类、原因和目标路径。</summary>
+        public void Report(OperationNotice notice) => Items.Add(notice);
     }
 
     /// <summary>构造固定大小的内存任务，测试无需创建真实文件或访问网络。</summary>

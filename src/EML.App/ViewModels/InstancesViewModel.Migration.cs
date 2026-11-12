@@ -38,7 +38,11 @@ public partial class InstancesViewModel
         }
         catch (Exception ex)
         {
-            if (revision == _migrationSelectionRevision) MigrationStatus = "迁移信息读取失败：" + ex.Message;
+            if (revision == _migrationSelectionRevision)
+            {
+                MigrationStatus = "迁移信息读取失败：" + ex.Message;
+                if (!IsBusy) _notifications.Failure("迁移信息读取失败", ex, instance.InstancePath);
+            }
         }
         finally { if (revision == _migrationSelectionRevision) NotifyMigrationCommands(); }
     }
@@ -63,6 +67,8 @@ public partial class InstancesViewModel
         IsBusy = true; MigrationJournalPath = "";
         var revision = ++_transferRevision;
         string? outcome = null;
+        string? sourcePath = null;
+        var outcomeKind = OperationNoticeKind.Cancelled;
         try
         {
             MigrationStatus = "正在查找其他 GTNH 实例……";
@@ -73,9 +79,15 @@ public partial class InstancesViewModel
                 try { if (await _migration!.InspectAsync(instance.InstancePath, token) is { } source) sources.Add(source); }
                 catch (Exception ex) when (ex is not OperationCanceledException) { /* 单个无效候选不影响其他实例。 */ }
             }
-            if (sources.Count == 0) { outcome = "需要同时保留旧版和新版两个本地 GTNH 实例。请先导入另一个实例。"; return; }
+            if (sources.Count == 0)
+            {
+                outcomeKind = OperationNoticeKind.Warning;
+                outcome = "需要同时保留旧版和新版两个本地 GTNH 实例。请先导入另一个实例。";
+                return;
+            }
             var choice = _migrationDialogs!.ChooseSource(target, sources);
             if (choice is null) { outcome = "已取消，实例未修改。"; return; }
+            sourcePath = choice.Source.InstancePath;
             var groups = await _migration!.GetGroupsAsync(choice.Source.InstancePath, choice.Mode, token);
             var selection = _migrationDialogs.ChooseGroups(choice.Source, target, groups);
             if (selection is null) { outcome = "已取消，实例未修改。"; return; }
@@ -91,15 +103,22 @@ public partial class InstancesViewModel
             var result = await _migration.MigrateAsync(plan, overwrite.Value, MigrationProgress(revision), token);
             MigrationJournalPath = result.JournalPath;
             outcome = $"{string.Join("\n", result.Messages)}\n复制 {result.CopiedFiles} 个文件，跳过 {result.SkippedFiles} 个文件。";
+            outcomeKind = result.Status is "Completed" or "NoChanges" ? OperationNoticeKind.Success : OperationNoticeKind.Warning;
         }
         catch (OperationCanceledException) { outcome = "迁移已取消；若提交已开始，会先尝试恢复。"; }
-        catch (Exception ex) { outcome = "迁移未完成：" + ex.Message; }
+        catch (Exception ex) { outcomeKind = OperationNoticeKind.Failure; outcome = "迁移未完成：" + ex.Message; }
         finally
         {
             ++_transferRevision;
             await LoadMigrationStateAsync(SelectedInstance);
             if (outcome is not null) MigrationStatus = outcome;
             IsBusy = false;
+            if (outcome is not null)
+                _notifications.Report(CreateOperationNotice(outcomeKind, outcomeKind switch
+                {
+                    OperationNoticeKind.Success => "实例数据迁移完成", OperationNoticeKind.Cancelled => "实例数据迁移已取消",
+                    _ => "实例数据迁移未完成"
+                }, outcome, [sourcePath, target.InstancePath, MigrationJournalPath]));
         }
     }
 
@@ -113,20 +132,28 @@ public partial class InstancesViewModel
         IsBusy = true;
         var revision = ++_transferRevision;
         string? outcome = null;
+        var outcomeKind = OperationNoticeKind.Cancelled;
         try
         {
             ClearCheckResults();
             var result = await _migration!.RestoreAsync(instance.InstancePath, recovery.Id, MigrationProgress(revision), token);
             outcome = string.Join("\n", result.Messages); MigrationJournalPath = result.JournalPath;
+            outcomeKind = result.Status is "RolledBack" or "NoChanges" ? OperationNoticeKind.Success : OperationNoticeKind.Warning;
         }
         catch (OperationCanceledException) { outcome = "已取消恢复预检，实例未修改。"; }
-        catch (Exception ex) { outcome = "恢复未完成：" + ex.Message; }
+        catch (Exception ex) { outcomeKind = OperationNoticeKind.Failure; outcome = "恢复未完成：" + ex.Message; }
         finally
         {
             ++_transferRevision;
             await LoadMigrationStateAsync(SelectedInstance);
             if (outcome is not null) MigrationStatus = outcome;
             IsBusy = false;
+            if (outcome is not null)
+                _notifications.Report(CreateOperationNotice(outcomeKind, outcomeKind switch
+                {
+                    OperationNoticeKind.Success => "迁移恢复完成", OperationNoticeKind.Cancelled => "迁移恢复已取消",
+                    _ => "迁移恢复仍需处理"
+                }, outcome, [instance.InstancePath, MigrationJournalPath]));
         }
     }
 

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EML.App.Services;
 using EML.Core.Downloads;
 
 namespace EML.App.ViewModels;
@@ -12,10 +13,13 @@ public sealed partial class DownloadCenterViewModel : ObservableObject, IDisposa
     private const int MaximumVisibleTasks = 500;
     private readonly IDownloadTaskCenter _center;
     private readonly SynchronizationContext _context;
+    private readonly IOperationNotifications _notifications;
+    private readonly string? _settingsPath;
     private readonly Dictionary<Guid, DownloadTaskRow> _rows = [];
     private int _refreshQueued;
     private int _disposed;
     private bool _hasFinishedTasks;
+    private bool _snapshotFailureReported;
 
     [ObservableProperty] private string maxConcurrentText;
     [ObservableProperty] private string rateLimitKiBText;
@@ -32,9 +36,12 @@ public sealed partial class DownloadCenterViewModel : ObservableObject, IDisposa
     public bool CanInteract => Volatile.Read(ref _disposed) == 0;
 
     /// <summary>必须在界面线程创建，或显式提供界面同步上下文；构造不暂停或启动任务。</summary>
-    public DownloadCenterViewModel(IDownloadTaskCenter center, SynchronizationContext? context = null)
+    public DownloadCenterViewModel(IDownloadTaskCenter center, SynchronizationContext? context = null,
+        IOperationNotifications? notifications = null, string? settingsPath = null)
     {
         _center = center;
+        _notifications = notifications ?? NullOperationNotifications.Instance;
+        _settingsPath = settingsPath;
         _context = context ?? SynchronizationContext.Current ??
             throw new InvalidOperationException("下载中心需要界面线程的同步上下文。");
         var settings = center.Settings;
@@ -98,8 +105,15 @@ public sealed partial class DownloadCenterViewModel : ObservableObject, IDisposa
                 .Sum(task => Math.Max(0, task.BytesPerSecond))) + "/s";
             OnPropertyChanged(nameof(HasTasks));
             NotifyCommands();
+            _snapshotFailureReported = false;
         }
-        catch (Exception ex) { ActionStatus = "读取下载队列失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            ActionStatus = "读取下载队列失败：" + ex.Message;
+            // 下载进度持续触发刷新；同一段故障只提示一次，恢复后才重新允许报告。
+            if (!_snapshotFailureReported) _notifications.Failure("读取下载队列失败", ex);
+            _snapshotFailureReported = true;
+        }
     }
 
     /// <summary>切换选中任务时显示其实际优先级，不随每次进度刷新覆盖未应用的选择。</summary>
@@ -118,17 +132,18 @@ public sealed partial class DownloadCenterViewModel : ObservableObject, IDisposa
     {
         if (!CanInteract) return;
         if (!int.TryParse(MaxConcurrentText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count is < 1 or > 8)
-        { SettingsStatus = "并发下载数请填写 1 到 8 的整数。"; return; }
+        { SettingsStatus = "并发下载数请填写 1 到 8 的整数。"; _notifications.Failure("下载设置未保存", SettingsStatus); return; }
         if (!decimal.TryParse(RateLimitKiBText.Trim(), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var limit) ||
             limit is < 0 or > 1048576 || limit * 1024 != decimal.Truncate(limit * 1024))
-        { SettingsStatus = "限速请填写 0 到 1048576 KiB/s，最小单位为 1 字节；0 表示不限速。"; return; }
+        { SettingsStatus = "限速请填写 0 到 1048576 KiB/s，最小单位为 1 字节；0 表示不限速。"; _notifications.Failure("下载设置未保存", SettingsStatus); return; }
         try
         {
             _center.UpdateSettings(new() { MaxConcurrentDownloads = count, BytesPerSecond = (long)(limit * 1024) });
             SettingsStatus = limit == 0 ? $"已保存：最多同时下载 {count} 个文件，不限速。" :
                 $"已保存：最多同时下载 {count} 个文件，共享限速 {limit.ToString(CultureInfo.InvariantCulture)} KiB/s。";
+            _notifications.Success("下载设置已保存", SettingsStatus, _settingsPath);
         }
-        catch (Exception ex) { SettingsStatus = "保存下载设置失败：" + ex.Message; }
+        catch (Exception ex) { SettingsStatus = "保存下载设置失败：" + ex.Message; _notifications.Failure("保存下载设置失败", ex, _settingsPath); }
     }
 
     /// <summary>只暂停正在传输或等待的文件，校验阶段不发起新的暂停请求。</summary>
@@ -189,8 +204,15 @@ public sealed partial class DownloadCenterViewModel : ObservableObject, IDisposa
     /// <summary>统一处理任务状态竞争和服务错误，命令不假设任务必然接受操作。</summary>
     private void Perform(Func<bool> operation, string success)
     {
-        try { ActionStatus = operation() ? success : "任务状态已改变，请根据最新列表重新选择操作。"; }
-        catch (Exception ex) { ActionStatus = "操作未完成：" + ex.Message; }
+        var path = SelectedTask?.DestinationPath;
+        try
+        {
+            var accepted = operation();
+            ActionStatus = accepted ? success : "任务状态已改变，请根据最新列表重新选择操作。";
+            if (accepted) _notifications.Success("下载任务操作完成", ActionStatus, path);
+            else _notifications.Warning("下载任务操作未执行", ActionStatus, path);
+        }
+        catch (Exception ex) { ActionStatus = "操作未完成：" + ex.Message; _notifications.Failure("下载任务操作失败", ex, path); }
         RefreshSnapshot();
     }
 
@@ -198,8 +220,8 @@ public sealed partial class DownloadCenterViewModel : ObservableObject, IDisposa
     private void PerformGlobal(Action operation, string success)
     {
         if (!CanInteract) return;
-        try { operation(); ActionStatus = success; }
-        catch (Exception ex) { ActionStatus = "操作未完成：" + ex.Message; }
+        try { operation(); ActionStatus = success; _notifications.Success("下载中心操作完成", ActionStatus); }
+        catch (Exception ex) { ActionStatus = "操作未完成：" + ex.Message; _notifications.Failure("下载中心操作失败", ex); }
         RefreshSnapshot();
     }
 

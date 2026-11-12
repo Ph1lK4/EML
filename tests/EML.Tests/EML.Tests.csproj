@@ -28,6 +28,7 @@
     <Compile Include="..\..\src\EML.App\ViewModels\DownloadCenterViewModel.cs" Link="App\DownloadCenterViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\InstanceCatalogDisplayText.cs" Link="App\InstanceCatalogDisplayText.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\GtnhHubViewModel.cs" Link="App\GtnhHubViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\ViewModels\GtnhPackDownloadViewModel.cs" Link="App\GtnhPackDownloadViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\MinecraftAccountViewModel.cs" Link="App\MinecraftAccountViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Checking.cs" Link="App\InstancesViewModel.Checking.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.Launching.cs" Link="App\InstancesViewModel.Launching.cs" />
@@ -42,6 +43,7 @@
     <Compile Include="..\..\src\EML.App\ViewModels\JavaSettingsViewModel.cs" Link="App\JavaSettingsViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\IInstanceDialogs.cs" Link="App\IInstanceDialogs.cs" />
     <Compile Include="..\..\src\EML.App\Services\BoundedLaunchProgress.cs" Link="App\BoundedLaunchProgress.cs" />
+    <Compile Include="..\..\src\EML.App\Services\IOperationNotifications.cs" Link="App\IOperationNotifications.cs" />
   </ItemGroup>
 
   <ItemGroup>

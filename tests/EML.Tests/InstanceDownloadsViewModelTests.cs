@@ -1,4 +1,5 @@
 using EML.App.ViewModels;
+using EML.App.Services;
 using EML.Core.Downloads;
 using EML.Core.Minecraft.Catalog;
 
@@ -7,6 +8,82 @@ namespace EML.Tests;
 /// <summary>使用受控目录与安装委托测试下载页面，不访问网络、文件系统或真实实例。</summary>
 public sealed class InstanceDownloadsViewModelTests
 {
+    /// <summary>自动打开目录不弹成功提示；用户显式搜索只报告一次查询结果。</summary>
+    [Fact]
+    public async Task ExplicitSearchNotifiesWithoutDuplicatingAutomaticLoads()
+    {
+        await using var fixture = new Fixture();
+        fixture.ViewModel.SetActive(true);
+        await fixture.ViewModel.SearchTask;
+        Assert.Empty(fixture.Notices.Items);
+        await fixture.ViewModel.SearchCommand.ExecuteAsync(null);
+        var notice = Assert.Single(fixture.Notices.Items);
+        Assert.Equal(OperationNoticeKind.Success, notice.Kind);
+        Assert.Contains("搜索", notice.Title);
+        Assert.Contains("1", notice.Message);
+    }
+
+    /// <summary>当前目录查询失败保留原因，过期请求失败不能打断新页面。</summary>
+    [Fact]
+    public async Task SearchFailureNotifiesButStaleFailureDoesNot()
+    {
+        await using var fixture = new Fixture();
+        var pending = Signal<InstanceCatalogPage>();
+        fixture.Catalog.Search = (_, _) => pending.Task;
+        fixture.ViewModel.SetActive(true);
+        var stale = fixture.ViewModel.SearchTask;
+        fixture.Catalog.Search = (_, _) => Task.FromException<InstanceCatalogPage>(new IOException("目录服务不可达"));
+        await fixture.ViewModel.SearchCommand.ExecuteAsync(null);
+        pending.SetException(new IOException("旧页面故障"));
+        await stale;
+        var notice = Assert.Single(fixture.Notices.Items);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("目录服务不可达", notice.Message);
+        Assert.DoesNotContain("旧页面", notice.Message);
+    }
+
+    /// <summary>安装返回的说明不用于推测成功，由宿主汇总真实的导入及补全结果。</summary>
+    [Fact]
+    public async Task InstallResultTextDoesNotGenerateDuplicateOrFalseSuccess()
+    {
+        await using var fixture = new Fixture();
+        fixture.Install = (_, _, _) => Task.FromResult("实例已导入，但补全失败。");
+        await ActivateAndSelectAsync(fixture.ViewModel);
+        await Task.WhenAll(fixture.ViewModel.VersionsTask, fixture.ViewModel.DetailsTask);
+        await fixture.ViewModel.InstallCommand.ExecuteAsync(null);
+        Assert.Empty(fixture.Notices.Items);
+        Assert.Contains("补全失败", fixture.ViewModel.InstallStatus);
+    }
+
+    /// <summary>安装入口真正抛出异常时显示失败，并保留原始失败原因。</summary>
+    [Fact]
+    public async Task InstallExceptionNotifiesFailure()
+    {
+        await using var fixture = new Fixture();
+        fixture.Install = (_, _, _) => Task.FromException<string>(new IOException("缓存目录无法访问"));
+        await ActivateAndSelectAsync(fixture.ViewModel);
+        await Task.WhenAll(fixture.ViewModel.VersionsTask, fixture.ViewModel.DetailsTask);
+        await fixture.ViewModel.InstallCommand.ExecuteAsync(null);
+        var notice = Assert.Single(fixture.Notices.Items);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("缓存目录无法访问", notice.Message);
+    }
+
+    /// <summary>介绍自动加载失败可见；用户刷新成功独立报告且不会重复查询目录。</summary>
+    [Fact]
+    public async Task DescriptionFailureAndExplicitRecoveryNotifyResults()
+    {
+        await using var fixture = new Fixture();
+        fixture.Catalog.Details = (_, _) => Task.FromException<InstanceCatalogProject>(new IOException("介绍服务不可达"));
+        await ActivateAndSelectAsync(fixture.ViewModel);
+        await Task.WhenAll(fixture.ViewModel.VersionsTask, fixture.ViewModel.DetailsTask);
+        fixture.Catalog.Details = (project, _) => Task.FromResult(project with { Description = "恢复的介绍" });
+        await fixture.ViewModel.RefreshDescriptionCommand.ExecuteAsync(null);
+        Assert.Equal(new[] { OperationNoticeKind.Failure, OperationNoticeKind.Success }, fixture.Notices.Items.Select(item => item.Kind));
+        Assert.Contains("介绍服务不可达", fixture.Notices.Items[0].Message);
+        Assert.Single(fixture.Catalog.Searches);
+    }
+
     /// <summary>构造和隐藏时修改筛选均不联网，显式激活才请求目录。</summary>
     [Fact]
     public async Task HiddenPageDoesNotQueryCatalog()
@@ -697,6 +774,7 @@ public sealed class InstanceDownloadsViewModelTests
     private sealed class Fixture : IAsyncDisposable
     {
         public Catalog Catalog { get; } = new();
+        public Notices Notices { get; } = new();
         public InstanceDownloadsViewModel ViewModel { get; }
         public Func<InstanceCatalogRelease, IProgress<FileDownloadProgress>, CancellationToken, Task<string>> Install { get; set; } =
             (_, _, _) => Task.FromResult("实例已导入。");
@@ -710,10 +788,18 @@ public sealed class InstanceDownloadsViewModelTests
         {
             InstallCalls++; InstallToken = token;
             return Install(release, progress, token);
-        }, () => CanModify, openWebsite: Websites.Add);
+        }, () => CanModify, openWebsite: Websites.Add, notifications: Notices);
 
         /// <summary>测试退出后等待所有已登记请求和安装，避免残留异步回调。</summary>
         public async ValueTask DisposeAsync() => await ViewModel.StopAsync();
+    }
+
+    /// <summary>捕获界面请求的结果通知，不显示真实弹窗。</summary>
+    private sealed class Notices : IOperationNotifications
+    {
+        public List<OperationNotice> Items { get; } = [];
+        /// <summary>按顺序保留报告，用于验证单次反馈和过期结果过滤。</summary>
+        public void Report(OperationNotice notice) => Items.Add(notice);
     }
 
     /// <summary>保存版本请求完整参数，用于核对筛选和取消令牌。</summary>

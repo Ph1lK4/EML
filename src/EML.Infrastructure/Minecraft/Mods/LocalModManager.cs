@@ -38,6 +38,10 @@ public sealed class LocalModManager : ILocalModManager, IOnlineModRegistrar
     {
         ArgumentNullException.ThrowIfNull(requirement);
         ModManagementStore.ValidateOnlineBaseline(requirement);
+        // GitHub ZIP 仅供独立资源安装器使用；放开来源模型后不能把资源包送入模组管理目录。
+        if (requirement.Origin == InstanceFileOrigin.GithubReleaseDownload &&
+            !requirement.GithubReleaseOrigin!.FileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("GitHub 资源 ZIP 不能作为模组安装，请使用资源包或光影页面。");
         // 固定集合快照，调用者在等待实例锁时修改原集合也不会改变本次授权内容。
         return AddCoreAsync(instancePath, sourcePath, requirement with
         {

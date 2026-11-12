@@ -16,6 +16,7 @@ public partial class InstancesViewModel
     private int _modScheduleRevision;
     private bool _modsNeedReload;
     private bool _modPageClosing;
+    private bool _automaticModRefresh;
 
     [ObservableProperty] private IReadOnlyList<LocalModEntry> modFiles = [];
     [ObservableProperty] private LocalModEntry? selectedMod;
@@ -117,7 +118,9 @@ public partial class InstancesViewModel
             await previous;
         if (revision != _modScheduleRevision || _modPageClosing || !_modsNeedReload ||
             SelectedDetailTab != 6 || !CanReadMods()) return;
-        await RefreshModsCommand.ExecuteAsync(null);
+        _automaticModRefresh = true;
+        try { await RefreshModsCommand.ExecuteAsync(null); }
+        finally { _automaticModRefresh = false; }
     }
 
     /// <summary>关闭窗口后不再启动排队扫描，并等待当前读取任务安全结束。</summary>
@@ -161,13 +164,34 @@ public partial class InstancesViewModel
     {
         if (!CanReadMods()) return;
         var instance = SelectedInstance!; var revision = _modSelectionRevision;
+        var automatic = _automaticModRefresh;
         IsBusy = true; IsManagingMods = true;
-        try { await LoadModCatalogAsync(instance, revision, token); }
+        try
+        {
+            var error = await LoadModCatalogAsync(instance, revision, token);
+            if (!IsCurrentModSelection(instance, revision)) return;
+            if (error is OperationCanceledException)
+            {
+                if (!automatic) _notifications.Cancelled("模组列表读取已取消", ModListStatus, instance.GameDirectory);
+            }
+            else if (error is not null) _notifications.Failure("模组列表读取失败", error, instance.GameDirectory);
+            else if (!automatic)
+            {
+                var details = ModListStatus + (ModCatalogNotes.Length == 0 ? "" : "\n" + ModCatalogNotes);
+                var problems = _allModFiles.Where(mod => !string.IsNullOrWhiteSpace(mod.Problem)).ToArray();
+                if (problems.Length > 0 || ModCatalogNotes.Length > 0)
+                    _notifications.Warning("模组列表已读取，部分内容需注意", details + "\n" +
+                        string.Join("\n", problems.Select(mod => mod.Path + "：" + mod.Problem)),
+                        [instance.GameDirectory, .. problems.Select(mod => System.IO.Path.Combine(instance.InstancePath,
+                            (mod.CurrentPath ?? mod.Path).Replace('/', System.IO.Path.DirectorySeparatorChar)))]);
+                else _notifications.Success("模组列表已刷新", details, instance.GameDirectory);
+            }
+        }
         finally { IsManagingMods = false; IsBusy = false; }
     }
 
     /// <summary>发布完整目录快照；读取失败清空旧快照，避免对过期条目继续操作。</summary>
-    private async Task LoadModCatalogAsync(MinecraftInstance instance, int revision, CancellationToken token)
+    private async Task<Exception?> LoadModCatalogAsync(MinecraftInstance instance, int revision, CancellationToken token)
     {
         if (IsCurrentModSelection(instance, revision)) ModListStatus = "正在读取模组信息……";
         try
@@ -175,18 +199,20 @@ public partial class InstancesViewModel
             token.ThrowIfCancellationRequested();
             var catalog = await _localMods!.ListAsync(instance.InstancePath, token);
             token.ThrowIfCancellationRequested();
-            if (!IsCurrentModSelection(instance, revision)) return;
+            if (!IsCurrentModSelection(instance, revision)) return null;
             _allModFiles = catalog.Files; ApplyModFilter();
             ModListStatus = $"已启用 {catalog.Files.Count(mod => mod.State == LocalModState.Enabled)}，" +
                 $"已禁用 {catalog.Files.Count(mod => mod.State == LocalModState.Disabled)}，" +
                 $"已移除 {catalog.Files.Count(mod => mod.State == LocalModState.Removed)}。";
             ModCatalogNotes = string.Join("\n", catalog.Notes);
+            return null;
         }
         catch (Exception ex)
         {
-            if (!IsCurrentModSelection(instance, revision)) return;
+            if (!IsCurrentModSelection(instance, revision)) return null;
             _allModFiles = []; ApplyModFilter(); ModCatalogNotes = "";
             ModListStatus = ex is OperationCanceledException ? "已取消读取，可点击刷新列表重试。" : "模组列表读取失败：" + ex.Message;
+            return ex;
         }
         finally
         {
@@ -211,7 +237,12 @@ public partial class InstancesViewModel
             paths = _modDialogs!.ChooseModFiles();
             if (paths.Count == 0 || !_modDialogs.ConfirmAdd(instance, paths)) return;
         }
-        catch (Exception ex) { ModStatus = "无法选择本地模组：" + ex.Message; return; }
+        catch (Exception ex)
+        {
+            ModStatus = "无法选择本地模组：" + ex.Message;
+            _notifications.Failure("本地模组选择失败", ex, instance.GameDirectory);
+            return;
+        }
         await RunModMutationAsync(instance, "正在添加本地模组……", async cancellation =>
         {
             var added = 0; var failures = new List<string>();
@@ -220,11 +251,12 @@ public partial class InstancesViewModel
                 cancellation.ThrowIfCancellationRequested();
                 try { await _localMods!.AddAsync(instance.InstancePath, path, cancellation); ++added; }
                 catch (Exception ex) when (ex is not OperationCanceledException)
-                { failures.Add(System.IO.Path.GetFileName(path) + "：" + ex.Message); }
+                { failures.Add(path + "：" + ex.Message); }
             }
-            return $"已添加 {added} / {paths.Count} 个模组。" +
-                (failures.Count == 0 ? "" : "\n未添加：" + string.Join("\n", failures.Take(5)));
-        }, token);
+            return new ModMutationOutcome($"已添加 {added} / {paths.Count} 个模组。" +
+                (failures.Count == 0 ? "" : "\n未添加：" + string.Join("\n", failures)),
+                failures.Count == 0 ? OperationNoticeKind.Success : added > 0 ? OperationNoticeKind.Warning : OperationNoticeKind.Failure);
+        }, token, paths);
     }
 
     /// <summary>明确确认后接管一个额外文件，不自动承认目录中所有外部模组。</summary>
@@ -234,11 +266,16 @@ public partial class InstancesViewModel
         if (!CanAdoptMod()) return;
         var instance = SelectedInstance!; var mod = SelectedMod!;
         try { if (!_modDialogs!.ConfirmAdopt(instance, mod)) return; }
-        catch (Exception ex) { ModStatus = "未确认接管模组：" + ex.Message; return; }
+        catch (Exception ex)
+        {
+            ModStatus = "未确认接管模组：" + ex.Message;
+            _notifications.Failure("接管模组未完成", ex, instance.GameDirectory, mod.Path);
+            return;
+        }
         await RunModMutationAsync(instance, "正在登记额外模组……", async cancellation =>
         {
             await _localMods!.AdoptAsync(instance.InstancePath, mod.Path, cancellation);
-            return "已接管：" + mod.FileName;
+            return new ModMutationOutcome("已接管：" + mod.FileName);
         }, token);
     }
 
@@ -257,7 +294,7 @@ public partial class InstancesViewModel
         return RunModMutationAsync(instance, enabled ? "正在启用模组……" : "正在禁用模组……", async cancellation =>
         {
             await _localMods!.SetEnabledAsync(instance.InstancePath, mod.Path, enabled, cancellation);
-            return (enabled ? "已启用：" : "已禁用：") + mod.FileName;
+            return new ModMutationOutcome((enabled ? "已启用：" : "已禁用：") + mod.FileName);
         }, token);
     }
 
@@ -268,11 +305,16 @@ public partial class InstancesViewModel
         if (!CanRemoveMod()) return;
         var instance = SelectedInstance!; var mod = SelectedMod!;
         try { if (!_modDialogs!.ConfirmRemove(instance, mod)) return; }
-        catch (Exception ex) { ModStatus = "未确认移除模组：" + ex.Message; return; }
+        catch (Exception ex)
+        {
+            ModStatus = "未确认移除模组：" + ex.Message;
+            _notifications.Failure("移除模组未完成", ex, instance.GameDirectory, mod.Path);
+            return;
+        }
         await RunModMutationAsync(instance, "正在移入模组回收区……", async cancellation =>
         {
             await _localMods!.RemoveAsync(instance.InstancePath, mod.Path, cancellation);
-            return "已移入回收区：" + mod.FileName + "。可切换到“已移除”筛选后恢复。";
+            return new ModMutationOutcome("已移入回收区：" + mod.FileName + "。可切换到“已移除”筛选后恢复。");
         }, token);
     }
 
@@ -285,7 +327,7 @@ public partial class InstancesViewModel
         await RunModMutationAsync(instance, "正在恢复模组……", async cancellation =>
         {
             await _localMods!.RestoreAsync(instance.InstancePath, mod.Path, cancellation);
-            return "已恢复：" + mod.FileName + "。保持移除前的启用或禁用状态。";
+            return new ModMutationOutcome("已恢复：" + mod.FileName + "。保持移除前的启用或禁用状态。");
         }, token);
     }
 
@@ -298,44 +340,73 @@ public partial class InstancesViewModel
         await RunModMutationAsync(instance, "正在恢复未完成的模组操作……", async cancellation =>
         {
             await _localMods!.RecoverAsync(instance.InstancePath, cancellation);
-            return "未完成的模组操作已处理，可查看刷新后的列表。";
+            return new ModMutationOutcome("未完成的模组操作已处理，可查看刷新后的列表。");
         }, token);
     }
 
-    /// <summary>统一写入前失效检查快照，并将实际操作结果与随后刷新失败分开报告。</summary>
+    /// <summary>保留批量操作的真实结果，部分失败不会被字符串摘要误判为全部成功。</summary>
+    private sealed record ModMutationOutcome(string Message, OperationNoticeKind Kind = OperationNoticeKind.Success);
+
+    /// <summary>统一写入与刷新结果；整个模组操作只发布一次通知，附带原操作对象的路径。</summary>
     private async Task RunModMutationAsync(MinecraftInstance instance, string pending,
-        Func<CancellationToken, Task<string>> operation, CancellationToken token)
+        Func<CancellationToken, Task<ModMutationOutcome>> operation, CancellationToken token, IReadOnlyList<string>? sourcePaths = null)
     {
         var revision = _modSelectionRevision;
+        var paths = new List<string> { instance.GameDirectory };
+        if (sourcePaths is not null) paths.AddRange(sourcePaths);
+        if (SelectedMod is { } selected)
+            paths.Add(System.IO.Path.Combine(instance.InstancePath, (selected.CurrentPath ?? selected.Path).Replace('/', System.IO.Path.DirectorySeparatorChar)));
+        ModMutationOutcome? outcome = null;
         IsBusy = true; IsManagingMods = true;
         ClearCheckResults(); ModStatus = pending;
         _allModFiles = []; ApplyModFilter();
         try
         {
             token.ThrowIfCancellationRequested();
-            var outcome = await operation(token);
-            if (IsCurrentModSelection(instance, revision)) ModStatus = outcome;
+            outcome = await operation(token);
+            if (IsCurrentModSelection(instance, revision)) ModStatus = outcome.Message;
         }
         catch (Exception ex)
         {
-            if (IsCurrentModSelection(instance, revision)) ModStatus = ex is OperationCanceledException
+            var message = ex is OperationCanceledException
                 ? "模组操作已取消；已经完成的更改会保留，可刷新列表查看。"
                 : "模组操作未完成：" + ex.Message;
+            outcome = new(message, ex is OperationCanceledException ? OperationNoticeKind.Cancelled : OperationNoticeKind.Failure);
+            if (IsCurrentModSelection(instance, revision)) ModStatus = message;
         }
         finally
         {
-            try { await LoadModCatalogAsync(instance, revision, token); }
+            try
+            {
+                var refreshError = await LoadModCatalogAsync(instance, revision, token);
+                if (outcome is not null && refreshError is not null and not OperationCanceledException)
+                    outcome = outcome with
+                    {
+                        Kind = outcome.Kind == OperationNoticeKind.Success ? OperationNoticeKind.Warning : outcome.Kind,
+                        Message = outcome.Message + "\n模组列表刷新失败，可手动刷新：" + refreshError.Message
+                    };
+            }
             finally { IsManagingMods = false; IsBusy = false; }
         }
+        if (outcome is not null && IsCurrentModSelection(instance, revision))
+            _notifications.Report(new(outcome.Kind, outcome.Kind switch
+            {
+                OperationNoticeKind.Success => "模组操作完成", OperationNoticeKind.Warning => "模组操作部分完成",
+                OperationNoticeKind.Cancelled => "模组操作已取消", _ => "模组操作未完成"
+            }, outcome.Message, paths));
     }
 
-    /// <summary>通过界面服务打开当前实例目录，错误仅显示在模组页面。</summary>
+    /// <summary>通过界面服务打开当前实例目录，失败时提供可复制的目录位置。</summary>
     [RelayCommand(CanExecute = nameof(CanAddLocalMods))]
     private void OpenModsFolder()
     {
         if (!CanAddLocalMods()) return;
         try { _modDialogs!.OpenModsFolder(SelectedInstance!); }
-        catch (Exception ex) { ModStatus = "无法打开模组文件夹：" + ex.Message; }
+        catch (Exception ex)
+        {
+            ModStatus = "无法打开模组文件夹：" + ex.Message;
+            _notifications.Failure("无法打开模组文件夹", ex, System.IO.Path.Combine(SelectedInstance!.GameDirectory, "mods"));
+        }
     }
 
     /// <summary>取消当前扫描或变更；服务负责让已进入提交阶段的操作恢复到一致状态。</summary>

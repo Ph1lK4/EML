@@ -29,9 +29,22 @@ public partial class InstancesViewModel
 
     [ObservableProperty] private string playerName = "Steve";
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName))]
+    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName), nameof(SelectedLaunchMode))]
     private bool useMicrosoftAccount;
-    public bool CanEditOfflinePlayerName => !UseMicrosoftAccount;
+    /// <summary>启动模式显示文本；设置文件仍使用旧的布尔字段，保持已有实例兼容。</summary>
+    public IReadOnlyList<string> LaunchModes { get; } = ["离线模式", "正版模式"];
+    /// <summary>将界面选择映射到现有正版开关，避免改变旧设置文件格式。</summary>
+    public string SelectedLaunchMode
+    {
+        get => UseMicrosoftAccount ? "正版模式" : "离线模式";
+        set
+        {
+            // 绑定暂时清空选择时保留原模式，避免误切换到另一个 UUID。
+            if (value is "正版模式" or "离线模式") UseMicrosoftAccount = value == "正版模式";
+        }
+    }
+    /// <summary>只有当前实例设置已读取且选择离线模式时，才允许编辑离线玩家名。</summary>
+    public bool CanEditOfflinePlayerName => CanEditLaunchSettings && !UseMicrosoftAccount;
     [ObservableProperty] private string selectedJavaPath = "";
     [ObservableProperty] private string minMemoryMbText = "1024";
     [ObservableProperty] private string maxMemoryMbText = "8192";
@@ -42,7 +55,7 @@ public partial class InstancesViewModel
     [ObservableProperty] private int? lastExitCode;
     [ObservableProperty] private string runningInstanceName = "";
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanEditLaunchSettings))]
+    [NotifyPropertyChangedFor(nameof(CanEditLaunchSettings), nameof(CanEditOfflinePlayerName))]
     [NotifyCanExecuteChangedFor(nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand))]
     private bool isLaunchSettingsLoaded;
     [ObservableProperty]
@@ -59,7 +72,7 @@ public partial class InstancesViewModel
     public bool CanEditLaunchSettings => !IsBusy && IsLaunchSettingsLoaded && SelectedInstance is not null;
 
     /// <summary>切换目标立即取消旧读取并恢复默认显示，旧任务无论何时返回都不能覆盖新实例。</summary>
-    private void BeginLoadLaunchSettings(MinecraftInstance? instance)
+    private void BeginLoadLaunchSettings(MinecraftInstance? instance, bool notifySuccess = false)
     {
         _settingsLoadCancellation?.Cancel();
         _settingsLoadCancellation = null;
@@ -79,11 +92,11 @@ public partial class InstancesViewModel
         _settingsLoadCancellation = cancellation;
         IsLaunchSettingsLoading = true;
         LaunchSettingsStatus = "正在读取此实例的启动设置……";
-        LaunchSettingsLoadTask = LoadLaunchSettingsAsync(instance.InstancePath, revision, cancellation);
+        LaunchSettingsLoadTask = LoadLaunchSettingsAsync(instance.InstancePath, revision, cancellation, notifySuccess);
     }
 
     /// <summary>读取并校验持久化设置；失败时保留错误，不使用默认值偷偷覆盖损坏配置。</summary>
-    private async Task LoadLaunchSettingsAsync(string instancePath, int revision, CancellationTokenSource cancellation)
+    private async Task LoadLaunchSettingsAsync(string instancePath, int revision, CancellationTokenSource cancellation, bool notifySuccess)
     {
         try
         {
@@ -94,12 +107,16 @@ public partial class InstancesViewModel
             _loadedSettingsPath = instancePath;
             IsLaunchSettingsLoaded = true;
             LaunchSettingsStatus = "设置已加载；修改后点击“保存设置”，或直接使用当前输入启动。";
+            if (notifySuccess) _notifications.Success("启动设置读取完成", LaunchSettingsStatus, instancePath);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
             if (revision == _settingsRevision)
+            {
                 LaunchSettingsStatus = "启动设置读取失败：" + ex.Message + "。修复后可点击“重新读取”。";
+                _notifications.Failure("启动设置读取失败", ex, instancePath);
+            }
         }
         finally
         {
@@ -158,7 +175,7 @@ public partial class InstancesViewModel
     private Task ReloadLaunchSettingsAsync()
     {
         if (!CanReloadLaunchSettings()) return Task.CompletedTask;
-        BeginLoadLaunchSettings(SelectedInstance);
+        BeginLoadLaunchSettings(SelectedInstance, notifySuccess: true);
         return LaunchSettingsLoadTask;
     }
 
@@ -175,10 +192,12 @@ public partial class InstancesViewModel
             var settings = ReadLaunchSettings();
             await _launchSettingsStore!.SaveAsync(instancePath, settings);
             if (revision == _settingsRevision) LaunchSettingsStatus = "已保存此实例的启动设置。";
+            _notifications.Success("启动设置已保存", "已保存此实例的玩家、内存、Java 和 JVM 设置。", instancePath);
         }
         catch (Exception ex)
         {
             if (revision == _settingsRevision) LaunchSettingsStatus = "保存失败：" + ex.Message;
+            _notifications.Failure("启动设置保存失败", ex, instancePath);
         }
         finally { IsBusy = false; }
     }
@@ -218,18 +237,25 @@ public partial class InstancesViewModel
                 : "未创建游戏进程，请查看日志中的原因。";
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
+            if (result.IsCanceled) _notifications.Cancelled(result.Started ? "游戏已停止" : "启动已取消", LaunchStatus, instance.InstancePath, LaunchLogPath);
+            else if (result.Started && result.ExitCode == 0)
+                _notifications.Success("游戏已正常退出", LaunchStatus, instance.InstancePath, LaunchLogPath);
+            else _notifications.Failure(result.Started ? "游戏异常退出" : "游戏启动失败",
+                LaunchStatus + "\n请查看本次运行日志中的错误信息。", instance.InstancePath, LaunchLogPath);
         }
         catch (OperationCanceledException)
         {
             LaunchStatus = IsGameRunning ? "游戏停止操作已结束。" : "已取消启动准备。";
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
+            _notifications.Cancelled("启动或运行已取消", LaunchStatus, instance.InstancePath, LaunchLogPath);
         }
         catch (Exception ex)
         {
             LaunchStatus = "启动或运行失败：" + ex.Message;
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
+            _notifications.Failure("启动或运行失败", ex, instance.InstancePath, LaunchLogPath);
         }
         finally
         {
@@ -250,10 +276,12 @@ public partial class InstancesViewModel
         if (progress.LogPath is { } path) LaunchLogPath = path;
         if (progress.Stage == MinecraftLaunchStage.Running)
         {
+            var firstRunning = !IsGameRunning;
             IsPreparingLaunch = false;
             IsGameRunning = true;
             LaunchStatus = "游戏进程已启动，正在接收输出；请在游戏窗口确认加载结果。";
             StatusText = LaunchStatus;
+            if (firstRunning) _notifications.Success("游戏进程已启动", LaunchStatus, SelectedInstance?.InstancePath, LaunchLogPath);
         }
         else if (progress.Stage == MinecraftLaunchStage.Preparing)
         {

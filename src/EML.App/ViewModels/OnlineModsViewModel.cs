@@ -18,6 +18,7 @@ public partial class OnlineModsViewModel : ObservableObject
     private readonly Action<bool> _setBusy;
     private readonly Action _filesChanged;
     private readonly Action<Uri>? _openWebsite;
+    private readonly IOperationNotifications _notifications;
     private readonly HashSet<Task> _pending = [];
     private CancellationTokenSource? _searchCancellation, _detailCancellation, _versionCancellation, _planCancellation;
     private int _contextRevision, _searchRevision, _detailRevision, _versionRevision, _planRevision, _installRevision;
@@ -28,11 +29,12 @@ public partial class OnlineModsViewModel : ObservableObject
     /// <summary>查询接口可由测试替换，文件写入通过宿主页的忙碌状态与其他实例操作互斥。</summary>
     public OnlineModsViewModel(IOnlineModCatalog catalog, IOnlineModInstaller installer, IModIconCache? icons = null,
         Func<bool>? canModify = null, Action<bool>? setBusy = null, Action? filesChanged = null, Action<Uri>? openWebsite = null,
-        IOnlineModLocalization? localization = null)
+        IOnlineModLocalization? localization = null, IOperationNotifications? notifications = null)
     {
         _catalog = catalog; _installer = installer; _icons = icons; _localization = localization;
         _canModify = canModify ?? (() => true); _setBusy = setBusy ?? (_ => { });
         _filesChanged = filesChanged ?? (() => { }); _openWebsite = openWebsite;
+        _notifications = notifications ?? NullOperationNotifications.Instance;
     }
 
     [ObservableProperty] private string searchText = "";
@@ -255,9 +257,28 @@ public partial class OnlineModsViewModel : ObservableObject
             Status = $"已显示 {Projects.Count} 个项目。" +
                 (query.Text == originalSearch ? "" : $"\n已按“{query.Text}”搜索“{originalSearch}”。") +
                 (result.Notes.Count == 0 ? "" : "\n" + string.Join("\n", result.Notes));
+            if (!debounce)
+            {
+                if (result.Notes.Count > 0) _notifications.Warning("模组搜索完成，部分结果需注意", Status);
+                else _notifications.Success("模组搜索完成", Status);
+            }
         }
-        catch (OperationCanceledException) { if (SearchCurrent(revision, context)) Status = "已取消搜索。"; }
-        catch (Exception ex) { if (SearchCurrent(revision, context)) Status = "搜索失败：" + ex.Message; }
+        catch (OperationCanceledException)
+        {
+            if (SearchCurrent(revision, context))
+            {
+                Status = "已取消搜索。";
+                if (!debounce) _notifications.Cancelled("模组搜索已取消", Status);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (SearchCurrent(revision, context))
+            {
+                Status = "搜索失败：" + ex.Message;
+                _notifications.Failure("模组搜索失败", ex);
+            }
+        }
         finally
         {
             if (ReferenceEquals(_searchCancellation, cancellation)) _searchCancellation = null;
@@ -304,7 +325,14 @@ public partial class OnlineModsViewModel : ObservableObject
             SelectedVersion = Versions.FirstOrDefault();
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (DetailCurrent(revision, context)) DetailStatus = "读取详情失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            if (DetailCurrent(revision, context) && !cancellation.IsCancellationRequested)
+            {
+                DetailStatus = "读取详情失败：" + ex.Message;
+                _notifications.Failure("模组详情读取失败", ex);
+            }
+        }
         finally
         {
             if (ReferenceEquals(_detailCancellation, cancellation)) _detailCancellation = null;
@@ -326,9 +354,17 @@ public partial class OnlineModsViewModel : ObservableObject
             var known = Versions.Select(version => version.Id).ToHashSet();
             foreach (var version in result.Items.Where(version => known.Add(version.Id))) Versions.Add(version);
             ++_versionPage; HasMoreVersions = result.HasMore;
+            _notifications.Success("模组版本列表已更新", $"已显示 {Versions.Count} 个版本。");
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (DetailCurrent(revision, context)) DetailStatus = "读取更多版本失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            if (DetailCurrent(revision, context) && !cancellation.IsCancellationRequested)
+            {
+                DetailStatus = "读取更多版本失败：" + ex.Message;
+                _notifications.Failure("模组版本列表读取失败", ex);
+            }
+        }
         finally
         {
             if (ReferenceEquals(_detailCancellation, cancellation)) _detailCancellation = null;
@@ -352,7 +388,14 @@ public partial class OnlineModsViewModel : ObservableObject
             DetailStatus = $"{result.VersionNumber} · {result.Channel} · {result.Published:yyyy-MM-dd}";
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { if (revision == _versionRevision && context == _contextRevision) DetailStatus = "版本读取失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            if (revision == _versionRevision && context == _contextRevision && !_closing && !cancellation.IsCancellationRequested)
+            {
+                DetailStatus = "版本读取失败：" + ex.Message;
+                _notifications.Failure("模组版本读取失败", ex);
+            }
+        }
         finally
         {
             if (ReferenceEquals(_versionCancellation, cancellation)) _versionCancellation = null;
@@ -382,9 +425,27 @@ public partial class OnlineModsViewModel : ObservableObject
             ReplaceOptional(result.OptionalDependencies);
             Plan = result;
             InstallStatus = result.CanInstall ? "请核对清单；点击“确认下载并安装”后才会修改实例。" : "安装清单中有待处理项目，请查看具体说明。";
+            var details = InstallStatus + "\n" + PlanSummary + "\n" + PlanDetails;
+            if (!result.CanInstall || result.Warnings.Count > 0)
+                _notifications.Warning("模组安装清单需要确认", details, _instancePath);
+            else _notifications.Success("模组安装清单已生成", details, _instancePath);
         }
-        catch (OperationCanceledException) { if (revision == _planRevision) InstallStatus = "已取消生成清单。"; }
-        catch (Exception ex) { if (revision == _planRevision && context == _contextRevision) InstallStatus = "清单生成失败：" + ex.Message; }
+        catch (OperationCanceledException)
+        {
+            if (revision == _planRevision && context == _contextRevision && !_closing)
+            {
+                InstallStatus = "已取消生成清单。";
+                _notifications.Cancelled("模组安装清单已取消", InstallStatus, _instancePath);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (revision == _planRevision && context == _contextRevision && !_closing && !cancellation.IsCancellationRequested)
+            {
+                InstallStatus = "清单生成失败：" + ex.Message;
+                _notifications.Failure("模组安装清单生成失败", ex, _instancePath);
+            }
+        }
         finally
         {
             if (ReferenceEquals(_planCancellation, cancellation)) _planCancellation = null;
@@ -400,9 +461,15 @@ public partial class OnlineModsViewModel : ObservableObject
         IsInstalling = true; _setBusy(true); _filesChanged();
         var context = _contextRevision;
         var revision = ++_installRevision;
+        var paths = new[] { selected.Request.InstancePath };
         InstallPercent = 0; ProgressText = "准备下载……";
         try
         {
+            // 需求可能只有平台编号而尚无路径；路径格式错误也必须进入统一失败处理和忙碌状态清理。
+            paths = paths.Concat(selected.Items.Select(item => item.File.Requirement.Path).OfType<string>()
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(path => System.IO.Path.Combine(selected.Request.InstancePath,
+                    path.Replace('/', System.IO.Path.DirectorySeparatorChar)))).ToArray();
             var progress = new Progress<OnlineModInstallProgress>(value =>
             {
                 if (!IsInstalling || context != _contextRevision || revision != _installRevision || _closing) return;
@@ -411,16 +478,32 @@ public partial class OnlineModsViewModel : ObservableObject
                 ProgressText = $"{value.Stage} · {value.FileName}（{value.CompletedFiles}/{value.TotalFiles}）";
             });
             var result = await _installer.InstallAsync(selected, progress, token);
-            if (context != _contextRevision) return;
+            if (context != _contextRevision || _closing) return;
             InstallStatus = (result.Cancelled ? "已取消。" : result.Succeeded ? "所选文件安装完成。" : "安装未完成。") +
                 $"已安装 {result.Installed} 个，跳过 {result.Skipped} 个。\n" + string.Join("\n", result.Issues) +
                 "\n请在本地模组页查看；此结果不代表整合包兼容性或启动检查已通过。";
             if (result.Succeeded) InstallPercent = 100;
+            if (result.Cancelled) _notifications.Cancelled("模组安装已取消", InstallStatus, paths);
+            else if (result.Succeeded) _notifications.Success("模组安装完成", InstallStatus, paths);
+            else if (result.Installed > 0) _notifications.Warning("模组安装部分完成", InstallStatus, paths);
+            else _notifications.Failure("模组安装未完成", InstallStatus, paths);
         }
         catch (OperationCanceledException)
-        { if (context == _contextRevision) InstallStatus = "已取消安装；已提交文件会保留，请刷新本地模组列表。"; }
+        {
+            if (context == _contextRevision && !_closing)
+            {
+                InstallStatus = "已取消安装；已提交文件会保留，请刷新本地模组列表。";
+                _notifications.Cancelled("模组安装已取消", InstallStatus, paths);
+            }
+        }
         catch (Exception ex)
-        { if (context == _contextRevision) InstallStatus = "安装未完成：" + ex.Message; }
+        {
+            if (context == _contextRevision && !_closing)
+            {
+                InstallStatus = "安装未完成：" + ex.Message;
+                _notifications.Failure("模组安装未完成", ex, paths);
+            }
+        }
         finally
         {
             ++_installRevision;
@@ -433,7 +516,12 @@ public partial class OnlineModsViewModel : ObservableObject
     private void OpenProject()
     {
         if (!CanOpenProject() || !SafeWebsite(ProjectDetails?.WebsiteUrl, out var uri)) return;
-        try { _openWebsite!(uri!); } catch (Exception ex) { DetailStatus = "无法打开项目网页：" + ex.Message; }
+        try { _openWebsite!(uri!); }
+        catch (Exception ex)
+        {
+            DetailStatus = "无法打开项目网页：" + ex.Message;
+            _notifications.Failure("无法打开模组网页", ex);
+        }
     }
 
     /// <summary>更改依赖选择后必须重新预览，不能使用原清单进行安装。</summary>

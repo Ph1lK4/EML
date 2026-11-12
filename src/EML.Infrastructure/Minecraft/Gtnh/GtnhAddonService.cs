@@ -2,10 +2,15 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using EML.Core.Downloads;
+using EML.Core.CurseForge;
+using EML.Core.Modrinth;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Gtnh;
 using EML.Core.Minecraft.Mods;
+using EML.Core.Minecraft.Mods.Online;
 using EML.Infrastructure.Minecraft.Importing;
 using EML.Infrastructure.Minecraft.Migration;
 using EML.Infrastructure.Minecraft.Mods;
@@ -13,26 +18,35 @@ using EML.Infrastructure.Minecraft.Runtime;
 
 namespace EML.Infrastructure.Minecraft.Gtnh;
 
-/// <summary>只查询人工核对的原作者发行仓库，按固定资产下载，并复用已有模组事务与来源校验。</summary>
-public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
+/// <summary>只查询人工整理的原作者发行来源，按固定资产下载，模组与资源使用各自的事务和来源记录。</summary>
+public sealed partial class GtnhAddonService : IGtnhAddonService, IDisposable
 {
     private const int MaximumResponseBytes = 4 * 1024 * 1024;
     private const long MaximumAssetBytes = 256L * 1024 * 1024;
     private readonly string _launcherRoot;
     private readonly IFileDownloader _downloader;
     private readonly IOnlineModRegistrar _registrar;
+    private readonly IOnlineModCatalog? _onlineCatalog;
+    private readonly IModrinthApiClient? _modrinth;
+    private readonly ICurseForgeApiClient? _curseForge;
+    private readonly IGtnhContentRegistrar? _contentRegistrar;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
     private readonly SemaphoreSlim _readLock = new(1, 1);
     private readonly SemaphoreSlim _installLock = new(1, 1);
     private readonly Dictionary<string, (DateTimeOffset Time, IReadOnlyList<GtnhAddonRelease> Releases)> _cache = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IssuedRelease> _issued = new(StringComparer.OrdinalIgnoreCase);
-    private sealed record IssuedRelease(GtnhAddonRelease Release, string Version, string ManifestFingerprint, DateTimeOffset Time);
+    private sealed record IssuedRelease(GtnhAddonRelease Release, string SelectionFingerprint, string Version,
+        string ManifestFingerprint, DateTimeOffset Time);
 
     /// <summary>共享下载器与管理器；测试可注入受控 HTTP，不需要访问真实账号或实例。</summary>
-    public GtnhAddonService(string launcherRoot, IFileDownloader downloader, IOnlineModRegistrar registrar, HttpClient? http = null)
+    public GtnhAddonService(string launcherRoot, IFileDownloader downloader, IOnlineModRegistrar registrar, HttpClient? http = null,
+        IOnlineModCatalog? onlineCatalog = null, IModrinthApiClient? modrinth = null,
+        ICurseForgeApiClient? curseForge = null, IGtnhContentRegistrar? contentRegistrar = null)
     {
         _launcherRoot = Path.GetFullPath(launcherRoot); _downloader = downloader; _registrar = registrar;
+        _onlineCatalog = onlineCatalog;
+        _modrinth = modrinth; _curseForge = curseForge; _contentRegistrar = contentRegistrar;
         _ownsHttp = http is null;
         _http = http ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromSeconds(30) };
     }
@@ -43,7 +57,8 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
     public async Task<IReadOnlyList<GtnhAddonRelease>> GetReleasesAsync(string instancePath, string addonId, CancellationToken token = default)
     {
         var info = await Task.Run(() => RequireGtnh(instancePath), token).ConfigureAwait(false);
-        var addon = Addons.SingleOrDefault(item => item.Id == addonId) ?? throw new ArgumentException("未收录的 GTNH 可添加模组。");
+        var addon = Addons.SingleOrDefault(item => item.Id == addonId) ?? throw new ArgumentException("未收录的 GTNH 推荐内容。");
+        if (!addon.CanQueryReleases) return [];
         IReadOnlyList<GtnhAddonRelease> releases;
         await _readLock.WaitAsync(token).ConfigureAwait(false);
         try
@@ -53,14 +68,27 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
             else
             {
                 var result = new List<GtnhAddonRelease>();
-                for (var page = 1; page <= 4; page++)
+                if (addon.Provider == GtnhAddonProvider.Modrinth)
+                    result.AddRange(await ReadModrinthReleasesAsync(addon, token).ConfigureAwait(false));
+                else if (addon.Provider == GtnhAddonProvider.CurseForge && !IsModKind(addon.Kind))
+                    result.AddRange(await ReadCurseForgeContentReleasesAsync(addon, token).ConfigureAwait(false));
+                else if (addon.Provider == GtnhAddonProvider.CurseForge)
+                    result.AddRange(await ReadCurseForgeReleasesAsync(addon, token).ConfigureAwait(false));
+                else if (addon.ReleaseTag is { Length: > 0 } tag)
+                {
+                    using var document = await ReadJsonAsync($"https://api.github.com/repos/{addon.Repository}/releases/tags/{Uri.EscapeDataString(tag)}", token).ConfigureAwait(false);
+                    if (document.RootElement.ValueKind != JsonValueKind.Object || Text(document.RootElement, "tag_name") != tag)
+                        throw new InvalidDataException("发行响应与指定标签不一致。");
+                    result.AddRange(ParseRelease(addon, document.RootElement));
+                }
+                else for (var page = 1; page <= 4; page++)
                 {
                     using var document = await ReadJsonAsync($"https://api.github.com/repos/{addon.Repository}/releases?per_page=30&page={page}", token).ConfigureAwait(false);
                     if (document.RootElement.ValueKind != JsonValueKind.Array) throw new InvalidDataException("发行列表格式异常。");
                     foreach (var release in document.RootElement.EnumerateArray()) result.AddRange(ParseRelease(addon, release));
                     if (document.RootElement.GetArrayLength() < 30) break;
                 }
-                releases = result.DistinctBy(item => item.AssetId).OrderByDescending(item => item.Published).ToArray();
+                releases = Array.AsReadOnly(result.DistinctBy(item => (item.AssetId, item.PlatformVersionId, item.FileName)).OrderByDescending(item => item.Published).ToArray());
                 _cache[addon.Id] = (DateTimeOffset.UtcNow, releases);
             }
         }
@@ -70,7 +98,7 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
         foreach (var old in _issued.Where(pair => DateTimeOffset.UtcNow - pair.Value.Time > TimeSpan.FromMinutes(30)).Select(pair => pair.Key))
             _issued.TryRemove(old, out _);
         foreach (var release in releases)
-            _issued[Key(info.InstancePath, release)] = new(release, info.Version, fingerprint, DateTimeOffset.UtcNow);
+            _issued[Key(info.InstancePath, release)] = new(release, SelectionFingerprint(release), info.Version, fingerprint, DateTimeOffset.UtcNow);
         return releases;
     }
 
@@ -78,7 +106,7 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
     public async Task<GtnhAddonInstallResult> InstallAsync(string instancePath, GtnhAddonRelease release, bool compatibilityConfirmed,
         IProgress<FileDownloadProgress>? progress = null, CancellationToken token = default)
     {
-        string? staging = null; string? file = null;
+        string? staging = null; string? file = null; string? destination = null;
         var entered = false;
         try
         {
@@ -88,21 +116,29 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
             await _installLock.WaitAsync(token).ConfigureAwait(false); entered = true;
             var info = await Task.Run(() => RequireGtnh(instancePath), token).ConfigureAwait(false);
             if (!_issued.TryRemove(Key(info.InstancePath, release), out var issued) || issued.Release != release ||
+                issued.SelectionFingerprint != SelectionFingerprint(release) ||
                 DateTimeOffset.UtcNow - issued.Time > TimeSpan.FromMinutes(30) || issued.Version != info.Version)
                 throw new InvalidOperationException("发行文件或目标已变化，或已使用此安装选择，请重新读取发行版本。");
             var manifest = InstanceManifestStore.Read(Path.Combine(info.InstancePath, InstanceImportManifest.FileName));
             if (issued.ManifestFingerprint != EmbeddedFileBaseline.ManifestFingerprint(manifest))
                 throw new InvalidOperationException("实例导入记录已经变化，请重新选择目标和发行版本。");
+            if (!IsModKind(release.Kind) && _contentRegistrar is null)
+                throw new InvalidOperationException("资源与光影安装服务尚未配置，不能将此文件安装到 mods 目录。");
             using (InstanceOperationLease.Acquire(info.InstancePath)) { }
-            var origin = Origin(release);
-            var baseline = new InstanceFileRequirement
+            var baseline = release.Provider is GtnhAddonProvider.CurseForge or GtnhAddonProvider.Modrinth
+                ? SnapshotRequirement(release.DownloadRequirement ?? throw new InvalidDataException("缺少固定平台文件来源。")) with
+                { Path = DestinationPath(manifest, release) }
+                : new InstanceFileRequirement
             {
-                Path = LocalModPaths.NewPath(manifest, release.FileName), Source = InstanceFileSource.DirectDownload,
-                Origin = InstanceFileOrigin.GithubReleaseDownload, GithubReleaseOrigin = origin,
+                Path = DestinationPath(manifest, release), Source = InstanceFileSource.DirectDownload,
+                Origin = InstanceFileOrigin.GithubReleaseDownload, GithubReleaseOrigin = Origin(release),
                 Role = InstanceFileRole.Content, Required = true, Size = release.Size,
                 Hashes = new Dictionary<string, string> { ["sha256"] = release.Sha256 }, Downloads = [release.DownloadUrl]
             };
-            ModManagementStore.ValidateOnlineBaseline(baseline);
+            baseline = SnapshotRequirement(baseline);
+            if (IsModKind(release.Kind)) ModManagementStore.ValidateOnlineBaseline(baseline);
+            else ValidateContentRequirement(baseline);
+            destination = MigrationIO.SafePath(info.InstancePath, baseline.Path!);
             var relative = ".eml-runtime/gtnh-addons/" + Guid.NewGuid().ToString("N");
             staging = MigrationIO.SafePath(_launcherRoot, relative);
             if (Directory.Exists(staging) || File.Exists(staging)) throw new IOException("本次下载暂存位置被占用。");
@@ -112,21 +148,24 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
             {
                 DestinationPath = file, Urls = baseline.Downloads, ExpectedSize = baseline.Size,
                 Hashes = InstanceFileIntegrity.HashesFor(baseline), MaximumBytes = MaximumAssetBytes,
-                DisplayName = release.FileName, GroupName = Path.GetFileName(info.InstancePath) + " · GTNH 可添加模组"
+                DisplayName = release.FileName, GroupName = Path.GetFileName(info.InstancePath) + " · GTNH 推荐内容"
             }, progress, token).ConfigureAwait(false);
             if (!await InstanceRuntimeInstaller.ExistingFileMatchesAsync(file, baseline, token).ConfigureAwait(false))
-                throw new InvalidDataException("下载文件没有通过 GitHub 官方大小与 SHA-256 校验。");
+                throw new InvalidDataException("下载文件没有通过所选来源的官方大小与摘要校验。");
             // 下载期间实例可能被外部替换；提交前重新识别且核对原始清单，管理器再取得写锁检查冲突。
             var current = RequireGtnh(info.InstancePath);
             if (current.Version != issued.Version || issued.ManifestFingerprint != EmbeddedFileBaseline.ManifestFingerprint(
                 InstanceManifestStore.Read(Path.Combine(current.InstancePath, InstanceImportManifest.FileName))))
                 throw new InvalidOperationException("下载期间目标实例已变化，文件未安装。");
-            await _registrar.RegisterDownloadedAsync(info.InstancePath, file, baseline, token).ConfigureAwait(false);
-            return new(true, false, $"已安装 {release.FileName}。可在本地模组管理中禁用或移除；此结果不代表整合包兼容性检查已通过。");
+            if (IsModKind(release.Kind)) await _registrar.RegisterDownloadedAsync(info.InstancePath, file, baseline, token).ConfigureAwait(false);
+            else await _contentRegistrar!.RegisterDownloadedAsync(info.InstancePath, file, baseline, release.Kind, token).ConfigureAwait(false);
+            return new(true, false, $"已安装 {Path.GetFileName(destination)}。" + (IsModKind(release.Kind)
+                ? "可在本地模组管理中禁用或移除；此结果不代表整合包兼容性检查已通过。"
+                : "请在游戏中选择启用，并按作者说明核对所需模组或光影加载器。")) { DestinationPath = destination };
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { return new(false, true, "已取消下载与安装。"); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { return new(false, true, "已取消下载与安装。") { DestinationPath = destination }; }
         catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException or InvalidOperationException or ArgumentException or HttpRequestException or UnauthorizedAccessException or TimeoutException)
-        { return new(false, false, "安装未完成：" + ex.Message); }
+        { return new(false, false, "安装未完成：" + ex.Message) { DestinationPath = destination }; }
         finally
         {
             if (file is not null) CleanStaging(file, staging!);
@@ -149,6 +188,8 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
         try
         {
             using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+            if (response.RequestMessage?.RequestUri is { } finalUri && finalUri != new Uri(url))
+                throw new InvalidDataException("GitHub 请求发生仓库或地址跳转，请核对原作者仓库后更新目录，不会自动切换下载来源。");
             if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
                 throw new HttpRequestException("GitHub 暂时拒绝请求或达到访问频率限制，请稍后重试。");
             if (!response.IsSuccessStatusCode) throw new HttpRequestException($"无法读取原作者发行列表（HTTP {(int)response.StatusCode}），请稍后重试或查看项目主页。");
@@ -167,7 +208,7 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
         catch (OperationCanceledException) when (!token.IsCancellationRequested) { throw new TimeoutException("读取 GitHub 发行列表超时，请稍后重试。"); }
     }
 
-    /// <summary>发行列表只展示正常 JAR；无官方摘要的旧文件可见但不可自动安装。</summary>
+    /// <summary>发行列表按内容类型选择 JAR 或 ZIP；无官方摘要的旧文件可见但不可自动安装。</summary>
     private static IEnumerable<GtnhAddonRelease> ParseRelease(GtnhAddon addon, JsonElement release)
     {
         if (release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True) yield break;
@@ -180,8 +221,11 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
         foreach (var asset in assets.EnumerateArray())
         {
             var name = Text(asset, "name"); var size = Number(asset, "size"); var assetId = Number(asset, "id");
-            if (!name.EndsWith(".jar", StringComparison.OrdinalIgnoreCase) || new[] { "-sources", "-javadoc", "-dev", "-api", "-deobf" }
+            if (!HasExpectedExtension(name, addon.Kind) || new[] { "-sources", "-javadoc", "-dev", "-api", "-deobf", "-predowngrade" }
                 .Any(suffix => name.Contains(suffix, StringComparison.OrdinalIgnoreCase))) continue;
+            if (addon.AssetNamePrefix is { Length: > 0 } prefix && !name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (addon.AssetNamePattern is { Length: > 0 } pattern &&
+                !Regex.IsMatch(name, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))) continue;
             var origin = new GithubReleaseFileOrigin { Repository = addon.Repository, Tag = tag, FileName = name, ReleaseId = id, AssetId = assetId };
             if (!InstanceFileIntegrity.ValidGithubOrigin(origin)) continue;
             var expected = InstanceFileIntegrity.GithubDownloadUrl(origin);
@@ -192,10 +236,10 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
                 size is <= 0 or > MaximumAssetBytes ? "发行文件大小无效或超过 256 MiB，本页不自动安装。" : null;
             yield return new()
             {
-                AddonId = addon.Id, Repository = addon.Repository, ReleaseId = id, AssetId = assetId,
+                AddonId = addon.Id, Kind = addon.Kind, Repository = addon.Repository, ReleaseId = id, AssetId = assetId,
                 Tag = tag, FileName = name, Size = size, Sha256 = hash, DownloadUrl = expected,
                 ReleaseUrl = "https://github.com/" + addon.Repository + "/releases/tag/" + Uri.EscapeDataString(tag),
-                Published = published, Prerelease = prerelease, Notes = notes, Problem = problem
+                Published = published, Prerelease = prerelease, Notes = notes + "\n\n本页不自动安装前置依赖；请核对作者说明、当前 GTNH 版本及所需加载器。", Problem = problem
             };
         }
     }
@@ -210,7 +254,10 @@ public sealed class GtnhAddonService : IGtnhAddonService, IDisposable
     /// <summary>发行和资产编号必须保持 64 位整数精度。</summary>
     private static long Number(JsonElement value, string name) => value.TryGetProperty(name, out var part) && part.ValueKind == JsonValueKind.Number && part.TryGetInt64(out var number) ? number : 0;
     /// <summary>签发记录绑定规范化实例路径和固定资产，不能换目标安装。</summary>
-    private static string Key(string path, GtnhAddonRelease release) => Path.GetFullPath(path) + "|" + release.AddonId + "|" + release.ReleaseId + "|" + release.AssetId;
+    private static string Key(string path, GtnhAddonRelease release) => Path.GetFullPath(path) + "|" + release.AddonId + "|" + release.Provider + "|" + release.ReleaseId + "|" + release.AssetId + "|" + release.PlatformVersionId + "|" + release.FileName;
+    /// <summary>固定整个发行选择，防止可变字典在展示后被修改而绕过身份比较。</summary>
+    private static string SelectionFingerprint(GtnhAddonRelease release) =>
+        Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(release)));
     /// <summary>持久化实际下载资产的固定身份，供补全、备份和迁移保留同一来源。</summary>
     private static GithubReleaseFileOrigin Origin(GtnhAddonRelease release) => new()
     {

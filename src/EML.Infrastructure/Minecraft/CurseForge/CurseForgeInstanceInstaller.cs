@@ -96,7 +96,7 @@ public sealed class CurseForgeInstanceInstaller : ICurseForgeInstanceInstaller
             var resolvedById = (resolution?.Files ?? []).ToDictionary(file => (file.Requirement.ProjectId, file.Requirement.FileId));
             var effectiveRequirements = snapshot?.Requirements ?? [];
             var onlinePaths = snapshot is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
-                Mods.ModManagementStore.OnlineDownloadPaths(snapshot.Mods, snapshot.Migration);
+                InstanceEffectiveRequirements.OnlineDownloadPaths(snapshot);
             var required = effectiveRequirements.Where(file => file.Required).ToArray();
             var overrideCount = required.Count(file => file.Origin == InstanceFileOrigin.EmbeddedOverride);
             if (overrideCount > 0) notes.Add($"{overrideCount} 个包内覆盖文件使用原包大小与 SHA-256；官方文件信息仅保留为来源记录。");

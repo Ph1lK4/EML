@@ -11,6 +11,130 @@ public sealed class OnlineModViewModelTests
     private static readonly OnlineModDependency Optional = new()
     { Key = "optional-project", Project = new(ModProvider.Modrinth, "extra"), Name = "Extra", Kind = OnlineDependencyKind.Optional };
 
+    /// <summary>安装结果按真实成功、部分失败、全部失败或取消分类，一次安装只报告一次。</summary>
+    [Theory]
+    [InlineData(1, false, false, OperationNoticeKind.Success)]
+    [InlineData(1, true, false, OperationNoticeKind.Warning)]
+    [InlineData(0, true, false, OperationNoticeKind.Failure)]
+    [InlineData(1, false, true, OperationNoticeKind.Cancelled)]
+    public async Task InstallationReportsOneAccurateNotice(int installed, bool issue, bool cancelled, OperationNoticeKind expected)
+    {
+        var notices = new OnlineNoticeRecorder();
+        var installer = new Installer { Result = new(installed, 0, cancelled, issue ? ["依赖下载被拒绝"] : []) };
+        var vm = Create(new Catalog(), installer, notifications: notices);
+        await SelectAsync(vm); await vm.PreviewCommand.ExecuteAsync(null);
+        notices.Items.Clear();
+        await vm.InstallCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(expected, notice.Kind);
+        Assert.Contains(Instance().InstancePath, notice.Paths);
+        if (issue) Assert.Contains("依赖下载被拒绝", notice.Message);
+        await vm.StopAsync();
+    }
+
+    /// <summary>预览失败的具体原因与目标路径可复制，不能产生成功通知。</summary>
+    [Fact]
+    public async Task FailedPreviewReportsCauseAndInstancePath()
+    {
+        var notices = new OnlineNoticeRecorder();
+        var installer = new Installer { Plan = _ => Task.FromException<OnlineModInstallPlan>(new IOException("无法读取实例清单")) };
+        var vm = Create(new Catalog(), installer, notifications: notices); await SelectAsync(vm);
+        await vm.PreviewCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("无法读取实例清单", notice.Message);
+        Assert.Contains(Instance().InstancePath, notice.Paths);
+        await vm.StopAsync();
+    }
+
+    /// <summary>自动防抖搜索不弹成功，显式搜索有一次结果，过期请求的失败不得打断新页面。</summary>
+    [Fact]
+    public async Task SearchNotificationsSkipAutomaticAndStaleResults()
+    {
+        var notices = new OnlineNoticeRecorder();
+        var pending = new TaskCompletionSource<OnlineModSearchPage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var catalog = new Catalog { Search = query => query.Text == "old" ? pending.Task : Task.FromResult(Page("current")) };
+        var vm = Create(catalog, notifications: notices);
+        vm.SetActive(true); await vm.SearchTask;
+        Assert.Empty(notices.Items);
+        vm.SearchText = "old"; var old = vm.SearchCommand.ExecuteAsync(null);
+        vm.SearchText = "current"; await vm.SearchCommand.ExecuteAsync(null);
+        pending.SetException(new IOException("过期请求错误")); await old;
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(OperationNoticeKind.Success, notice.Kind);
+        Assert.DoesNotContain("过期请求错误", notice.Message);
+        await vm.StopAsync();
+    }
+
+    /// <summary>只有平台编号的需求可缺省路径，具备路径时通知保留中文及全角空格。</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(".minecraft/mods/\u3000中文模组（适配版）\u3000.jar")]
+    public async Task InstallNoticesHandleOptionalRequirementPaths(string? relativePath)
+    {
+        var notices = new OnlineNoticeRecorder();
+        var installer = new Installer
+        {
+            Plan = request => Task.FromResult(Plan(request) with
+            {
+                Items = [new(Version(), Version().Files[0] with
+                {
+                    Requirement = new() { Path = relativePath, Size = 5 }
+                }, "主动选择", OnlineModPlanStatus.Download)]
+            })
+        };
+        var vm = Create(new Catalog(), installer, notifications: notices);
+        await SelectAsync(vm); await vm.PreviewCommand.ExecuteAsync(null); notices.Items.Clear();
+        await vm.InstallCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(OperationNoticeKind.Success, notice.Kind);
+        Assert.False(vm.IsInstalling);
+        if (string.IsNullOrEmpty(relativePath)) Assert.Equal(Instance().InstancePath, Assert.Single(notice.Paths));
+        else Assert.Contains(Path.Combine(Instance().InstancePath, relativePath.Replace('/', Path.DirectorySeparatorChar)), notice.Paths);
+        await vm.StopAsync();
+    }
+
+    /// <summary>切换实例后迟到的安装异常不能向新实例弹出失败提示。</summary>
+    [Fact]
+    public async Task LateInstallFailureDoesNotNotifyAfterInstanceSwitch()
+    {
+        var notices = new OnlineNoticeRecorder();
+        var pending = new TaskCompletionSource<OnlineModInstallResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = Create(new Catalog(), new Installer { Install = (_, _, _) => pending.Task }, notifications: notices);
+        await SelectAsync(vm); await vm.PreviewCommand.ExecuteAsync(null); notices.Items.Clear();
+        var install = vm.InstallCommand.ExecuteAsync(null);
+        vm.SetInstance(Instance("new"));
+        pending.SetException(new IOException("旧实例下载失败"));
+        await install;
+        Assert.Empty(notices.Items);
+        Assert.False(vm.IsInstalling);
+        await vm.StopAsync();
+    }
+
+    /// <summary>当前详情失败必须可见，切换实例后迟到的同一异常则不能弹窗。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DetailFailureOnlyNotifiesCurrentRequest(bool switchInstance)
+    {
+        var notices = new OnlineNoticeRecorder();
+        var pending = new TaskCompletionSource<OnlineModProject>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = Create(new Catalog { Detail = _ => pending.Task }, notifications: notices);
+        vm.SelectedProject = new(Project("old")); var detail = vm.DetailTask;
+        if (switchInstance) vm.SetInstance(Instance("new"));
+        pending.SetException(new IOException("项目详情服务器不可达"));
+        await detail;
+        if (switchInstance) Assert.Empty(notices.Items);
+        else
+        {
+            var notice = Assert.Single(notices.Items);
+            Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+            Assert.Contains("项目详情服务器不可达", notice.Message);
+        }
+        await vm.StopAsync();
+    }
+
     /// <summary>创建和选择实例不联网，进入在线页才开始防抖查询。</summary>
     [Fact]
     public async Task SearchStartsOnlyWhenOnlinePageOpens()
@@ -503,10 +627,19 @@ public sealed class OnlineModViewModelTests
 
     /// <summary>构造无磁盘访问的实例与服务，只测试真实 ViewModel 的行为。</summary>
     private static OnlineModsViewModel Create(Catalog catalog, Installer? installer = null, Func<bool>? canModify = null,
-        IOnlineModLocalization? localization = null)
+        IOnlineModLocalization? localization = null, IOperationNotifications? notifications = null)
     {
-        var vm = new OnlineModsViewModel(catalog, installer ?? new Installer(), canModify: canModify, localization: localization);
+        var vm = new OnlineModsViewModel(catalog, installer ?? new Installer(), canModify: canModify,
+            localization: localization, notifications: notifications);
         vm.SetInstance(Instance()); return vm;
+    }
+
+    /// <summary>仅保存通知数据，测试不会显示窗口。</summary>
+    private sealed class OnlineNoticeRecorder : IOperationNotifications
+    {
+        public List<OperationNotice> Items { get; } = [];
+        /// <summary>记录一次操作的真实结果供断言。</summary>
+        public void Report(OperationNotice notice) => Items.Add(notice);
     }
     private static MinecraftInstance Instance(string name = "test") => new(name, "C:\\test\\" + name, "C:\\test\\" + name + "\\.minecraft", ["1.7.10"])
     { Versions = [new("forge", "1.7.10", "Forge 10.13.4", "unused")] };

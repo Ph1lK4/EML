@@ -60,7 +60,7 @@
                      TextWrapping="Wrap" Margin="0,12,0,0"/>
         </StackPanel>
       </Border>
-      <TextBlock Text="需要拥有 Minecraft Java 版许可的个人微软账号。登录后，可在实例右键菜单的“启动设置”中启用正版账号。"
+      <TextBlock Text="需要拥有 Minecraft Java 版许可的个人微软账号。登录后，可在实例启动界面或“启动设置”中选择正版模式。"
                  Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="4,18,4,8"/>
     </StackPanel>
   </ScrollViewer>

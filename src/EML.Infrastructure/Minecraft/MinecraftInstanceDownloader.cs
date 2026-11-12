@@ -80,8 +80,7 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
             var pending = new List<InstanceFileRequirement>();
             var importManifest = File.Exists(manifestPath) ? InstanceManifestStore.Read(manifestPath) : null;
             var onlinePaths = importManifest is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
-                Mods.ModManagementStore.OnlineDownloadPaths(Mods.ModManagementStore.Read(root, importManifest),
-                    MigrationDataStore.Read(root, importManifest));
+                InstanceEffectiveRequirements.OnlineDownloadPaths(InstanceEffectiveRequirements.Build(root, importManifest));
             foreach (var file in before.Files.Where(f => !isModrinth && !isCurseForge && f.Requirement.Required && !f.IsRuntimeFile))
             {
                 token.ThrowIfCancellationRequested();

@@ -18,6 +18,7 @@ internal static class DialogAppearanceChecks
     {
         VerifyConfirmation();
         VerifyImport();
+        OperationResultDialogChecks.Run(Render);
         MigrationDialogChecks.Run(Render);
     }
 

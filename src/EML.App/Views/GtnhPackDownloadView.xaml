@@ -1,0 +1,73 @@
+<UserControl x:Class="EML.App.Views.GtnhPackDownloadView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <UserControl.Resources><BooleanToVisibilityConverter x:Key="Visible"/></UserControl.Resources>
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+  <Border Style="{StaticResource CardBorder}" Padding="18" Margin="0,0,0,14">
+   <StackPanel>
+    <TextBlock Text="从国内镜像下载 GTNH" FontSize="22" FontWeight="SemiBold"/>
+    <TextBlock Text="Prism 客户端 · 下载后创建新实例，自动补全运行依赖" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,6,0,12"/>
+    <WrapPanel>
+     <ComboBox x:Name="JavaFilter" ItemsSource="{Binding JavaFilters}" SelectedIndex="{Binding JavaFilterIndex}" Width="155"
+               IsEnabled="{Binding CanBrowse}" AutomationProperties.Name="GTNH 本体 Java 筛选" Margin="0,0,14,8"/>
+     <CheckBox x:Name="PrereleasesToggle" Content="包含测试版本" IsChecked="{Binding IncludePrereleases}" IsEnabled="{Binding CanBrowse}" VerticalAlignment="Center" Margin="0,0,16,8"/>
+     <Button Content="刷新版本" Command="{Binding RefreshCommand}" Margin="0,0,8,8"/>
+     <Button Content="镜像网站 ↗" Command="{Binding OpenMirrorWebsiteCommand}" Style="{StaticResource QuietButton}" Margin="0,0,0,8"/>
+    </WrapPanel>
+   </StackPanel>
+  </Border>
+  <Grid Grid.Row="1">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="2*"/><ColumnDefinition Width="14"/><ColumnDefinition Width="3*"/></Grid.ColumnDefinitions>
+   <Border Style="{StaticResource CardBorder}" Padding="14">
+    <Grid>
+     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+     <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,10"/>
+     <ProgressBar Grid.Row="1" IsIndeterminate="True" Height="3" Margin="0,0,0,8" Visibility="{Binding IsLoading, Converter={StaticResource Visible}}"/>
+     <ListBox x:Name="ReleaseList" Grid.Row="2" ItemsSource="{Binding Releases}" SelectedItem="{Binding SelectedRelease}" IsEnabled="{Binding CanBrowse}"
+              HorizontalContentAlignment="Stretch" BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+              VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" AutomationProperties.Name="GTNH Prism 客户端版本">
+      <ListBox.ItemTemplate><DataTemplate>
+       <StackPanel Margin="8,10">
+        <TextBlock Text="{Binding Version, StringFormat=GTNH {0}}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
+        <TextBlock Text="{Binding JavaVersion, StringFormat=Java {0}}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,5,0,0"/>
+        <TextBlock Text="测试版本" FontSize="12" Foreground="{DynamicResource DangerBrush}" Margin="0,4,0,0" Visibility="{Binding IsPrerelease, Converter={StaticResource Visible}}"/>
+       </StackPanel>
+      </DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+    </Grid>
+   </Border>
+   <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="18">
+    <Grid>
+     <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <ScrollViewer x:Name="DetailsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0">
+      <StackPanel>
+       <TextBlock Text="版本与导入" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12"/>
+       <TextBox x:Name="ReleaseInformationText" Text="{Binding ReleaseInformation, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                BorderThickness="0" Background="Transparent" Padding="0" Margin="0,0,0,14"/>
+       <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="8" Padding="12" Margin="0,0,0,14"
+               Visibility="{Binding IsPrereleaseSelection, Converter={StaticResource Visible}}">
+        <TextBlock Text="这是测试版本，可能存在兼容性或存档问题。请保留旧实例，使用存档副本测试。" TextWrapping="Wrap"/>
+       </Border>
+       <TextBlock Text="下载来源" FontWeight="SemiBold" Margin="0,0,0,6"/>
+       <TextBox Text="https://mirror.gaytnh.com/" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0" Margin="0,0,0,14"/>
+       <TextBlock Text="只下载 Prism / MultiMC 格式的客户端包，不下载服务端。原包进入下载任务中心，可暂停、继续或取消；暂停后继续可能重新下载原包。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,10"/>
+       <TextBlock Text="导入时会让你确认新实例名称，已有实例不会被覆盖。Minecraft 与加载器等依赖继续由现有补全流程处理；请自行准备版本要求的 Java。本选项只加速整合包原包，后续依赖仍按原来源下载。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,10"/>
+       <TextBlock Text="原包下载到 100% 后仍需导入与补全，请以最终结果为准。Java 环境和账号可在相应页面设置。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
+      </StackPanel>
+     </ScrollViewer>
+     <StackPanel Grid.Row="1" Margin="0,14,0,0">
+      <WrapPanel>
+       <Button Content="下载并导入" Command="{Binding InstallCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+       <Button Content="取消下载 / 导入" Command="{Binding InstallCancelCommand}" Visibility="{Binding IsInstalling, Converter={StaticResource Visible}}" Margin="0,0,0,8"/>
+      </WrapPanel>
+      <ProgressBar Value="{Binding ArchivePercent, Mode=OneWay}" Maximum="100" Height="4" Margin="0,0,0,6"/>
+      <TextBlock Text="{Binding ArchiveProgress}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap"/>
+      <TextBox x:Name="InstallStatusText" Text="{Binding InstallStatus, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+               BorderThickness="0" Background="Transparent" Padding="0,8" MaxHeight="100" VerticalScrollBarVisibility="Auto"/>
+     </StackPanel>
+    </Grid>
+   </Border>
+  </Grid>
+ </Grid>
+</UserControl>

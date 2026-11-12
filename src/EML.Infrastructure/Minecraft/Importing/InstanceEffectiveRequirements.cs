@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Minecraft.CurseForge;
+using EML.Infrastructure.Minecraft.Gtnh;
 using EML.Infrastructure.Minecraft.Migration;
 using EML.Infrastructure.Minecraft.Mods;
 
@@ -14,7 +15,8 @@ internal static class InstanceEffectiveRequirements
     internal sealed record Snapshot(IReadOnlyList<InstanceFileRequirement> Requirements,
         IReadOnlyList<string> ContentIssues, IReadOnlyList<string> Notes,
         string ManifestFingerprint, InstanceLocalReplacementService.AppliedRequirements Replacements,
-        bool IsCurseForge, string? ResolutionFingerprint, MigrationDataStore.Snapshot Migration, ModManagementStore.Snapshot Mods);
+        bool IsCurseForge, string? ResolutionFingerprint, MigrationDataStore.Snapshot Migration, ModManagementStore.Snapshot Mods,
+        AddedContentStore.Snapshot AddedContent);
 
     /// <summary>只读选取平台固定需求、原包覆盖及用户替换，最后排除 EML 派生状态。</summary>
     internal static Snapshot Build(string root, InstanceImportManifest manifest,
@@ -53,16 +55,18 @@ internal static class InstanceEffectiveRequirements
         var replacements = InstanceLocalReplacementService.ApplyWithSnapshot(root, manifest, files);
         var migration = MigrationDataStore.Read(root, manifest);
         var mods = ModManagementStore.Read(root, manifest);
-        var effective = ModManagementStore.Apply(MigrationDataStore.Apply(replacements.Requirements, migration), mods)
+        var addedContent = AddedContentStore.Read(root, manifest);
+        var effective = AddedContentStore.IncludeAdditions(
+                ModManagementStore.Apply(MigrationDataStore.Apply(replacements.Requirements, migration), mods), addedContent)
             .Where(file => !InstanceFileChangePolicy.IsDerivedStatePath(file.Path))
             .Select(file => file with { Role = InstanceFileChangePolicy.GetRole(file, manifest.GameDirectory, manifest.SourceFormat) })
             .ToArray();
         // 原始清单及可移植迁移记录已分别验证；此处验证展开后的单一有效视图，不再把迁入模组当成原包文件。
-        InstanceManifestStore.Validate(manifest with { Files = effective, MigratedPlayerFiles = null, ManagedMods = null });
+        InstanceManifestStore.Validate(manifest with { Files = effective, MigratedPlayerFiles = null, ManagedMods = null, AddedContentFiles = null });
         if (mods.Files.Count > 0)
             notes.Add($"已应用 {mods.Files.Count} 项玩家模组管理记录；禁用和主动移除不会被补全撤销，模组兼容性仍需实际验证。");
         return new(effective, issues.Distinct().ToArray(), notes.Distinct().ToArray(),
-            EmbeddedFileBaseline.ManifestFingerprint(manifest), replacements, isCurseForge, Fingerprint(resolution), migration, mods);
+            EmbeddedFileBaseline.ManifestFingerprint(manifest), replacements, isCurseForge, Fingerprint(resolution), migration, mods, addedContent);
     }
 
     /// <summary>防止安装期间改动清单、平台映射或用户选择后，沿用旧检查结果宣称就绪。</summary>
@@ -78,9 +82,16 @@ internal static class InstanceEffectiveRequirements
             throw new IOException("玩家数据迁移记录在操作期间发生变化，请重新检查。");
         if (ModManagementStore.Read(root, manifest).LocalFingerprint != snapshot.Mods.LocalFingerprint)
             throw new IOException("模组管理选择在操作期间发生变化，请重新检查。");
+        if (AddedContentStore.Read(root, manifest).LocalFingerprint != snapshot.AddedContent.LocalFingerprint)
+            throw new IOException("新增资源来源在操作期间发生变化，请重新检查。");
         if (snapshot.IsCurseForge && Fingerprint(CurseForgeFileStateStore.Read(root, manifest)) != snapshot.ResolutionFingerprint)
             throw new IOException("平台文件来源在操作期间发生变化，请重新检查。");
     }
+
+    /// <summary>统一额外模组和资源的跨平台下载范围，只有已有可信记录的文件能进入该列表。</summary>
+    internal static IReadOnlySet<string> OnlineDownloadPaths(Snapshot snapshot) =>
+        ModManagementStore.OnlineDownloadPaths(snapshot.Mods, snapshot.Migration)
+            .Concat(AddedContentStore.OnlineDownloadPaths(snapshot.AddedContent)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>仅比较完整已验证映射，不将文件内容摘要混入另一来源的校验要求。</summary>
     private static string? Fingerprint(CurseForgeFileResolution? resolution) => resolution is null ? null :

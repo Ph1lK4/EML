@@ -1,6 +1,7 @@
 using EML.App.Services;
 using EML.App.ViewModels;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft.Launching;
 
 namespace EML.Tests;
@@ -24,6 +25,94 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.True(fixture.ViewModel.CanEditLaunchSettings);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.SaveLaunchSettingsCommand.CanExecute(null));
+        Assert.Empty(fixture.Notifications.Notices);
+    }
+
+    /// <summary>启动界面用两个明确模式替代隐含复选框；正版模式锁定离线名称输入。</summary>
+    [Fact]
+    public async Task LaunchModeSwitchesBetweenOfflineAndMicrosoftIdentity()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+
+        Assert.Equal(["离线模式", "正版模式"], fixture.ViewModel.LaunchModes);
+        Assert.Equal("离线模式", fixture.ViewModel.SelectedLaunchMode);
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.True(fixture.ViewModel.CanEditOfflinePlayerName);
+
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("正版模式", fixture.ViewModel.SelectedLaunchMode);
+        Assert.False(fixture.ViewModel.CanEditOfflinePlayerName);
+
+        fixture.ViewModel.SelectedLaunchMode = "离线模式";
+
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.True(fixture.ViewModel.CanEditOfflinePlayerName);
+    }
+
+    /// <summary>兼容已保存的布尔模式，两个入口选择后都把本次身份直接交给启动服务。</summary>
+    [Theory]
+    [InlineData(true, "正版模式")]
+    [InlineData(false, "离线模式")]
+    public async Task ModeSelectionLoadsSavesAndLaunchesWithoutChangingOfflineName(bool microsoft, string mode)
+    {
+        var fixture = new Fixture();
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+            { UseMicrosoftAccount = microsoft, PlayerName = "MyOfflineName" });
+        await fixture.SelectAsync();
+        Assert.Equal(mode, fixture.ViewModel.SelectedLaunchMode);
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.SelectedLaunchMode = "离线模式";
+        Assert.Equal("MyOfflineName", fixture.ViewModel.PlayerName);
+        fixture.ViewModel.SelectedLaunchMode = mode;
+
+        await fixture.ViewModel.SaveLaunchSettingsCommand.ExecuteAsync(null);
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(microsoft, Assert.Single(fixture.Store.Saved).Settings.UseMicrosoftAccount);
+        var launched = Assert.Single(fixture.Launcher.Calls).Settings;
+        Assert.Equal(microsoft, launched.UseMicrosoftAccount);
+        Assert.Equal("MyOfflineName", launched.PlayerName);
+    }
+
+    /// <summary>绑定清空或异常值不能把已经选中的正版模式改成离线。</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("未知")]
+    public async Task UnknownModeDoesNotChangeIdentity(string? selection)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.SelectedLaunchMode = selection!;
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+    }
+
+    /// <summary>展示共享账号档案；登录、换号、退出无需再次选实例，也不请求或复制游戏令牌。</summary>
+    [Fact]
+    public async Task AccountDisplayFollowsLoginAndLogoutWhileKeepingOfflineName()
+    {
+        var service = new AccountDisplayService();
+        var accounts = new MinecraftAccountViewModel(service);
+        var fixture = new Fixture(accounts);
+        await fixture.SelectAsync();
+        fixture.ViewModel.PlayerName = "OfflineName";
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        Assert.Same(accounts, fixture.ViewModel.Accounts);
+        Assert.Equal("尚未登录", fixture.ViewModel.Accounts!.AccountName);
+
+        await accounts.LoginCommand.ExecuteAsync(null);
+        Assert.Equal("OnlineAlex", fixture.ViewModel.Accounts.AccountName);
+        service.NextName = "AnotherPlayer";
+        await accounts.LoginCommand.ExecuteAsync(null);
+        Assert.Equal("AnotherPlayer", fixture.ViewModel.Accounts.AccountName);
+        await accounts.LogoutCommand.ExecuteAsync(null);
+        Assert.Equal("尚未登录", fixture.ViewModel.Accounts.AccountName);
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("OfflineName", fixture.ViewModel.PlayerName);
     }
 
     /// <summary>读取尚未结束时，即使直接执行命令也不能保存或使用上一实例的设置启动。</summary>
@@ -101,6 +190,9 @@ public sealed class InstancesViewModelLaunchingTests
         await fixture.SelectAsync();
 
         Assert.Contains("设置无法读取", fixture.ViewModel.LaunchSettingsStatus);
+        var failedNotice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, failedNotice.Kind);
+        Assert.Contains(fixture.Instance.InstancePath, failedNotice.Paths);
         Assert.False(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
         Assert.False(fixture.ViewModel.SaveLaunchSettingsCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.ReloadLaunchSettingsCommand.CanExecute(null));
@@ -109,6 +201,7 @@ public sealed class InstancesViewModelLaunchingTests
         await fixture.ViewModel.ReloadLaunchSettingsCommand.ExecuteAsync(null);
         Assert.Equal("Recovered", fixture.ViewModel.PlayerName);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
+        Assert.Equal(OperationNoticeKind.Success, fixture.Notifications.Notices[^1].Kind);
     }
 
     /// <summary>界面将本次实例和用户输入作为独立设置传入启动服务，不依赖上次保存。</summary>
@@ -195,6 +288,9 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Contains("磁盘写入失败", fixture.ViewModel.LaunchSettingsStatus);
         Assert.Equal("SavedPlayer", fixture.ViewModel.PlayerName);
         Assert.False(fixture.ViewModel.IsBusy);
+        Assert.Equal([OperationNoticeKind.Success, OperationNoticeKind.Failure], fixture.Notifications.Notices.Select(notice => notice.Kind));
+        Assert.Contains("磁盘写入失败", fixture.Notifications.Notices[^1].Message);
+        Assert.Contains(fixture.Instance.InstancePath, fixture.Notifications.Notices[^1].Paths);
     }
 
     /// <summary>从完整检查到进程结束持续占用界面，停止只请求取消并等待启动服务退出。</summary>
@@ -225,6 +321,11 @@ public sealed class InstancesViewModelLaunchingTests
         AssertConflictingCommandsDisabled(fixture.ViewModel);
         progress.Report(new(MinecraftLaunchStage.Running, "Java 已创建", LogPath: "current.log"));
         Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
+        progress.Report(new(MinecraftLaunchStage.Running, "重复阶段事件", LogPath: "current.log"));
+        Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
+        var runningNotice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Success, runningNotice.Kind);
+        Assert.Contains("请在游戏窗口确认加载结果", runningNotice.Message);
         Assert.True(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsPreparingLaunch);
         Assert.True(fixture.ViewModel.StopGameCommand.CanExecute(null));
@@ -245,6 +346,8 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal("current.log", fixture.ViewModel.LaunchLogPath);
         Assert.True(fixture.ViewModel.RenameCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
+        Assert.Equal(2, fixture.Notifications.Notices.Count);
+        Assert.Equal(OperationNoticeKind.Cancelled, fixture.Notifications.Notices[^1].Kind);
     }
 
     /// <summary>准备阶段取消会传递到共享检查流程，最终不会保留运行状态。</summary>
@@ -269,6 +372,7 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.False(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsBusy);
         Assert.Null(fixture.ViewModel.LastExitCode);
+        Assert.Equal(OperationNoticeKind.Cancelled, Assert.Single(fixture.Notifications.Notices).Kind);
     }
 
     /// <summary>检查或启动失败清楚报告原因，不把失败结果伪装成已进入游戏。</summary>
@@ -286,6 +390,10 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.False(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsBusy);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("必要运行库缺失", notice.Message);
+        Assert.Contains(fixture.Instance.InstancePath, notice.Paths);
     }
 
     /// <summary>异常退出保留退出码与日志路径，不能用成功创建进程推断游戏加载成功。</summary>
@@ -301,6 +409,9 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal(1, fixture.ViewModel.LastExitCode);
         Assert.Equal("failure.log", fixture.ViewModel.LaunchLogPath);
         Assert.Contains("退出码：1", fixture.ViewModel.LaunchStatus);
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("failure.log", notice.Paths);
     }
 
     /// <summary>大量输出只留下最近一千行，任务结束后的排队事件也不能改变状态。</summary>
@@ -402,12 +513,14 @@ public sealed class InstancesViewModelLaunchingTests
         public MinecraftInstance Instance { get; } = new("Test instance", "C:\\Test root\\instances\\Test instance", "C:\\Test root\\instances\\Test instance\\.minecraft", []);
         public FakeLauncher Launcher { get; } = new();
         public FakeSettingsStore Store { get; } = new();
+        public RecordingNotifications Notifications { get; } = new();
         public InstancesViewModel ViewModel { get; }
         /// <summary>让所有非启动服务在误调用时直接失败。</summary>
-        public Fixture()
+        public Fixture(MinecraftAccountViewModel? accounts = null)
         {
             var unused = new UnusedServices();
-            ViewModel = new(unused, unused, unused, unused, "C:\\Test root\\instances", unused, unused, Launcher, Store);
+            ViewModel = new(unused, unused, unused, unused, "C:\\Test root\\instances", unused, unused, Launcher, Store,
+                notifications: Notifications, accounts: accounts);
         }
         /// <summary>选择测试实例并等待本次启动设置载入。</summary>
         public async Task SelectAsync()
@@ -415,6 +528,27 @@ public sealed class InstancesViewModelLaunchingTests
             ViewModel.SelectedInstance = Instance;
             await ViewModel.LaunchSettingsLoadTask;
         }
+    }
+
+    /// <summary>仅提供公开玩家档案；UI 误取会话令牌时测试直接失败。</summary>
+    private sealed class AccountDisplayService : IMinecraftAccountService
+    {
+        public bool IsConfigured => true;
+        public string NextName { get; set; } = "OnlineAlex";
+        public Task<MinecraftAccount?> LoadAccountAsync(CancellationToken cancellationToken = default) => Task.FromResult<MinecraftAccount?>(null);
+        public Task<MinecraftAccount> SignInAsync(IProgress<MinecraftLoginPrompt>? progress = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new MinecraftAccount("test-profile", NextName));
+        public Task SignOutAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<MinecraftAccountSession> GetSessionAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("显示玩家名不能读取登录令牌。");
+    }
+
+    /// <summary>记录启动生命周期的可见结果，测试不会弹出窗口。</summary>
+    private sealed class RecordingNotifications : IOperationNotifications
+    {
+        public List<OperationNotice> Notices { get; } = [];
+        /// <summary>保存每条通知，以验证进度事件不会造成重复弹窗。</summary>
+        public void Report(OperationNotice notice) => Notices.Add(notice);
     }
 
     /// <summary>记录实际启动目标和设置，由测试控制准备、输出、退出和取消。</summary>

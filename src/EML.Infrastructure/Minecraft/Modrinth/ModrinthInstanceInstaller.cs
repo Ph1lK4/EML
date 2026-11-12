@@ -87,7 +87,7 @@ public sealed class ModrinthInstanceInstaller : IModrinthInstanceInstaller
             }
             var files = (snapshot?.Requirements ?? []).Where(file => file.Required).ToArray();
             var onlinePaths = snapshot is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) :
-                Mods.ModManagementStore.OnlineDownloadPaths(snapshot.Mods, snapshot.Migration);
+                InstanceEffectiveRequirements.OnlineDownloadPaths(snapshot);
             var optionalCount = manifest.Files.Count(file => !file.Required);
             if (optionalCount > 0) notes.Add($"已跳过 {optionalCount} 个可选文件；可选模组选择功能尚未启用。");
             var completed = 0;

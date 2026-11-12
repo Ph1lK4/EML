@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EML.App.Services;
 using EML.Core.Java;
 
 namespace EML.App.ViewModels;
@@ -9,6 +10,7 @@ namespace EML.App.ViewModels;
 public partial class JavaSettingsViewModel : ObservableObject
 {
     private readonly IJavaLocator _javaLocator;
+    private readonly IOperationNotifications _notifications;
 
     [ObservableProperty]
     private ObservableCollection<JavaInstallation> installations = [];
@@ -20,9 +22,10 @@ public partial class JavaSettingsViewModel : ObservableObject
     private string statusText = "尚未检测 Java";
 
     /// <summary>接收 Java 检测接口，让界面无需了解注册表或磁盘搜索的具体实现。</summary>
-    public JavaSettingsViewModel(IJavaLocator javaLocator)
+    public JavaSettingsViewModel(IJavaLocator javaLocator, IOperationNotifications? notifications = null)
     {
         _javaLocator = javaLocator;
+        _notifications = notifications ?? NullOperationNotifications.Instance;
     }
 
     /// <summary>检测 Java 并更新列表，默认选中首项；失败时显示原因。</summary>
@@ -47,10 +50,13 @@ public partial class JavaSettingsViewModel : ObservableObject
             StatusText = Installations.Count == 0
                 ? "没有找到可用的 Java"
                 : $"找到 {Installations.Count} 个 Java 环境";
+            if (Installations.Count == 0) _notifications.Warning("Java 检测完成", StatusText + "，请安装适合整合包的 Java 后重新检测。");
+            else _notifications.Success("Java 检测完成", StatusText, Installations.Select(item => item.ExecutablePath).ToArray());
         }
         catch (Exception exception)
         {
             StatusText = $"检测失败：{exception.Message}";
+            _notifications.Failure("Java 检测失败", exception);
         }
     }
 }

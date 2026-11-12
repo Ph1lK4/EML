@@ -5,6 +5,7 @@ using EML.Core.Minecraft.Migration;
 using EML.Core.Minecraft.Mods;
 using EML.Infrastructure.Minecraft.Importing;
 using EML.Infrastructure.Minecraft.Mods;
+using EML.Infrastructure.Minecraft.Gtnh;
 
 namespace EML.Infrastructure.Minecraft.Migration;
 
@@ -68,6 +69,8 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
             "文件迁移不代表存档兼容；GTNH 大跨度更新请逐个大版本进入存档、退出后再继续。" };
         var sourceManifest = InstanceManifestStore.Read(Path.Combine(source.InstancePath, InstanceImportManifest.FileName));
         var targetManifest = InstanceManifestStore.Read(Path.Combine(target.InstancePath, InstanceImportManifest.FileName));
+        var sourceContent = AddedContentStore.Read(source.InstancePath, sourceManifest);
+        var targetContent = AddedContentStore.Read(target.InstancePath, targetManifest);
         var sourceRequirements = includesMods ? InstanceEffectiveRequirements.Build(source.InstancePath, sourceManifest).Requirements : [];
         var sourceModState = ModManagementStore.Read(source.InstancePath, sourceManifest);
         var sourceMigratedMods = includesMods ? MigrationDataStore.Read(source.InstancePath, sourceManifest).Files
@@ -147,8 +150,21 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
                     var destination = worldTarget is null ? sourcePath : worldTarget + sourcePath[prefix.Length..];
                     if (!destinations.Add(destination)) throw new InvalidDataException("迁移目标重复。");
                     var from = MigrationIO.SafePath(source.GameDirectory, sourcePath);
-                    var to = MigrationIO.SafePath(target.GameDirectory, destination);
                     var original = await MigrationIO.SnapshotAsync(from, token) ?? throw new IOException("源文件已消失。");
+                    // 官方资源仍保留平台基线，不借玩家数据迁移把当前字节重新认可为可变内容。
+                    // 在读取目标前排除受保护文件和父子路径冲突，避免把新版 ZIP 当成目录继续访问。
+                    var protectedTarget = ContentOwnsPath(targetContent, targetManifest, destination);
+                    var protectedSource = ContentOwnsPath(sourceContent, sourceManifest, sourcePath);
+                    if (protectedTarget || protectedSource)
+                    {
+                        var reason = protectedTarget ? "新版此路径已登记官方资源，保留现有来源；覆盖冲突开关不会替换它。" :
+                            "旧版此文件是已登记的官方资源，请在新实例重新选择适配版本下载；不转为玩家数据或重新建立摘要。";
+                        files.Add(new(group, sourcePath, destination, original.Size, original.Hash,
+                            original.Size, original.Hash, null, null, MigrationFileAction.Skip) { Detail = reason });
+                        notes.Add(sourcePath + "：" + reason);
+                        continue;
+                    }
+                    var to = MigrationIO.SafePath(target.GameDirectory, destination);
                     var previous = await MigrationIO.SnapshotAsync(to, token);
                     var expected = original;
                     if (group == "language")
@@ -171,9 +187,19 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
             Target = EmbeddedFileBaseline.ManifestFingerprint(targetManifest), Data = MigrationDataStore.Read(target.InstancePath, targetManifest),
             SourceModState = sourceModState,
             TargetModState = ModManagementStore.Read(target.InstancePath, targetManifest),
+            SourceAddedContent = sourceContent, TargetAddedContent = targetContent,
             Replacement = InstanceLocalReplacementService.ApplyWithSnapshot(target.InstancePath, targetManifest, targetManifest.Files).ReplacementFingerprint
         })));
         return new(request, source, target, files, notes, fingerprint);
+    }
+
+    /// <summary>把游戏相对位置映射到来源清单，保护官方资源及其父子路径，不按文件名猜测来源。</summary>
+    private static bool ContentOwnsPath(AddedContentStore.Snapshot snapshot, InstanceImportManifest manifest, string gamePath)
+    {
+        var relative = (manifest.GameDirectory == "." ? "" : manifest.GameDirectory + "/") + gamePath;
+        return snapshot.Files.Any(record => record.Baseline.Path is { } path &&
+            (path.Equals(relative, StringComparison.OrdinalIgnoreCase) || path.StartsWith(relative + "/", StringComparison.OrdinalIgnoreCase) ||
+             relative.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>未识别实例不得凭名称进入 GTNH 文件迁移管线。</summary>

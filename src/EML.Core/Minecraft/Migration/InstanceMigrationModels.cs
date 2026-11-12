@@ -19,7 +19,7 @@ public sealed record InstanceMigrationRequest(string SourceInstance, string Targ
 public sealed record MigrationFile(string Group, string SourcePath, string TargetPath, long Size, string Sha256,
     long SourceSize, string SourceSha256, long? PreviousSize, string? PreviousSha256, MigrationFileAction Action)
 {
-    /// <summary>说明额外模组的跳过原因；不会被普通“覆盖冲突”开关改变。</summary>
+    /// <summary>说明模组或受保护资源的跳过原因；不会被普通“覆盖冲突”开关改变。</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Detail { get; init; }
     /// <summary>额外在线模组的官方来源随预览固定，复制字节的 SHA-256 不替代其官方摘要。</summary>
@@ -27,7 +27,8 @@ public sealed record MigrationFile(string Group, string SourcePath, string Targe
     public InstanceFileRequirement? OnlineModBaseline { get; init; }
     public string ActionDisplay => Action switch { MigrationFileAction.Copy when Group == "language" => "合并语言项",
         MigrationFileAction.Copy => "复制", MigrationFileAction.Identical => "相同，跳过",
-        MigrationFileAction.Skip => "跳过，保留新版模组", _ => "冲突，默认保留新版" };
+        MigrationFileAction.Skip when GtnhExtraModPolicy.IsGroup(Group) => "跳过，保留新版模组",
+        MigrationFileAction.Skip => "跳过，保留官方来源", _ => "冲突，默认保留新版" };
 }
 /// <summary>不可直接作为写入许可；执行时重新生成预览并比对指纹。</summary>
 public sealed record InstanceMigrationPlan(InstanceMigrationRequest Request, GtnhInstanceInfo Source,

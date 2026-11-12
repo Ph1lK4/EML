@@ -83,6 +83,9 @@ public sealed class LauncherViewsSmokeTests
             VerifySingleLineTextVisibility(host);
             VerifyInputsAndDropdowns(host);
             VerifyGtnhPages(host);
+            VerifyGtnhMigrationImportEntry(host);
+            VerifyGtnhPackDownloads(host);
+            VerifySharedLaunchIdentity(host);
             VerifyLaunchSettingsPage(host);
             VerifyInstanceDownloadsPage(host);
             VerifyDownloadCenterPage(host);
@@ -339,7 +342,8 @@ public sealed class LauncherViewsSmokeTests
         Assert.Same(model.SelectedInstance, target.SelectedItem);
         target.SelectedItem = model.Instances[1];
         Assert.Same(model.Instances[1], model.SelectedInstance);
-        var player = Assert.IsType<TextBox>(page.FindName("PlayerNameInput"));
+        var identity = Assert.IsType<LaunchIdentitySelector>(page.FindName("LaunchIdentity"));
+        var player = Assert.IsType<TextBox>(identity.FindName("PlayerNameInput"));
         Assert.Equal("Steve", player.Text);
         Assert.True(MeasureSingleLineVisibility(player, "启动玩家名").Visible);
         player.Text = "Alex";
@@ -371,10 +375,76 @@ public sealed class LauncherViewsSmokeTests
         Assert.False(arguments.IsEnabled);
     }
 
+    /// <summary>两个入口绑定同一个模型；更换账号、切换模式和离线名称编辑立即同步，忙碌时均锁定。</summary>
+    private static void VerifySharedLaunchIdentity(Border host)
+    {
+        var model = new LaunchSettingsPreview();
+        var first = new LaunchIdentitySelector
+        { DataContext = model, Margin = new Thickness(24), FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 14 };
+        var second = new LaunchIdentitySelector
+        { DataContext = model, Margin = new Thickness(24), FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 14 };
+        var panel = new StackPanel
+        {
+            Background = (Brush)Application.Current.FindResource("WindowBackgroundBrush")
+        };
+        panel.Children.Add(first);
+        panel.Children.Add(second);
+        host.Child = panel;
+        Layout(host);
+        var firstMode = Assert.IsType<ComboBox>(first.FindName("ModeSelector"));
+        var secondMode = Assert.IsType<ComboBox>(second.FindName("ModeSelector"));
+        var firstOffline = Assert.IsType<TextBox>(first.FindName("PlayerNameInput"));
+        var secondOffline = Assert.IsType<TextBox>(second.FindName("PlayerNameInput"));
+        var firstOnline = Assert.IsType<TextBox>(first.FindName("MicrosoftPlayerName"));
+        var secondOnline = Assert.IsType<TextBox>(second.FindName("MicrosoftPlayerName"));
+        firstOffline.Text = "Offline_Player";
+        Layout(host);
+        Assert.Equal(firstOffline.Text, secondOffline.Text);
+        WriteTextPreview(panel, "launch-mode-offline.png");
+
+        firstMode.SelectedItem = "正版模式";
+        Layout(host);
+        Assert.Equal("正版模式", secondMode.SelectedItem);
+        Assert.False(IsLocallyVisible(firstOffline, first));
+        Assert.False(IsLocallyVisible(secondOffline, second));
+        Assert.True(IsLocallyVisible(firstOnline, first));
+        Assert.True(secondOnline.IsReadOnly);
+        Assert.Equal("尚未登录", firstOnline.Text);
+        model.Accounts.AccountName = "Online_Player_123";
+        Layout(host);
+        Assert.Equal("Online_Player_123", firstOnline.Text);
+        Assert.Equal("Online_Player_123", secondOnline.Text);
+        Assert.True(MeasureSingleLineVisibility(firstOnline, "正版玩家名").Visible);
+        WriteTextPreview(panel, "launch-mode-microsoft.png");
+
+        model.Accounts.AccountName = "AnotherPlayer";
+        Layout(host);
+        Assert.Equal("AnotherPlayer", secondOnline.Text);
+        model.Accounts.AccountName = "尚未登录";
+        Layout(host);
+        Assert.Equal("尚未登录", firstOnline.Text);
+        Assert.Equal("正版模式", firstMode.SelectedItem);
+
+        secondMode.SelectedItem = "离线模式";
+        Layout(host);
+        Assert.Equal("离线模式", firstMode.SelectedItem);
+        Assert.Equal("Offline_Player", firstOffline.Text);
+        Assert.True(IsLocallyVisible(secondOffline, second));
+        Assert.False(IsLocallyVisible(secondOnline, second));
+        model.Busy = true;
+        Layout(host);
+        Assert.False(firstMode.IsEnabled);
+        Assert.False(secondMode.IsEnabled);
+        Assert.False(firstOffline.IsEnabled);
+        Assert.False(secondOffline.IsEnabled);
+    }
+
     /// <summary>只提供启动设置的绑定数据，不创建启动服务或读写配置。</summary>
     private sealed class LaunchSettingsPreview : INotifyPropertyChanged
     {
         private bool _busy;
+        private bool _useMicrosoftAccount;
+        private string _playerName = "Steve";
         public event PropertyChangedEventHandler? PropertyChanged;
         public MinecraftInstance[] Instances { get; } =
         [new("GTNH 2.9.0 · 生存服", @"C:\preview\gtnh", @"C:\preview\gtnh\.minecraft", ["1.7.10"]),
@@ -382,9 +452,30 @@ public sealed class LauncherViewsSmokeTests
         public MinecraftInstance? SelectedInstance { get; set; }
         public bool CanInteract => !Busy;
         public bool CanEditLaunchSettings => !Busy;
-        public bool CanEditOfflinePlayerName => true;
-        public bool UseMicrosoftAccount { get; set; }
-        public string PlayerName { get; set; } = "Steve";
+        public bool CanEditOfflinePlayerName => !Busy && !UseMicrosoftAccount;
+        public IReadOnlyList<string> LaunchModes { get; } = ["离线模式", "正版模式"];
+        public AccountNamePreview Accounts { get; } = new();
+        public string SelectedLaunchMode
+        {
+            get => UseMicrosoftAccount ? "正版模式" : "离线模式";
+            set { if (value is "正版模式" or "离线模式") UseMicrosoftAccount = value == "正版模式"; }
+        }
+        public bool UseMicrosoftAccount
+        {
+            get => _useMicrosoftAccount;
+            set
+            {
+                _useMicrosoftAccount = value;
+                PropertyChanged?.Invoke(this, new(nameof(UseMicrosoftAccount)));
+                PropertyChanged?.Invoke(this, new(nameof(SelectedLaunchMode)));
+                PropertyChanged?.Invoke(this, new(nameof(CanEditOfflinePlayerName)));
+            }
+        }
+        public string PlayerName
+        {
+            get => _playerName;
+            set { _playerName = value; PropertyChanged?.Invoke(this, new(nameof(PlayerName))); }
+        }
         public string SelectedJavaPath { get; set; } = @"C:\Java\bin\java.exe";
         public string MinMemoryMbText { get; set; } = "1024";
         public string MaxMemoryMbText { get; set; } = "8192";
@@ -400,11 +491,24 @@ public sealed class LauncherViewsSmokeTests
                 _busy = value;
                 PropertyChanged?.Invoke(this, new(nameof(CanInteract)));
                 PropertyChanged?.Invoke(this, new(nameof(CanEditLaunchSettings)));
+                PropertyChanged?.Invoke(this, new(nameof(CanEditOfflinePlayerName)));
             }
         }
 
         /// <summary>固定初始目标，后续通过页面双向绑定选择第二个虚拟实例。</summary>
         public LaunchSettingsPreview() => SelectedInstance = Instances[0];
+    }
+
+    /// <summary>模拟账号页公开名称变化，不提供凭据或真实账号。</summary>
+    private sealed class AccountNamePreview : INotifyPropertyChanged
+    {
+        private string _accountName = "尚未登录";
+        public event PropertyChangedEventHandler? PropertyChanged;
+        public string AccountName
+        {
+            get => _accountName;
+            set { _accountName = value; PropertyChanged?.Invoke(this, new(nameof(AccountName))); }
+        }
     }
 
     /// <summary>生产搜索和版本输入必须完整显示一行；仅 Text 值正确无法发现内边距重复导致的裁切。</summary>
@@ -455,12 +559,12 @@ public sealed class LauncherViewsSmokeTests
         encoder.Save(file);
     }
 
-    /// <summary>以较小窗口显示带实际字段的专区，验证两页绑定、目标选择和滚动布局。</summary>
+    /// <summary>以较小窗口显示专区各页，验证分类、规则说明、目标选择和滚动布局。</summary>
     private static void VerifyGtnhPages(Border host)
     {
-        foreach (var migration in new[] { false, true })
+        foreach (var (section, nonStargate) in new[] { (0, false), (0, true), (1, false), (2, false), (3, false) })
         {
-            var model = new GtnhPreview(migration);
+            var model = new GtnhPreview(section, nonStargate);
             var page = new GtnhHubView
             {
                 DataContext = model, FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 14,
@@ -474,10 +578,15 @@ public sealed class LauncherViewsSmokeTests
             Assert.Contains(VisualDescendants(target).OfType<TextBlock>(), item => item.Text.Contains("GTNH 2.9.0"));
             var visibleText = VisualDescendants(page).OfType<TextBlock>().Where(item => item.IsVisible || IsLocallyVisible(item, page))
                 .Select(item => item.Text).ToArray();
-            Assert.Contains(migration ? "把熟悉的世界，带到新版 GTNH" : "安装前看这里", visibleText);
-            WriteTextPreview(page, migration ? "gtnh-migration.png" : "gtnh-addons.png");
-            if (!migration)
+            Assert.Contains(section == 1 ? "把熟悉的世界，带到新版 GTNH" : "安装前看这里", visibleText);
+            if (nonStargate) Assert.Contains("非星门规则", visibleText);
+            WriteTextPreview(page, $"gtnh-section-{section}-{nonStargate}.png");
+            if (section != 1)
             {
+                var category = Assert.Single(VisualDescendants(page).OfType<ComboBox>(), item =>
+                    BindingOperations.GetBinding(item, Selector.SelectedItemProperty)?.Path.Path == "SelectedCategory");
+                Assert.Equal(model.SelectedCategory, category.SelectedItem);
+                Assert.Contains("来源：" + model.SelectedAddon.SourceDisplay, visibleText);
                 var search = Assert.Single(VisualDescendants(page).OfType<TextBox>(), item =>
                     BindingOperations.GetBinding(item, TextBox.TextProperty)?.Path.Path == "SearchText");
                 search.SetCurrentValue(TextBox.TextProperty, "建筑工具 WorldEdit");
@@ -493,6 +602,114 @@ public sealed class LauncherViewsSmokeTests
         }
     }
 
+    /// <summary>空实例库也能使用旧实例导入入口，小窗口可以滚动到迁移操作。</summary>
+    private static void VerifyGtnhMigrationImportEntry(Border host)
+    {
+        var import = new CommunityToolkit.Mvvm.Input.RelayCommand(() => { });
+        var page = new GtnhHubView
+        {
+            DataContext = new
+            {
+                IsMigration = true, IsCatalogPage = false, IsPackDownloads = false,
+                HasTarget = false, CanInteract = true, Targets = Array.Empty<GtnhInstanceInfo>(),
+                ImportOldInstanceCommand = import, IsImportingOldInstance = false,
+                MigrationImportHint = "导入后会自动补全依赖，再选择新版作为接收方；不会自动开始迁移。",
+                Instances = new { TransferPercent = 0, TransferStatus = "", MigrationStatus = "", MigrationJournalPath = "" }
+            },
+            FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 14,
+            Background = (Brush)Application.Current.FindResource("WindowBackgroundBrush")
+        };
+        host.Child = page;
+        Layout(host);
+        var button = Assert.IsType<Button>(page.FindName("ImportOldInstanceButton"));
+        Assert.Same(import, button.Command);
+        Assert.True(button.IsEnabled);
+        Assert.True(IsLocallyVisible(button, page));
+        var scroll = Assert.IsType<ScrollViewer>(page.FindName("MigrationScroll"));
+        Assert.True(scroll.ViewportHeight > 0);
+        button.BringIntoView(); Layout(host);
+        var bounds = button.TransformToAncestor(page).TransformBounds(new Rect(button.RenderSize));
+        Assert.True(bounds.Left >= 0 && bounds.Right <= page.ActualWidth);
+        Assert.True(bounds.Top >= 0 && bounds.Bottom <= page.ActualHeight);
+        var migration = Assert.Single(VisualDescendants(page).OfType<Button>(), item => Equals(item.Content, "从旧 GTNH 迁入数据"));
+        Assert.False(migration.IsEnabled);
+        scroll.ScrollToBottom(); Layout(host);
+        Assert.True(scroll.VerticalOffset > 0, "小窗口必须能滚动阅读迁移步骤及结果。");
+        scroll.ScrollToTop(); Layout(host);
+        WritePageOverview(host, page, "gtnh-migration-import.png");
+    }
+
+    /// <summary>用生产镜像下载模型验证空实例库的入口、小窗口滚动和 Java 筛选，不访问网络。</summary>
+    private static void VerifyGtnhPackDownloads(Border host)
+    {
+        using var model = new GtnhPackDownloadViewModel(new PreviewGtnhPacks(),
+            (_, _, _) => throw new InvalidOperationException("离屏检查不能下载整合包。"), () => true);
+        model.SetActive(true);
+        Assert.True(model.ReleasesLoadTask.IsCompletedSuccessfully);
+        var page = new GtnhHubView
+        {
+            DataContext = new
+            {
+                IsPackDownloads = true, IsCatalogPage = false, IsMigration = false,
+                Packs = model, Targets = Array.Empty<GtnhInstanceInfo>(), CanInteract = true,
+                Instances = new { TransferPercent = 0, TransferStatus = "" }
+            },
+            FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 14,
+            Background = (Brush)Application.Current.FindResource("WindowBackgroundBrush")
+        };
+        host.Child = page;
+        Layout(host);
+        var downloads = Assert.IsType<GtnhPackDownloadView>(page.FindName("PackDownloadPage"));
+        Assert.True(IsLocallyVisible(downloads, page));
+        Assert.Same(model, downloads.DataContext);
+        var list = Assert.IsType<ListBox>(downloads.FindName("ReleaseList"));
+        Assert.True(list.ActualHeight > 0);
+        list.SelectedItem = model.Releases[0];
+        Layout(host);
+        Assert.Same(list.SelectedItem, model.SelectedRelease);
+        var information = Assert.IsType<TextBox>(downloads.FindName("ReleaseInformationText"));
+        Assert.True(information.IsReadOnly);
+        Assert.Contains(model.SelectedRelease!.FileName, information.Text);
+        var install = Assert.Single(VisualDescendants(downloads).OfType<Button>(), item => Equals(item.Content, "下载并导入"));
+        Assert.Same(model.InstallCommand, install.Command);
+        Assert.True(install.IsEnabled);
+        var bounds = install.TransformToAncestor(page).TransformBounds(new Rect(install.RenderSize));
+        Assert.True(bounds.Top >= 0 && bounds.Bottom <= page.ActualHeight);
+        Assert.True(bounds.Left >= 0 && bounds.Right <= page.ActualWidth);
+        var details = Assert.IsType<ScrollViewer>(downloads.FindName("DetailsScroll"));
+        Assert.True(details.ViewportHeight > 0);
+        details.ScrollToBottom(); Layout(host);
+        Assert.True(details.VerticalOffset > 0, "小窗口必须能阅读本体来源和依赖补全说明。");
+        WriteTextPreview(page, "gtnh-pack-downloads.png");
+        var filter = Assert.IsType<ComboBox>(downloads.FindName("JavaFilter"));
+        filter.SelectedIndex = 2;
+        Layout(host);
+        Assert.All(model.Releases, release => Assert.Equal("8", release.JavaVersion));
+        model.IsInstalling = true;
+        Layout(host);
+        Assert.False(filter.IsEnabled);
+        Assert.False(list.IsEnabled);
+        Assert.False(install.IsEnabled);
+        model.IsInstalling = false;
+    }
+
+    /// <summary>只返回目录样本，不允许实际准备原包。</summary>
+    private sealed class PreviewGtnhPacks : IGtnhPackService
+    {
+        /// <summary>提供同一 GTNH 版本的两个 Java 变体，验证按要求筛选。</summary>
+        public Task<IReadOnlyList<GtnhPackRelease>> GetReleasesAsync(bool includePrereleases = false, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<GtnhPackRelease>>([Pack("17-26"), Pack("8")]);
+        /// <summary>视图测试不能执行下载或写入。</summary>
+        public Task<PreparedInstanceArchive> PrepareAsync(string releaseId, IProgress<FileDownloadProgress>? progress = null,
+            CancellationToken cancellationToken = default) => throw new InvalidOperationException("不允许真实下载。");
+        /// <summary>构造显示所需的版本、文件名和镜像大小信息。</summary>
+        private static GtnhPackRelease Pack(string java) => new()
+        {
+            Id = $"GT_New_Horizons_2.9.0_Java_{java}.zip", Version = "2.9.0", JavaVersion = java,
+            FileName = $"GT_New_Horizons_2.9.0_Java_{java}.zip", Size = 747848389
+        };
+    }
+
     /// <summary>离屏元素没有系统窗口，按祖先 Visibility 判断本页是否展开。</summary>
     private static bool IsLocallyVisible(DependencyObject item, DependencyObject page)
     {
@@ -505,19 +722,40 @@ public sealed class LauncherViewsSmokeTests
     }
 
     /// <summary>仅供离屏绑定的预览数据，不创建服务、不执行下载或修改实例。</summary>
-    private sealed class GtnhPreview(bool migration)
+    private sealed class GtnhPreview(int section, bool nonStargate)
     {
         public GtnhInstanceInfo[] Targets { get; } = [new("C:\\preview", "GTNH 2.9.0 · 生存服", "C:\\preview\\.minecraft", "2.9.0")];
         public GtnhInstanceInfo SelectedTarget { get => Targets[0]; set { } }
-        public GtnhAddon[] Addons { get; } = [new("preview", "WorldEdit · 建筑工具", "GTNH 适配的建筑与选区编辑工具。", "建筑", "GTNewHorizons/WorldEdit", "选择适合目标版本的发行文件；多人游戏还需服务端支持及相应权限。")];
+        public GtnhAddon[] Addons { get; } = [new("preview",
+            section == 2 ? "GTNH 深色界面 · 示例" : section == 3 ? "光影项目 · 示例" : nonStargate ? "扭曲时空科技 · 示例" : "WorldEdit · 建筑工具",
+            "安装前请确认目标 GTNH 版本，阅读作者的兼容说明。", section == 2 ? "深色模式" : section == 3 ? "光影" : nonStargate ? "流程修改" : "功能增强",
+            "GTNewHorizons/WorldEdit", "选择适合目标版本的发行文件；多人游戏还需服务端支持及相应权限。")
+            { IsNonStargate = nonStargate, Kind = section == 2 ? GtnhAddonKind.ResourcePack : section == 3 ? GtnhAddonKind.Shader : GtnhAddonKind.Mod }];
         public GtnhAddon SelectedAddon { get => Addons[0]; set { } }
         public GtnhAddonRelease[] Releases { get; } = [new() { AddonId = "preview", Repository = "GTNewHorizons/WorldEdit", Tag = "示例版本", FileName = "worldedit-preview.jar", Size = 123456, DownloadUrl = "https://github.com/", ReleaseUrl = "https://github.com/", Notes = "请阅读作者的 GTNH 版本兼容说明。", Published = DateTimeOffset.Parse("2026-11-09") }];
         public GtnhAddonRelease SelectedRelease { get => Releases[0]; set { } }
         public bool CanInteract => true;
         public bool HasTarget => true;
-        public bool IsRecommendations => !migration;
-        public bool IsMigration => migration;
+        public bool IsRecommendations => section == 0;
+        public bool IsMigration => section == 1;
+        public bool IsResourcePacks => section == 2;
+        public bool IsShaders => section == 3;
+        public bool IsPackDownloads => false;
+        public bool IsCatalogPage => section != 1;
+        public bool IsNonStargateAddon => nonStargate;
+        public bool HasSelectedAddon => true;
+        public bool IsCatalogEmpty => false;
+        public string CatalogEmptyMessage => "没有匹配的项目。";
+        public string CatalogSummary => "当前显示 1 个项目";
+        public string InstallationHint => section == 2 ? "安装到 resourcepacks，请在游戏中自行启用。" : section == 3 ? "安装到 shaderpacks，请核对加载器兼容性。" : "额外模组可在模组管理中启用或禁用。";
+        public string[] Categories => ["全部分类", SelectedAddon.Category];
+        public string SelectedCategory { get; set; } = "全部分类";
+        public string[] RuleFilters => ["全部规则分组", "常规分类", "非星门规则"];
+        public int RuleFilterIndex { get; set; }
         public bool IsInstalling => false;
+        public bool IsImportingOldInstance => false;
+        public ICommand ImportOldInstanceCommand { get; } = new CommunityToolkit.Mvvm.Input.RelayCommand(() => { });
+        public string MigrationImportHint => "导入后会自动补全依赖，再选择新版作为接收方；不会自动开始迁移。";
         public bool CompatibilityConfirmed { get; set; }
         public string SearchText { get; set; } = "";
         public string TargetStatus => "已识别 2 个 GTNH 实例。推荐模组安装与数据迁移都使用上方选择的目标。";

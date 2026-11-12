@@ -16,6 +16,7 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
     private readonly Func<bool> _canModify;
     private readonly IModIconCache? _icons;
     private readonly Action<Uri>? _openWebsite;
+    private readonly IOperationNotifications _notifications;
     private readonly HashSet<Task> _pending = [];
     private CancellationTokenSource? _searchCancellation, _versionCancellation, _detailsCancellation;
     private int _searchRevision, _versionRevision, _detailsRevision, _installRevision, _nextSearch, _nextVersion;
@@ -24,9 +25,11 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
     /// <summary>接收可替换的查询与安装入口；构造时不联网、不创建实例。</summary>
     public InstanceDownloadsViewModel(IInstanceCatalog catalog,
         Func<InstanceCatalogRelease, IProgress<FileDownloadProgress>, CancellationToken, Task<string>> install,
-        Func<bool> canModify, IModIconCache? icons = null, Action<Uri>? openWebsite = null)
+        Func<bool> canModify, IModIconCache? icons = null, Action<Uri>? openWebsite = null,
+        IOperationNotifications? notifications = null)
     {
         _catalog = catalog; _install = install; _canModify = canModify; _icons = icons; _openWebsite = openWebsite;
+        _notifications = notifications ?? NullOperationNotifications.Instance;
     }
 
     [ObservableProperty] private int providerIndex;
@@ -100,25 +103,25 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
 
     /// <summary>按当前筛选重新搜索，旧响应不能覆盖新来源或关键词。</summary>
     [RelayCommand(CanExecute = nameof(CanSearch))]
-    private Task SearchAsync() => SearchTask = Track(SearchCoreAsync(false, CancellationToken.None));
+    private Task SearchAsync() => SearchTask = Track(SearchCoreAsync(false, CancellationToken.None, reportSuccess: true));
     /// <summary>目录查询只在页面激活且未安装时允许执行。</summary>
     private bool CanSearch() => CanBrowse && _active;
 
     /// <summary>仅请求平台提供的下一页偏移，重复结果按固定项目身份去重。</summary>
     [RelayCommand(CanExecute = nameof(CanLoadMore))]
-    private Task LoadMoreAsync() => SearchTask = Track(SearchCoreAsync(true, CancellationToken.None));
+    private Task LoadMoreAsync() => SearchTask = Track(SearchCoreAsync(true, CancellationToken.None, reportSuccess: true));
     /// <summary>上一页请求结束并且平台声明还有结果时才允许翻页。</summary>
     private bool CanLoadMore() => CanSearch() && HasMore && !IsSearching;
 
     /// <summary>读取固定项目的后续版本，不用 latestFiles 摘要代替版本列表。</summary>
     [RelayCommand(CanExecute = nameof(CanLoadMoreVersions))]
-    private Task LoadMoreVersionsAsync() => VersionsTask = Track(LoadVersionsAsync(true));
+    private Task LoadMoreVersionsAsync() => VersionsTask = Track(LoadVersionsAsync(true, reportSuccess: true));
     /// <summary>只给当前项目继续加载版本，禁止同时重复请求下一页。</summary>
     private bool CanLoadMoreVersions() => CanBrowse && _active && SelectedProject is not null && HasMoreVersions && !IsLoadingVersions;
 
     /// <summary>按需重新读取作者介绍，失败后可独立重试，不重新查询或下载版本。</summary>
     [RelayCommand(CanExecute = nameof(CanRefreshDescription))]
-    private Task RefreshDescriptionAsync() => DetailsTask = Track(LoadDetailsAsync());
+    private Task RefreshDescriptionAsync() => DetailsTask = Track(LoadDetailsAsync(reportSuccess: true));
     /// <summary>只对选中的整合包开放介绍刷新，正在安装或关闭时不发起新请求。</summary>
     private bool CanRefreshDescription() => CanBrowse && _active && IsModpack && SelectedProject is not null && !IsLoadingDetails;
 
@@ -142,11 +145,12 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
                 ArchiveProgress = $"原包下载：{p.BytesReceived / 1048576d:F1} MiB" +
                     (p.Percent is { } percent ? $" · {percent:F1}%" : "");
             });
+            // 宿主按导入、补全的真实结果统一报告；这里的字符串可能是部分失败，不能再次宣布成功。
             InstallStatus = await _install(release, progress, token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
-        { InstallStatus = "操作已取消；已导入的实例与已完成文件会保留。"; }
-        catch (Exception ex) { InstallStatus = "安装未完成：" + ex.Message; }
+        { InstallStatus = "操作已取消；已导入的实例与已完成文件会保留。"; _notifications.Cancelled("整合包安装已取消", InstallStatus); }
+        catch (Exception ex) { InstallStatus = "安装未完成：" + ex.Message; _notifications.Failure("整合包安装失败", ex); }
         finally { ++_installRevision; IsInstalling = false; ArchiveProgress = "本次任务已结束，结果见下方。"; }
     }
     /// <summary>可信下载地址、可校验版本和宿主空闲状态必须同时具备。</summary>
@@ -156,7 +160,9 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanOpenWebsite))]
     private void OpenWebsite()
     {
-        if (Website() is { } uri) _openWebsite?.Invoke(uri);
+        if (Website() is not { } uri) return;
+        try { _openWebsite?.Invoke(uri); }
+        catch (Exception ex) { _notifications.Failure("无法打开项目网页", ex); }
     }
     /// <summary>仅平台网页地址可供用户打开。</summary>
     private bool CanOpenWebsite() => !_closing && _openWebsite is not null && Website() is not null;
@@ -228,7 +234,7 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
     }
 
     /// <summary>查询一页，发布时检查请求代次；图标失败只保留占位图。</summary>
-    private async Task SearchCoreAsync(bool append, CancellationToken token)
+    private async Task SearchCoreAsync(bool append, CancellationToken token, bool reportSuccess = false)
     {
         if (!CanSearch()) return;
         _searchCancellation?.Cancel();
@@ -253,10 +259,15 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
             foreach (var row in rows) Projects.Add(row);
             _nextSearch = result.NextOffset; HasMore = result.HasMore;
             Status = Projects.Count == 0 ? "没有找到结果，请调整关键词或筛选。" : $"已显示 {Projects.Count} 项，选择项目查看具体版本。";
+            if (reportSuccess) _notifications.Success("整合包搜索完成", Status);
             if (_icons is not null) await Task.WhenAll(rows.Select(row => LoadIconAsync(row, revision, cancellation.Token)));
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception ex) { if (revision == _searchRevision) Status = "查询失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            if (revision == _searchRevision && !cancellation.IsCancellationRequested)
+            { Status = "查询失败：" + ex.Message; _notifications.Failure("整合包搜索失败", ex); }
+        }
         finally { if (revision == _searchRevision) { IsSearching = false; _searchCancellation = null; } }
     }
 
@@ -279,7 +290,7 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
     private void QueueDetails() => DetailsTask = Track(LoadDetailsAsync());
 
     /// <summary>独立加载平台正文并丢弃迟到响应；介绍不可用不会阻止版本安装。</summary>
-    private async Task LoadDetailsAsync()
+    private async Task LoadDetailsAsync(bool reportSuccess = false)
     {
         if (SelectedProject is not { } selected || !CanRefreshDescription()) return;
         _detailsCancellation?.Cancel();
@@ -293,12 +304,16 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
             selected.SetDetails(details);
             DescriptionStatus = DescriptionResultNote(selected);
             NotifyProjectDetails();
+            if (reportSuccess) _notifications.Success("整合包介绍已刷新", DescriptionStatus);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            if (revision == _detailsRevision)
+            if (revision == _detailsRevision && !cancellation.IsCancellationRequested)
+            {
                 DescriptionStatus = "介绍加载失败，可点击刷新或查看项目网页。" + ex.Message;
+                _notifications.Failure("整合包介绍加载失败", DescriptionStatus);
+            }
         }
         finally { if (revision == _detailsRevision) { IsLoadingDetails = false; _detailsCancellation = null; } }
     }
@@ -317,7 +332,7 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
     }
 
     /// <summary>版本查询绑定项目和当前筛选，旧项目响应不能重新填充列表。</summary>
-    private async Task LoadVersionsAsync(bool append)
+    private async Task LoadVersionsAsync(bool append, bool reportSuccess = false)
     {
         if (SelectedProject is not { } selected || !CanBrowse || !_active) return;
         _versionCancellation?.Cancel();
@@ -335,9 +350,14 @@ public sealed partial class InstanceDownloadsViewModel : ObservableObject
             _nextVersion = result.NextOffset; HasMoreVersions = result.HasMore;
             VersionStatus = Releases.Count == 0 ? "此筛选下没有可用版本。" : $"已显示 {Releases.Count} 个版本，请选择需要安装的版本。";
             if (SelectedRelease is null && Releases.Count > 0) SelectedRelease = Releases[0];
+            if (reportSuccess) _notifications.Success("整合包版本查询完成", VersionStatus);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception ex) { if (revision == _versionRevision) VersionStatus = "读取版本失败：" + ex.Message; }
+        catch (Exception ex)
+        {
+            if (revision == _versionRevision && !cancellation.IsCancellationRequested)
+            { VersionStatus = "读取版本失败：" + ex.Message; _notifications.Failure("整合包版本查询失败", ex); }
+        }
         finally { if (revision == _versionRevision) { IsLoadingVersions = false; _versionCancellation = null; } }
     }
 

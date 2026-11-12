@@ -52,7 +52,8 @@ internal static class InstanceBackupManifest
         }).ToArray();
         var backup = manifest with { Files = files,
             MigratedPlayerFiles = migrated.Length == 0 ? null : migrated,
-            ManagedMods = managed.Length == 0 ? null : managed };
+            ManagedMods = managed.Length == 0 ? null : managed,
+            AddedContentFiles = effective.AddedContent.Files.Count == 0 ? null : effective.AddedContent.Files };
         InstanceManifestStore.Validate(backup);
         return new(manifest, backup, effective);
     }

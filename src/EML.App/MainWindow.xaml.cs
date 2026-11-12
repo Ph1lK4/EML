@@ -33,13 +33,16 @@ public partial class MainWindow : Window
     private readonly CurseForgeApiClient _curseForge = new();
     private readonly ModIconCache _modIcons;
     private readonly GtnhAddonService _gtnhAddons;
+    private readonly GtnhMirrorPackService _gtnhPacks;
     private readonly InstanceCatalog _instanceCatalog;
+    private readonly WpfOperationNotifications _notifications;
     private bool _waitingForCleanup;
     private bool _closingAfterCleanup;
     /// <summary>创建页面依赖、设置绑定对象，并注册首次显示事件。</summary>
     public MainWindow()
     {
         InitializeComponent();
+        _notifications = new WpfOperationNotifications(this);
         var launcherRoot = GetLauncherRoot();
         var bandwidth = new DownloadBandwidthLimiter();
         _fileDownloader = new HttpFileDownloader(new FileDownloadOptions
@@ -51,14 +54,17 @@ public partial class MainWindow : Window
         var locator = new LauncherRootMinecraftInstanceLocator(launcherRoot);
         var checker = new MinecraftInstanceChecker(launcherRoot);
         var javaLocator = new WindowsJavaLocator();
-        var java = new JavaSettingsViewModel(javaLocator);
+        var java = new JavaSettingsViewModel(javaLocator, notifications: _notifications);
         var localMods = new LocalModManager(launcherRoot);
-        _gtnhAddons = new GtnhAddonService(launcherRoot, _downloadCenter, localMods);
         var onlineCatalog = new OnlineModCatalog(_modrinth, _curseForge);
+        _gtnhAddons = new GtnhAddonService(launcherRoot, _downloadCenter, localMods, onlineCatalog: onlineCatalog,
+            modrinth: _modrinth, curseForge: _curseForge, contentRegistrar: new GtnhContentRegistrar(launcherRoot));
+        _gtnhPacks = new GtnhMirrorPackService(launcherRoot, _downloadCenter);
         var onlineInstaller = new OnlineModInstaller(launcherRoot, onlineCatalog, _downloadCenter, localMods);
         _modIcons = new ModIconCache(launcherRoot, WpfModIconDecoder.Decode);
         var accounts = new MinecraftAccountViewModel(_accountService, uri =>
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
+            notifications: _notifications);
         var instances = new InstancesViewModel(locator, new MinecraftInstanceManager(launcherRoot),
                 new MinecraftInstanceImporter(launcherRoot), new InstanceDialogs(this), locator.InstancesRoot,
                 checker, new MinecraftInstanceDownloader(launcherRoot, checker, _downloadCenter),
@@ -67,15 +73,17 @@ public partial class MainWindow : Window
                 new GtnhInstanceMigrationService(launcherRoot), new InstanceMigrationDialogs(this),
                 localMods, new ModManagementDialogs(this), onlineCatalog, onlineInstaller, _modIcons,
                 uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
-                ChineseModCatalog.Default, _gtnhAddons);
+                ChineseModCatalog.Default, _gtnhAddons, notifications: _notifications, accounts: accounts, gtnhPacks: _gtnhPacks);
         _instanceCatalog = new InstanceCatalog(_modrinth, _curseForge);
         var archives = new InstanceArchiveService(launcherRoot, _instanceCatalog, _downloadCenter);
         var downloads = new InstanceDownloadsViewModel(_instanceCatalog,
             (release, progress, token) => instances.DownloadInstanceAsync(archives, release.Provider, release.ProjectId, release.Id, progress, token),
             () => !instances.IsBusy, _modIcons,
-            uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }));
+            uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
+            notifications: _notifications);
         var transferCenter = new DownloadCenterViewModel(_downloadCenter,
-            new System.Windows.Threading.DispatcherSynchronizationContext(Dispatcher));
+            new System.Windows.Threading.DispatcherSynchronizationContext(Dispatcher), notifications: _notifications,
+            settingsPath: Path.Combine(launcherRoot, "settings", "downloads.json"));
         DataContext = new MainViewModel(java, instances, accounts, downloads, transferCenter);
         ContentRendered += OnFirstContentRendered;
         Closing += OnWindowClosing;
@@ -143,8 +151,9 @@ public partial class MainWindow : Window
     /// <summary>后台文件操作结束后释放窗口持有的下载器资源。</summary>
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        _notifications.Dispose();
         if (DataContext is MainViewModel viewModel) viewModel.Dispose();
-        _instanceCatalog.Dispose(); _gtnhAddons.Dispose(); _fileDownloader.Dispose(); _accountService.Dispose(); _modrinth.Dispose(); _curseForge.Dispose(); _modIcons.Dispose();
+        _instanceCatalog.Dispose(); _gtnhPacks.Dispose(); _gtnhAddons.Dispose(); _fileDownloader.Dispose(); _accountService.Dispose(); _modrinth.Dispose(); _curseForge.Dispose(); _modIcons.Dispose();
     }
 
     /// <summary>鼠标右键先更新实例选择，菜单命令始终作用于点击的那一项。</summary>

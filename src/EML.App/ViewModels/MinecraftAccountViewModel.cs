@@ -1,12 +1,15 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EML.App.Services;
 using EML.Core.Minecraft.Accounts;
 
 namespace EML.App.ViewModels;
 
 /// <summary>显示当前 Java 账号和设备验证码；界面不接触刷新令牌或游戏 access token。</summary>
-public partial class MinecraftAccountViewModel(IMinecraftAccountService service, Action<Uri>? openBrowser = null) : ObservableObject
+public partial class MinecraftAccountViewModel(IMinecraftAccountService service, Action<Uri>? openBrowser = null,
+    IOperationNotifications? notifications = null) : ObservableObject
 {
+    private readonly IOperationNotifications _notifications = notifications ?? NullOperationNotifications.Instance;
     private int _revision;
     private Uri? _verificationUri;
     public bool IsConfigured => service.IsConfigured;
@@ -37,9 +40,10 @@ public partial class MinecraftAccountViewModel(IMinecraftAccountService service,
             var account = await service.LoadAccountAsync(token);
             ShowAccount(account);
             StatusText = account is null ? "尚未登录。" : "已读取本机账号，正版启动时会按需刷新会话。";
+            _notifications.Success("账号信息读取完成", StatusText);
         }
-        catch (OperationCanceledException) { StatusText = "已取消读取账号。"; }
-        catch (Exception ex) { StatusText = SafeError(ex); }
+        catch (OperationCanceledException) { StatusText = "已取消读取账号。"; _notifications.Cancelled("读取账号已取消", StatusText); }
+        catch (Exception ex) { StatusText = SafeError(ex); _notifications.Failure("读取账号失败", StatusText); }
         finally { IsBusy = false; }
     }
 
@@ -63,10 +67,17 @@ public partial class MinecraftAccountViewModel(IMinecraftAccountService service,
                 OpenLoginPage();
             });
             ShowAccount(await service.SignInAsync(progress, token));
-            StatusText = "登录成功。请在实例的“启动设置”中勾选“使用已登录的正版账号”。";
+            StatusText = "登录成功。请在实例启动界面或“启动设置”中选择“正版模式”。";
+            _notifications.Success("微软账号登录成功", StatusText);
         }
-        catch (OperationCanceledException) { StatusText = "已取消登录，原有账号未更改。"; }
-        catch (Exception ex) { StatusText = SafeError(ex); }
+        catch (OperationCanceledException)
+        { StatusText = "已取消登录，原有账号未更改。"; _notifications.Cancelled("登录已取消", StatusText); }
+        catch (Exception ex)
+        {
+            // 弹窗与行内提示使用同一安全文案，绝不传入可能含令牌的原始异常。
+            StatusText = SafeError(ex);
+            _notifications.Failure("微软账号登录失败", StatusText);
+        }
         finally
         {
             ++_revision;
@@ -82,7 +93,11 @@ public partial class MinecraftAccountViewModel(IMinecraftAccountService service,
     {
         if (_verificationUri is null) return;
         try { openBrowser?.Invoke(_verificationUri); }
-        catch { StatusText = "无法打开浏览器，请手动访问上方微软网址并输入验证码。"; }
+        catch
+        {
+            StatusText = "无法打开浏览器，请手动访问上方微软网址并输入验证码。";
+            _notifications.Failure("无法打开登录网页", StatusText);
+        }
     }
 
     /// <summary>删除本机账号；不会关闭已运行的游戏，也不退出浏览器中的微软账号。</summary>
@@ -90,9 +105,14 @@ public partial class MinecraftAccountViewModel(IMinecraftAccountService service,
     private async Task LogoutAsync(CancellationToken token)
     {
         IsBusy = true;
-        try { await service.SignOutAsync(token); ShowAccount(null); StatusText = "已删除 EML 的本机登录凭证。"; }
-        catch (OperationCanceledException) { StatusText = "已取消退出账号。"; }
-        catch (Exception ex) { StatusText = SafeError(ex); }
+        try
+        {
+            await service.SignOutAsync(token); ShowAccount(null); StatusText = "已删除 EML 的本机登录凭证。";
+            _notifications.Success("账号已退出", StatusText);
+        }
+        catch (OperationCanceledException)
+        { StatusText = "已取消退出账号。"; _notifications.Cancelled("退出账号已取消", StatusText); }
+        catch (Exception ex) { StatusText = SafeError(ex); _notifications.Failure("退出账号失败", StatusText); }
         finally { IsBusy = false; }
     }
 

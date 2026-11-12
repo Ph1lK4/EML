@@ -1,27 +1,67 @@
 # GTNH 专区
 
-左侧选择“GTNH 专区”，再在右上角选择目标实例。专区分为推荐模组和数据迁移，选择只作用于启动器已经发现的本地实例，不扫描整台电脑。GTNH 身份沿用现有内容标识识别，实例名称里写着 GTNH 并不足以通过识别。
+左侧选择“GTNH 专区”，可下载本体，或选择本地目标实例安装可添加模组、资源包、光影及迁移数据。目标只来自启动器已经发现的本地实例，不扫描整台电脑。GTNH 身份沿用现有内容标识识别，实例名称里写着 GTNH 并不足以通过识别。
+
+## 国内镜像下载本体
+
+打开“下载本体”，无需先拥有 GTNH 实例。页面从用户指定的 [GTNH 资源镜像站](https://mirror.gaytnh.com/) 对应客户端目录读取版本，默认只显示稳定版，可选择包含测试版本，或按新版 Java / Java 8 筛选。目录只收录带明确数字版本与 Java 标注的 Prism / MultiMC 客户端 ZIP；不使用会随时间变化的 `latest` 链接，也不收录服务端、原版启动器覆盖包、nightly 或愚人节特供包。未匹配的旧版命名可在镜像网站自行查看。
+
+选择具体版本，点击“下载并导入”，确认新实例名称后自动导入、补全。下载原包、导入和依赖补全共用现有实例忙碌状态，避免和启动、迁移或其他文件操作同时进行。下载进度达到 100% 只代表原包阶段完成，最终结果由现有补全流程判断；取消或补全失败后保留已经导入的新实例，允许再次补全。
+
+原包使用下载任务中心的队列、优先级与限速。该镜像目录提供文件大小，当前接入不提供官方哈希验证：下载前重新确认固定版本，下载后核对大小并通过已有 Prism 解析器检查真实格式及路径。原包和本地 SHA-256 缓存记录保存在启动器缓存目录；本地摘要只用于以后识别缓存是否发生变化，不冒充官方摘要。缓存损坏时另存新原包，保留可能被旧实例引用的文件。此类无官方哈希的原包暂不使用通用下载器的持久分段缓存，暂停后继续或取消后重试可能从头下载。
+
+此入口只改变本体 ZIP 的来源，包内文件继续按导入清单登记。Minecraft、加载器和缺失模组仍使用现有补全服务及其原来源校验规则；不把所有依赖地址改写到镜像。Java 仍需自行安装。完整导入源会保留，以便后续恢复原包内嵌文件；不会覆盖已有实例或自动迁移存档。
 
 ## 推荐模组
 
-页面保留用户提供的 [GTNH 中文 Wiki 可添加 MOD 指南](https://gtnh.huijiwiki.com/wiki/可添加MOD) 入口。首批目录按原作者仓库和发行说明核实。此次自动访问 Wiki 遇到访问限制，未逐项核对完整 Wiki 正文，目录不代表该页面的全部推荐项目。
+目录依据用户提供的 [GTNH 中文 Wiki 可添加 MOD 指南](https://gtnh.huijiwiki.com/wiki/可添加MOD) 分类和项目链接整理，提供中文名称、简述、作者入口和兼容提示。模组部分共 80 项；这是一份明确列出的目录，不宣称覆盖 Wiki 后续新增项目，也不保证每个发行版本适用于当前实例。
 
-| 项目 | 原作者发行仓库 | 用途与注意事项 |
-| --- | --- | --- |
-| WorldEdit GTNH | [GTNewHorizons/worldedit-gtnh](https://github.com/GTNewHorizons/worldedit-gtnh) | 1.7.10 GTNH 分支；编辑建筑，多人游戏需服务端支持与权限 |
-| 拼音搜索 Rework | [asdflj/NeverEnoughCharacters-Rework](https://github.com/asdflj/NeverEnoughCharacters-Rework) | GTNH 的 NEI 拼音搜索；注意旧版或重复搜索模组 |
-| 可编程仓室 | [reobf/Programmable-Hatches-Mod](https://github.com/reobf/Programmable-Hatches-Mod) | GregTech/AE2 自动化附属；按作者版本表选择，不同 GTNH Beta/RC 也可能需要不同版本 |
-| 鼠标侧键修复 | [asdflj/MouseSideButtonFix](https://github.com/asdflj/MouseSideButtonFix) | 终端侧键问题修复；没有官方摘要的旧发行仅展示说明与作者链接 |
+| 模组分类 | 数量 | 分类提示 |
+| --- | ---: | --- |
+| 功能增强 | 12 | 建造、搜索、输入、界面和自动化操作辅助 |
+| 性能优化 | 3 | 性能诊断、帧率调节及界面处理 |
+| 难度提高 | 1 | GTNH Extra Nerf；具体发行的规则资格仍需核对 |
+| 视听增强 | 18 | 视觉、环境音效、提示及渲染扩展 |
+| 流程修改 | 25 | 非星门规则模组 |
+| 流程优化 | 8 | 非星门规则模组 |
+| AE2增强 | 9 | 非星门规则模组 |
+| 流程毁灭 | 4 | 非星门规则模组 |
 
-选择项目后，页面读取该仓库的发行列表。用户必须选择具体发行文件，并确认已核对 GTNH、Java、前置依赖及服务端要求；页面不会自动选中最新版本，也不把同为 Minecraft 1.7.10 当成兼容证明。第一版不自动安装这些项目的前置依赖，不保证所有发行文件都适用于当前 GTNH。
+后四类共 46 项会明确显示非星门规则提示。其余分类并不意味着任意发行均符合星门规则，使用前仍需核对规则与服务器要求。兼容性提示保留在项目详情中，不会只因 Minecraft 版本同为 1.7.10 就认定安全兼容。
 
-下载直接来自原作者 GitHub Release。列表保留正常 JAR，排除 sources、javadoc、dev、api、deobf 等开发文件。只有具备官方 SHA-256 和大小的发行资产才允许自动安装。没有摘要、限流或网络超时会明确提示，不降级校验。读取每个项目最多 120 个发行版，缓存两分钟；更早版本可从作者页查看。选择在 30 分钟后或执行一次后失效，重试需刷新发行版本。
+选择项目后读取固定作者仓库或固定平台项目的发行列表。用户必须选择具体发行文件，并确认已核对 GTNH、Java、前置依赖及服务端要求；页面不会自动选中最新版本。当前不自动安装这些推荐项目的前置依赖，也不会按名称寻找另一个同名项目替代原作者来源。
+
+支持 GitHub Release、CurseForge 和 Modrinth 的固定来源。GitHub 需要官方资产大小与 SHA-256；CurseForge 和 Modrinth 使用各自官方完整性要求，不混合不同来源的摘要。2026-11-11 已通过 CurseForge 官方 API 精确核实目录中 12 个项目的 slug、项目 ID 与内容类别，包括 8 个模组、3 个资源包和 1 个光影包。Modrinth 按固定项目 slug 请求并检查返回身份。平台身份核实不等于所有文件版本都已通过实际 GTNH 游玩测试。
+
+模组列表排除 sources、javadoc、dev、api、deobf 等开发资产；没有官方摘要、没有正式发行资产、平台限制自动下载、限流或网络超时都会明确提示，不绕过校验或改用不明镜像。GitHub 普通列表最多读取 120 个发行版，缓存两分钟；更早版本可从作者页查看。选择在 30 分钟后或执行一次后失效，重试需刷新发行版本。Better Rain 的旧论坛入口保留为手动处理。
+
+用户提供的 `DarkShadow44/DistantHorizonsStandalone` 已通过 GitHub 官方 API 确认迁至 `GTNewHorizons/DistantHorizons`，目录固定到该仓库。后续还修复了 MyCTMLib、Mineshot、GT Not Leisure、Cheaper Void Miners、Transparent UI 和 Outlined Ores Modern 的已核实仓库迁移。运行时仍拒绝未经核实的仓库重定向，旧实例的原有来源记录不改写。具体核查结果见 [推荐内容下载核查](gtnh-catalog-audit-20261112.md)。
 
 安装先写入启动器的临时目录，校验后再通过现有模组管理事务登记到所选实例的 mods。原包文件、相同 modid 或已管理路径发生冲突时会拒绝提交。成功代表所选文件已校验并安装，不代表已完成依赖检查或实际游戏兼容测试。
 
 切换页面不会停止已确认的安装；点击取消或关闭启动器会取消并等待清理。安装期间目标选择、启动、迁移等实例写操作共用忙碌状态。切换实例后的旧网络响应不能更新新目标。
 
+## 资源包与光影
+
+资源包共 27 项：无障碍与实用性 7 项、深色模式 6 项、升级与重制 14 项。重复的矿石描边链接仅收录一次，仓库迁移后普通纹理和 Modernity 纹理通过各自文件名规则分开。专用版本保持独立身份：`imTheSupremeOne/GTNH-Textures-Usernm` 仅查询 `machines` 标签，`Ranzuu/Shadow-UI` 的治愈之斧条目仅查询 `Just-InvisHealingAxe` 标签和文件；完整 Shadow UI 入口只列出 `Shadow.UI.` 文件。彩色 GregTech 工具资源包只接受用户指定的 CurseForge 文件 `3078376`。
+
+资源包下载至 `resourcepacks`，光影包下载至 `shaderpacks`，光影加载器与补丁按模组处理。资源包与光影拥有独立的新增内容来源记录，参与后续检查、补全与备份往返，不伪装成原整合包文件。不会覆盖已有同路径文件，也不会自动启用资源包、改变叠放顺序或替用户选择游戏内光影。
+
+自动安装资源 ZIP 前检查实际包结构：资源包需有合法的根目录 `pack.mcmeta`；光影需有 `shaders/` 内非空程序文件。包装目录、源码归档、无效元数据或不明结构会提示在作者页面核对，不自动拆包改变官方文件字节。
+
+Modernity 现有三个独立安装入口：`Modernity-GTNH` 主资源包、`Modernity-GTNH-UI` 浅色界面、`Modernity-GTNH-Dark-UI` 深色界面。各自读取对应仓库的发行资产，主包入口通过文件名白名单排除界面包、附加包和 MyCTMLib，不把整个组织当作一个资源包。请选择适配 GTNH 的发行；主包放在资源包加载顺序底部，界面包放在主包上方，游戏内按需启用。MyCTMLib 与 DarkTextFix 等相关模组仍需按作者要求选择，不会随资源包自动安装。
+
+两个界面仓库的部分历史发行都叫 `default.zip`。此类 GitHub 资源包使用由仓库和 asset ID 确定的本地 ZIP 名，避免不同项目互相占用文件名；下载地址、官方文件名、大小和 SHA-256 仍保留原样。已有 `default.zip` 记录继续有效，补全、迁移与备份沿用同一来源，不重打包或覆盖玩家文件。
+
+Stellar Fusion 历史存档、Discord 消息和 GitLab Ivelitex 发行页只提供作者入口。这些页面不是已核实的直接下载资产，不能从页面地址猜测下载文件。
+
+光影部分包含 Angelica、OptiFine 两个加载器入口，Complementary Unbound、BSL、Sildur's Vibrant 三个光影包和 Euphoria Patches 补丁。OptiFine 仅保留官方下载页。Angelica 与 OptiFine 不兼容；目录不会自动替换实例已有的 Angelica。Angelica 当前说明将 Complementary 与 Euphoria Patches 作为主要兼容目标，但这不保证旧实例的 Angelica 支持当前最新版光影。每次仍需核对加载器、补丁和光影三者的版本要求。
+
 ## 数据迁移
+
+数据迁移页提供“导入旧实例（含本地数据）”入口，即使尚未导入任何 GTNH 或未选择新版，也可以打开导入流程。先从 Prism 等旧启动器导出完整 ZIP，并确认包含存档、地图、服务器列表等个人数据；从网站重新下载的整合包安装包不会包含游玩记录。旧实例已经在 EML 中则跳过此步骤。
+
+该入口复用现有导入、自动补全、进度和结果通知，不会直接执行迁移。导入结束刷新 GTNH 列表，保留先前选好的新版目标；如果原来没有目标，需要再明确选择接收数据的新版。取消或失败按原导入流程处理，已提交的实例保留，原来的旧实例不会被删除。随后准备并试运行新版，再从迁移弹窗选择旧实例并预览数据。
 
 上方选择接收数据的新版 GTNH，点击“从旧 GTNH 迁入数据”，在原有对话框中选择旧实例、迁移范围与冲突策略。请保留旧实例，先补全并试运行新版，再迁入存档、地图、服务器记录等数据。只迁移语言偏好，不复制旧版完整汉化包。额外模组仍需单独勾选并接受兼容风险。
 
@@ -31,11 +71,13 @@
 
 - `EML.Core/Minecraft/Gtnh/GtnhAddonModels.cs`：推荐项目、固定发行资产和服务接口。
 - `EML.Infrastructure/Minecraft/Gtnh/GtnhAddonCatalog.cs`：人工核对的仓库及中文适配提示。
-- `EML.Infrastructure/Minecraft/Gtnh/GtnhAddonService.cs`：GitHub 发行读取、固定实例快照、下载和提交。
-- `EML.App/ViewModels/GtnhHubViewModel.cs` 与 `Views/GtnhHubView.xaml`：目标选择、两个子页和操作状态。
+- `EML.Infrastructure/Minecraft/Gtnh/GtnhAddonService.cs`：多平台发行读取、固定实例快照、下载和提交。
+- `EML.App/ViewModels/GtnhHubViewModel.cs` 与 `Views/GtnhHubView.xaml`：目标选择、分类筛选、资源展示和操作状态。
+- `EML.Core/Minecraft/Gtnh/GtnhPackModels.cs` 与 `EML.Infrastructure/Minecraft/Gtnh/GtnhMirrorPackService.cs`：镜像客户端目录、原包验证及缓存。
+- `EML.App/ViewModels/GtnhPackDownloadViewModel.cs` 与 `Views/GtnhPackDownloadView.xaml`：独立本体下载页面，复用现有实例导入与补全。
 
 新增 `GithubReleaseDownload` 内容来源，保留仓库、标签、release ID、asset ID、文件名，以及官方大小和 SHA-256。模组管理、检查补全、GTNH 额外模组迁移和备份往返使用同一份来源要求，不伪装成本地导入、不混入其他平台哈希。枚举追加且新字段为空时不序列化，旧清单与指纹继续兼容。
 
-新增项目时先核实仓库实际支持 GTNH，再添加唯一 ID、中文说明与适配限制；不要直接收录一个已经转向现代 Minecraft 的同名仓库。仓库和发行信息可能变化，维护目录时应重新核实作者说明。
+新增项目时核对用户来源、作者说明、内容类别和平台身份，再添加唯一 ID、中文说明与适配限制；不要直接收录一个已经转向现代 Minecraft 的同名仓库。项目固定到单一标签或文件的入口不得扩展成整个仓库的其他内容。仓库和发行信息可能变化，维护目录时应重新核实作者说明。
 
-测试使用临时 GTNH 实例与受控 HTTP，覆盖固定目标、损坏下载、原包保护、来源保存、补全、迁移、备份往返，以及页面切换和取消。WPF 测试加载生产 XAML 并离屏渲染两个页面，不启动真实游戏。
+测试使用临时 GTNH 实例与受控 HTTP，覆盖固定目标、多平台来源、资源类型、损坏下载、原包保护、来源保存、补全、迁移、备份往返，以及页面切换和取消。目录回归测试固定 113 个条目的类型数量、8 类模组、3 类资源包、官方平台身份、专用标签与手动入口；另覆盖 Modernity 资产分离、历史同名资源共存及来源保留。WPF 测试加载生产 XAML 并离屏渲染页面，不启动真实游戏。

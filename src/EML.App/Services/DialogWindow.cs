@@ -8,7 +8,7 @@ using EML.App.Views;
 
 namespace EML.App.Services;
 
-internal enum DialogTone { Information, Warning, Danger }
+internal enum DialogTone { Information, Success, Warning, Danger }
 
 /// <summary>统一模态窗口外观；系统仍负责移动、缩放和模态所有权，按钮只返回用户选择。</summary>
 internal class DialogWindow : Window
@@ -67,7 +67,11 @@ internal class DialogWindow : Window
             Surface.Resources["AccentSoftBrush"] = SystemColors.WindowBrush;
             Surface.Resources["DangerBrush"] = SystemColors.WindowTextBrush;
         }
-        Surface.ToneIcon.Text = tone switch { DialogTone.Danger => "\uE74D", DialogTone.Warning => "\uE7BA", _ => "\uE946" };
+        Surface.ToneIcon.Text = tone switch
+        {
+            DialogTone.Success => "\uE73E", DialogTone.Danger => "\uEA39", DialogTone.Warning => "\uE7BA", _ => "\uE946"
+        };
+        if (tone == DialogTone.Success) return;
         if (tone == DialogTone.Information || SystemParameters.HighContrast) return;
         Surface.ToneTile.Background = new SolidColorBrush(tone == DialogTone.Danger ? Color.FromRgb(255, 240, 241) : Color.FromRgb(255, 246, 229));
         Surface.ToneIcon.Foreground = new SolidColorBrush(tone == DialogTone.Danger ? Color.FromRgb(174, 59, 66) : Color.FromRgb(143, 91, 20));

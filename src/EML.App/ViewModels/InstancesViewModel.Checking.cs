@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EML.App.Services;
 using EML.Core.Minecraft;
 
 namespace EML.App.ViewModels;
@@ -62,9 +63,16 @@ public partial class InstancesViewModel
             TransferPercent = 100;
             TransferStatus = "文件检查结束";
             StatusText = "结果是本次检查的文件快照，不代表全部运行依赖齐全或一定能启动。";
+            var problems = report.Files.Where(NeedsFileAttention).ToArray();
+            var hasIssues = !report.HasManifest || problems.Length > 0 || report.ContentIssues.Count > 0 || report.RuntimeIssues.Count > 0;
+            _notifications.Report(CreateOperationNotice(hasIssues ? OperationNoticeKind.Warning : OperationNoticeKind.Success,
+                hasIssues ? "文件检查完成，有待处理项" : "文件检查完成",
+                CheckSummary + "\n" + StatusText + "\n" + string.Join("\n", problems.Select(file => $"{file.PathDisplay}：{file.Message}")
+                    .Concat(report.ContentIssues).Concat(report.RuntimeIssues)),
+                new[] { instance.InstancePath }.Concat(problems.Select(file => NoticeFilePath(instance.InstancePath, file.Requirement.Path)))));
         }
-        catch (OperationCanceledException) { TransferStatus = "已取消检查"; StatusText = "本次检查未完成，请重新检查。"; }
-        catch (Exception ex) { TransferStatus = "检查失败"; CheckSummary = "未获得有效的检查结果。"; StatusText = ex.Message; }
+        catch (OperationCanceledException) { TransferStatus = "已取消检查"; StatusText = "本次检查未完成，请重新检查。"; _notifications.Cancelled("文件检查已取消", StatusText, instance.InstancePath); }
+        catch (Exception ex) { TransferStatus = "检查失败"; CheckSummary = "未获得有效的检查结果。"; StatusText = ex.Message; _notifications.Failure("文件检查失败", ex, instance.InstancePath); }
         finally { ++_transferRevision; IsBusy = false; }
     }
 
@@ -75,7 +83,7 @@ public partial class InstancesViewModel
         if (!CanManage()) return;
         var instancePath = SelectedInstance!.InstancePath;
         IsBusy = true;
-        try { await RunDownloadAsync(instancePath, token); }
+        try { _notifications.Report(await RunDownloadAsync(instancePath, token)); }
         finally { IsBusy = false; }
     }
 
@@ -91,7 +99,7 @@ public partial class InstancesViewModel
     private bool CanCancelDependencyDownload() => _downloadCancellation is { IsCancellationRequested: false };
 
     /// <summary>对固定实例路径补全并复查；调用方持有忙碌状态，导入阶段无需执行另一个界面命令。</summary>
-    private async Task RunDownloadAsync(string instancePath, CancellationToken operationToken, bool afterImport = false)
+    private async Task<OperationNotice> RunDownloadAsync(string instancePath, CancellationToken operationToken, bool afterImport = false)
     {
         ClearCheckResults();
         SelectedDetailTab = 2;
@@ -145,25 +153,31 @@ public partial class InstancesViewModel
                     " 复查未完成，请重新检查：" + report.CheckError;
                 TransferStatus = report.IsCanceled ? "已取消下载或复查" : "复查未完成";
                 StatusText = "已完成文件保留，详细原因见上方补全结果；请重新检查后继续。";
-                return;
+                return DownloadNotice(report, instancePath, afterImport);
             }
             if (report.CheckReport is { HasManifest: false })
                 DownloadSummary = "没有 eml-instance.json，缺少检查和下载依据，本次没有下载文件。";
             TransferPercent = 100;
             TransferStatus = report.Runtime is { FilesReady: false } ? "补全结束，仍有待处理的内容文件或运行依赖" : "下载流程和复查已结束";
             StatusText = "补全结果见上方列表；请在“文件检查”中查看复查结果及待处理依赖。";
+            return DownloadNotice(report, instancePath, afterImport);
         }
         catch (OperationCanceledException)
         {
             TransferStatus = "已取消下载或复查";
             DownloadSummary = "已经完成的下载会保留；本次未获得最终检查结果，请重新检查。";
             StatusText = DownloadSummary;
+            return CreateOperationNotice(OperationNoticeKind.Cancelled, afterImport ? "实例已导入，补全已取消" : "补全已取消",
+                (afterImport ? "实例已导入并保留。\n" : "") + DownloadSummary, [instancePath]);
         }
         catch (Exception ex)
         {
             TransferStatus = "下载流程未完成";
             DownloadSummary = "已完成的文件会保留；请重新检查后重试。";
             StatusText = ex.Message + " " + DownloadSummary;
+            return CreateOperationNotice(afterImport ? OperationNoticeKind.Warning : OperationNoticeKind.Failure,
+                afterImport ? "实例已导入，补全未完成" : "补全失败",
+                (afterImport ? "实例已导入并保留。\n" : "") + StatusText, [instancePath, NoticeExceptionPath(ex)]);
         }
         finally
         {
@@ -174,6 +188,52 @@ public partial class InstancesViewModel
                 StatusText = "实例已导入并保留。" + StatusText + " 未完成时可点击“补全实例依赖”继续。";
         }
     }
+
+    /// <summary>把整批下载和复查的真实状态汇总为一次通知，保留每项原因及可复制文件路径。</summary>
+    private OperationNotice DownloadNotice(InstanceDownloadReport report, string instancePath, bool afterImport)
+    {
+        var pendingDownloads = report.Files.Where(file => file.State is InstanceDownloadState.Failed or
+            InstanceDownloadState.Unavailable or InstanceDownloadState.MissingEmbeddedFile or InstanceDownloadState.DownloadedUnverified).ToArray();
+        var pendingChecks = report.CheckReport?.Files.Where(NeedsFileAttention).ToArray() ?? [];
+        var issues = pendingDownloads.Select(file => $"{file.PathDisplay}：{file.Message}")
+            .Concat(pendingChecks.Select(file => $"{file.PathDisplay}：{file.Message}"))
+            .Concat(report.CheckReport?.ContentIssues ?? []).Concat(report.CheckReport?.RuntimeIssues ?? [])
+            .Concat(report.Runtime?.Issues ?? []).Concat(report.Runtime?.ContentIssues ?? []).Concat(report.Runtime?.RuntimeIssues ?? [])
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var kind = report.IsCanceled ? OperationNoticeKind.Cancelled : report.CheckError is not null ? OperationNoticeKind.Failure :
+            report.LaunchReady && pendingDownloads.Length == 0 && pendingChecks.Length == 0 && issues.Length == 0
+                ? OperationNoticeKind.Success : OperationNoticeKind.Warning;
+        var title = kind switch
+        {
+            OperationNoticeKind.Success => afterImport ? "实例导入与补全完成" : "实例补全完成",
+            OperationNoticeKind.Cancelled => afterImport ? "实例已导入，补全已取消" : "补全已取消",
+            _ => afterImport ? "实例已导入，补全仍有待处理项" : "补全仍有待处理项"
+        };
+        var message = (afterImport ? "实例已导入并保留。\n" : "") + DownloadSummary;
+        if (issues.Length > 0) message += "\n\n待处理原因：\n" + string.Join("\n", issues);
+        if (!report.LaunchReady && issues.Length == 0 && !report.IsCanceled && report.CheckError is null)
+            message += "\n完整的启动就绪条件尚未确认，请查看文件检查与运行依赖结果。";
+        return CreateOperationNotice(kind, title, message, new[] { instancePath,
+                report.Runtime?.PreparedLaunchProfilePath ?? report.Runtime?.LaunchProfilePath }
+            .Concat(pendingDownloads.Select(file => NoticeFilePath(instancePath, file.Requirement.Path)))
+            .Concat(pendingChecks.Select(file => NoticeFilePath(instancePath, file.Requirement.Path))));
+    }
+
+    /// <summary>允许的用户配置变化和游戏消耗不当作损坏，其余待处理事实进入结果通知。</summary>
+    private static bool NeedsFileAttention(InstanceFileCheckResult file) => !file.IsAllowedConfigurationChange && !file.IsAllowedMissing &&
+        file.State is not (InstanceFileState.Verified or InstanceFileState.PresentUnverified or InstanceFileState.Consumed);
+
+    /// <summary>将清单中的文件路径与本次固定实例配对，缺少路径的平台引用仍通过正文解释。</summary>
+    private static string? NoticeFilePath(string instancePath, string? relative) =>
+        string.IsNullOrEmpty(relative) ? null : System.IO.Path.Combine(instancePath, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+
+    /// <summary>保留文件异常明确给出的路径，不从错误文字推测路径，也不展示内部异常。</summary>
+    private static string? NoticeExceptionPath(Exception error) => error switch
+    {
+        System.IO.FileNotFoundException file => file.FileName,
+        System.IO.FileLoadException file => file.FileName,
+        _ => null
+    };
 
     /// <summary>展示检查范围和各类结果；包内基线变化单列，不将用户设置改动称为损坏。</summary>
     private void ApplyCheckReport(InstanceCheckReport report)

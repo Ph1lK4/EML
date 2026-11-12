@@ -35,6 +35,9 @@ public sealed record InstanceImportManifest
     /// <summary>EML 备份携带的额外模组基线及用户启禁/移除选择；旧实例省略时维持原有行为。</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<Mods.ManagedModRecord>? ManagedMods { get; init; }
+    /// <summary>EML 备份携带的新增资源包和光影来源；旧清单空值不改变既有序列化指纹。</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<Gtnh.AddedContentFile>? AddedContentFiles { get; init; }
 }
 
 /// <summary>保存解析后的组件 ID 与版本，供后续安装器选择处理方式。</summary>

@@ -51,7 +51,8 @@ public static class InstanceFileIntegrity
         source.Repository.Split('/') is { Length: 2 } parts && parts.All(part => part.Length > 0 && part is not ("." or "..") &&
             part.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.')) &&
         source.Tag is { Length: > 0 and <= 256 } && !source.Tag.Any(char.IsControl) &&
-        source.FileName is { Length: > 4 and <= 255 } && source.FileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase) &&
+        source.FileName is { Length: > 4 and <= 255 } &&
+        (source.FileName.EndsWith(".jar", StringComparison.OrdinalIgnoreCase) || source.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) &&
         source.FileName.IndexOfAny(['/', '\\', ':', '<', '>', '"', '|', '?', '*']) < 0 && !source.FileName.Any(char.IsControl) &&
         !source.FileName.EndsWith(' ') && source.FileName is not ("." or "..");
 

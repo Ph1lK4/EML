@@ -8,6 +8,77 @@ namespace EML.Tests;
 
 public sealed partial class LocalModManagementTests
 {
+    /// <summary>后台读列表不弹成功框，用户主动刷新只报告一次明确结果。</summary>
+    [Fact]
+    public async Task ModRefreshNotifiesOnlyExplicitSuccess()
+    {
+        var instance = await CreateAsync(); var notices = new ModNoticeRecorder();
+        var vm = CreateModViewModel(instance, new ModManagerStub(), new ModDialogs(), notices);
+        vm.SelectedDetailTab = 6; await vm.ModListLoadTask;
+        Assert.Empty(notices.Items);
+        await vm.RefreshModsCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(OperationNoticeKind.Success, notice.Kind);
+        Assert.Contains(instance.Game, notice.Paths);
+        await vm.StopModListLoadingAsync();
+    }
+
+    /// <summary>批量添加中的失败与成功合并成一次警告，失败源文件的完整路径可复制。</summary>
+    [Fact]
+    public async Task PartialModAddReportsOneWarningWithSourcePaths()
+    {
+        var instance = await CreateAsync(); var notices = new ModNoticeRecorder();
+        var good = Path.Combine(_root, "中文模组.jar"); var bad = Path.Combine(_root, "中文失败.jar");
+        var manager = new ModManagerStub
+        {
+            Add = path => path == bad ? Task.FromException(new IOException("文件被其他程序占用")) : Task.CompletedTask
+        };
+        var vm = CreateModViewModel(instance, manager, new ModDialogs { Files = [good, bad] }, notices);
+        await vm.AddLocalModsCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Contains("1 / 2", notice.Message);
+        Assert.Contains("文件被其他程序占用", notice.Message);
+        Assert.Contains(bad, notice.Paths);
+        Assert.Equal(2, manager.Writes);
+        await vm.StopModListLoadingAsync();
+    }
+
+    /// <summary>写入成功但刷新失败仍为一次部分完成警告，不能提示全部失败或全部成功。</summary>
+    [Fact]
+    public async Task SuccessfulModWriteWithFailedRefreshReportsOneWarning()
+    {
+        var instance = await CreateAsync(); var notices = new ModNoticeRecorder();
+        var manager = new ModManagerStub { List = _ => Task.FromException<LocalModCatalog>(new IOException("列表读取权限不足")) };
+        var vm = CreateModViewModel(instance, manager, new ModDialogs { Files = ["custom.jar"] }, notices);
+        await vm.AddLocalModsCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Contains("已添加 1 / 1", notice.Message);
+        Assert.Contains("列表读取权限不足", notice.Message);
+        await vm.StopModListLoadingAsync();
+    }
+
+    /// <summary>全部添加失败和用户取消使用不同结果类型，均提供可复制的目标目录。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedOrCancelledModAddUsesAccurateNotice(bool cancelled)
+    {
+        var instance = await CreateAsync(); var notices = new ModNoticeRecorder();
+        var manager = new ModManagerStub
+        {
+            Add = _ => Task.FromException(cancelled ? new OperationCanceledException() : new IOException("不是有效模组文件"))
+        };
+        var vm = CreateModViewModel(instance, manager, new ModDialogs { Files = ["custom.jar"] }, notices);
+        await vm.AddLocalModsCommand.ExecuteAsync(null);
+        var notice = Assert.Single(notices.Items);
+        Assert.Equal(cancelled ? OperationNoticeKind.Cancelled : OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains(instance.Game, notice.Paths);
+        if (!cancelled) Assert.Contains("不是有效模组文件", notice.Message);
+        await vm.StopModListLoadingAsync();
+    }
+
     /// <summary>选中实例不会提前扫描模组；打开管理页才读取，并可按模组 ID 搜索。</summary>
     [Fact]
     public async Task ModPageLoadsOnDemandAndFiltersByIdentity()
@@ -106,12 +177,13 @@ public sealed partial class LocalModManagementTests
     };
 
     /// <summary>生产界面模型配合受控模组服务；其他服务只在被调用时才访问临时实例。</summary>
-    private InstancesViewModel CreateModViewModel(Instance instance, ILocalModManager manager, ModDialogs dialogs)
+    private InstancesViewModel CreateModViewModel(Instance instance, ILocalModManager manager, ModDialogs dialogs,
+        IOperationNotifications? notifications = null)
     {
         var locator = new LauncherRootMinecraftInstanceLocator(_root); var checker = new MinecraftInstanceChecker(_root);
         var vm = new InstancesViewModel(locator, new MinecraftInstanceManager(_root), new MinecraftInstanceImporter(_root),
             dialogs, locator.InstancesRoot, checker, new MinecraftInstanceDownloader(_root, checker, new NoDownload()),
-            localMods: manager, modDialogs: dialogs);
+            localMods: manager, modDialogs: dialogs, notifications: notifications);
         vm.SelectedInstance = new(instance.Path, instance.Path, instance.Game, ["1.7.10"]);
         return vm;
     }
@@ -121,6 +193,7 @@ public sealed partial class LocalModManagementTests
     {
         public LocalModCatalog Catalog { get; init; } = new([], []);
         public Func<string, Task<LocalModCatalog>>? List { get; init; }
+        public Func<string, Task>? Add { get; init; }
         public int Reads { get; private set; }
         public int Writes { get; private set; }
         /// <summary>允许故意忽略取消的读取，以验证界面自身的过期结果保护。</summary>
@@ -128,7 +201,7 @@ public sealed partial class LocalModManagementTests
         { Reads++; return List?.Invoke(instancePath) ?? Task.FromResult(Catalog); }
         /// <summary>仅记录显式添加请求。</summary>
         public Task AddAsync(string instancePath, string sourcePath, CancellationToken token = default)
-        { Writes++; return Task.CompletedTask; }
+        { Writes++; return Add?.Invoke(sourcePath) ?? Task.CompletedTask; }
         /// <summary>仅记录明确接管请求。</summary>
         public Task AdoptAsync(string instancePath, string path, CancellationToken token = default)
         { Writes++; return Task.CompletedTask; }
@@ -144,6 +217,14 @@ public sealed partial class LocalModManagementTests
         /// <summary>仅记录事务恢复请求。</summary>
         public Task RecoverAsync(string instancePath, CancellationToken token = default)
         { Writes++; return Task.CompletedTask; }
+    }
+
+    /// <summary>记录界面结果，不创建弹窗或访问系统剪贴板。</summary>
+    private sealed class ModNoticeRecorder : IOperationNotifications
+    {
+        public List<OperationNotice> Items { get; } = [];
+        /// <summary>保存一次完整操作的通知，供测试验证数量、级别和路径。</summary>
+        public void Report(OperationNotice notice) => Items.Add(notice);
     }
 
     /// <summary>替代文件窗口与风险确认，不启动 WPF 或外部应用。</summary>

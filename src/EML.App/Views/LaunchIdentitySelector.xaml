@@ -1,0 +1,40 @@
+<UserControl x:Class="EML.App.Views.LaunchIdentitySelector"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- 本地实例与启动设置共用同一个模型；本控件只展示公开玩家名，不读取认证令牌。 -->
+  <Grid IsEnabled="{Binding CanEditLaunchSettings}">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <StackPanel>
+      <TextBlock Text="启动模式" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
+      <ComboBox x:Name="ModeSelector" ItemsSource="{Binding LaunchModes}"
+                SelectedItem="{Binding SelectedLaunchMode, Mode=TwoWay}"
+                AutomationProperties.Name="启动模式" ToolTip="当前选择立即用于启动，本地实例与启动设置同步"/>
+    </StackPanel>
+    <Grid Grid.Column="2" MaxWidth="360" HorizontalAlignment="Left" MinWidth="200">
+      <StackPanel>
+        <StackPanel.Style>
+          <Style TargetType="StackPanel">
+            <Setter Property="Visibility" Value="Visible"/>
+            <Style.Triggers><DataTrigger Binding="{Binding UseMicrosoftAccount}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers>
+          </Style>
+        </StackPanel.Style>
+        <TextBlock Text="离线玩家名" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
+        <TextBox x:Name="PlayerNameInput" Text="{Binding PlayerName, UpdateSourceTrigger=PropertyChanged}"
+                 IsEnabled="{Binding CanEditOfflinePlayerName}" MaxLength="16" AutomationProperties.Name="离线玩家名"
+                 ToolTip="输入 1–16 位英文字母、数字或下划线；正版服务器需要选择正版模式"/>
+      </StackPanel>
+      <StackPanel>
+        <StackPanel.Style>
+          <Style TargetType="StackPanel">
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Style.Triggers><DataTrigger Binding="{Binding UseMicrosoftAccount}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+          </Style>
+        </StackPanel.Style>
+        <TextBlock Text="正版玩家名" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
+        <TextBox x:Name="MicrosoftPlayerName" IsReadOnly="True"
+                 Text="{Binding Accounts.AccountName, Mode=OneWay, TargetNullValue=尚未登录, FallbackValue=尚未登录}"
+                 AutomationProperties.Name="正版玩家名" ToolTip="自动使用已登录的 Minecraft 玩家名；尚未登录时请前往“微软账号”页面"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
+</UserControl>

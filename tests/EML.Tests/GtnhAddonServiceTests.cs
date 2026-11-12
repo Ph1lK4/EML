@@ -18,7 +18,7 @@ using EML.Infrastructure.Minecraft.Runtime;
 namespace EML.Tests;
 
 /// <summary>用临时 GTNH 实例和可控 GitHub 响应测试真实下载、完整性与管理链，不访问玩家数据。</summary>
-public sealed class GtnhAddonServiceTests : IDisposable
+public sealed partial class GtnhAddonServiceTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "eml-gtnh-addon-" + Guid.NewGuid().ToString("N"));
     private readonly byte[] _bytes = ModBytes();
