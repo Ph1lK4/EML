@@ -1,14 +1,14 @@
-<UserControl x:Class="EML.App.Views.JavaEnvironmentView"
+<UserControl x:Class="EML.App.Views.JavaEnvironmentView" Style="{StaticResource {x:Type UserControl}}"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <Grid>
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <DockPanel Margin="0,0,0,24">
       <Button DockPanel.Dock="Right" Content="重新检测 Java" Command="{Binding DetectJavaCommand}"
-              Style="{StaticResource PrimaryButton}" VerticalAlignment="Top" Margin="16,4,0,0"/>
+              VerticalAlignment="Top" Margin="16,4,0,0"/>
       <StackPanel>
         <TextBlock Text="Java 环境" Style="{StaticResource PageTitle}"/>
-        <TextBlock Text="查看本机可用的 Java。游戏启动时会按实例需求自动选择，也可以在启动设置中指定。"
+        <TextBlock Text="检测已有 Java，或下载实例需要的版本。"
                    Style="{StaticResource PageSubtitle}" TextWrapping="Wrap" Margin="0,6,0,0"/>
       </StackPanel>
     </DockPanel>
@@ -50,15 +50,48 @@
                 <DataTrigger Binding="{Binding Installations.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger>
               </Style.Triggers></Style></StackPanel.Style>
               <TextBlock Text="暂未发现 Java" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-              <TextBlock Text="安装合适的 Java 后，点击重新检测。" Foreground="{DynamicResource MutedTextBrush}"
+              <TextBlock Text="可在右侧下载安装，已有环境也可重新检测。" Foreground="{DynamicResource MutedTextBrush}"
                          TextWrapping="Wrap" TextAlignment="Center" Margin="0,10,0,0"/>
             </StackPanel>
           </Grid>
         </Grid>
       </Border>
       <Border Grid.Column="2" Style="{StaticResource CardBorder}" Padding="24">
-        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="JavaDetailsScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel>
+            <TextBlock Text="下载 Java" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,12"/>
+            <TextBlock Text="Eclipse Temurin · Windows 官方包" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,0,0,16"/>
+            <Grid IsEnabled="{Binding CanEditDownloadFilters}">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <StackPanel>
+                <TextBlock Text="Java 版本" Margin="0,0,0,6"/>
+                <ComboBox x:Name="JavaMajorSelector" ItemsSource="{Binding MajorVersions}" SelectedItem="{Binding SelectedMajorVersion, Mode=TwoWay}"
+                          AutomationProperties.Name="下载 Java 版本"/>
+              </StackPanel>
+              <StackPanel Grid.Column="2">
+                <TextBlock Text="系统架构" Margin="0,0,0,6"/>
+                <ComboBox x:Name="JavaArchitectureSelector" ItemsSource="{Binding Architectures}" SelectedItem="{Binding SelectedArchitecture, Mode=TwoWay}"
+                          AutomationProperties.Name="下载 Java 架构" ToolTip="x64：64 位 Intel/AMD；x86：32 位；aarch64：ARM64。以实例要求为准。"/>
+              </StackPanel>
+            </Grid>
+            <Button x:Name="QueryJavaButton" Content="查询官方可用包" Command="{Binding QueryPackagesCommand}" HorizontalAlignment="Stretch" Margin="0,12,0,14"/>
+            <ComboBox x:Name="JavaPackageSelector" ItemsSource="{Binding Packages}" SelectedItem="{Binding SelectedPackage, Mode=TwoWay}"
+                      DisplayMemberPath="DisplayName" IsEnabled="{Binding CanEditDownloadFilters}" AutomationProperties.Name="官方 Java 下载包"/>
+            <TextBlock x:Name="JavaPackageDetails" Text="{Binding SelectedPackageDetails}" TextWrapping="Wrap"
+                       Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,8,0,12"/>
+            <WrapPanel>
+              <Button x:Name="DownloadJavaButton" Content="下载并安装" Command="{Binding DownloadJavaCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>
+              <Button x:Name="CancelJavaButton" Content="取消" Command="{Binding CancelOperationCommand}" Margin="0,0,0,8"/>
+            </WrapPanel>
+            <ProgressBar Height="5" Minimum="0" Maximum="100" Value="{Binding DownloadPercent, TargetNullValue=0}"
+                         IsIndeterminate="{Binding IsProgressIndeterminate}" Margin="0,4,0,10"/>
+            <TextBlock x:Name="JavaDownloadStatus" Text="{Binding DownloadStatus}" TextWrapping="Wrap" FontSize="12"/>
+            <TextBlock Text="安装目录" Foreground="{DynamicResource MutedTextBrush}" Margin="0,16,0,6"/>
+            <TextBox x:Name="JavaInstallationRoot" Text="{Binding InstallationRoot, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                     Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0"/>
+            <TextBlock Text="不修改系统环境变量。下载任务可在下载中心暂停、继续和调整优先级；校验和解压完成后才会加入左侧列表。"
+                       TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,12,0,0"/>
+            <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,24,0,24"/>
             <TextBlock Text="环境信息" FontSize="17" FontWeight="SemiBold" Margin="0,0,0,24"/>
             <TextBlock Text="版本" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,6"/>
             <TextBlock Text="{Binding SelectedInstallation.Version, TargetNullValue=请选择左侧的 Java}" FontSize="21" FontWeight="SemiBold" TextWrapping="Wrap"/>

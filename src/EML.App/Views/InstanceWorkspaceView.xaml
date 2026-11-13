@@ -1,4 +1,4 @@
-<UserControl x:Class="EML.App.Views.InstanceWorkspaceView"
+<UserControl x:Class="EML.App.Views.InstanceWorkspaceView" Style="{StaticResource {x:Type UserControl}}"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <!-- 索引沿用既有业务命令；功能入口在实例右键菜单中，不再显示内层标签栏。 -->
@@ -27,7 +27,7 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
         <TextBlock Text="扫描 / 导入说明（本次检查结果见“文件检查”）" Margin="0,6,0,0"/>
-        <TextBlock Text="{Binding SelectedInstance.WarningDisplay}" Foreground="#9B4D00" TextWrapping="Wrap"/>
+        <TextBlock Text="{Binding SelectedInstance.WarningDisplay}" Foreground="{DynamicResource WarningBrush}" TextWrapping="Wrap"/>
       </StackPanel>
     </ScrollViewer>
     </TabItem>
@@ -47,7 +47,7 @@
         <ScrollViewer Grid.Row="1" MaxHeight="92" VerticalScrollBarVisibility="Auto">
           <StackPanel>
             <TextBlock Text="{Binding CheckSummary}" TextWrapping="Wrap"/>
-            <TextBlock Text="{Binding CheckNotes}" TextWrapping="Wrap" Foreground="#9B4D00" Margin="0,4,0,6"/>
+            <TextBlock Text="{Binding CheckNotes}" TextWrapping="Wrap" Foreground="{DynamicResource WarningBrush}" Margin="0,4,0,6"/>
           </StackPanel>
         </ScrollViewer>
         <DataGrid Grid.Row="2" ItemsSource="{Binding CheckFiles}" IsReadOnly="True" AutoGenerateColumns="False" CanUserAddRows="False" EnableRowVirtualization="True">
@@ -174,7 +174,7 @@
           <Expander Header="列表状态与选中文件详情">
             <ScrollViewer MaxHeight="100" VerticalScrollBarVisibility="Auto">
               <StackPanel>
-                <TextBlock Text="{Binding ModCatalogNotes}" TextWrapping="Wrap" Foreground="#9B4D00"/>
+                <TextBlock Text="{Binding ModCatalogNotes}" TextWrapping="Wrap" Foreground="{DynamicResource WarningBrush}"/>
                 <TextBox Text="{Binding ModSelectionDetails, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Margin="0,4,0,4"/>
                 <TextBlock Text="启禁或增删额外模组可能影响存档与依赖，识别信息不代表兼容性验证。原包声明的模组仅供查看。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}"/>
                 <Button Content="恢复未完成的模组操作" Command="{Binding RecoverModOperationsCommand}" HorizontalAlignment="Left" Padding="8,4" Margin="0,6,0,0"/>

@@ -57,6 +57,7 @@ public sealed class LauncherViewsSmokeTests
             {
                 Source = new Uri("/EML.App;component/Themes/LauncherTheme.xaml", UriKind.Relative)
             });
+            NavyThemeChecks.Run();
             var host = new Border { Width = 720, Height = 520 };
             var selection = new WorkspaceSelection();
             var workspace = new InstanceWorkspaceView { DataContext = selection, Visibility = Visibility.Collapsed };
@@ -79,6 +80,7 @@ public sealed class LauncherViewsSmokeTests
             {
                 host.Child = page;
                 LayoutAndVerify(host, page);
+                Assert.Same(application.FindResource("TextBrush"), page.Foreground);
             }
             VerifySingleLineTextVisibility(host);
             VerifyInputsAndDropdowns(host);
@@ -86,6 +88,8 @@ public sealed class LauncherViewsSmokeTests
             VerifyGtnhMigrationImportEntry(host);
             VerifyGtnhPackDownloads(host);
             VerifySharedLaunchIdentity(host);
+            LaunchIdentitySynchronizationTests.Run(host);
+            JavaRuntimeDownloadViewChecks.Run(host);
             VerifyLaunchSettingsPage(host);
             VerifyInstanceDownloadsPage(host);
             VerifyDownloadCenterPage(host);

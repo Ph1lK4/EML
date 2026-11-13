@@ -4,7 +4,7 @@
  xmlns:sys="clr-namespace:System;assembly=mscorlib"
  Title="EML · 我的世界启动器" Width="1280" Height="820" MinWidth="1000" MinHeight="640"
  FontFamily="{StaticResource InterfaceFontFamily}" FontSize="14" TextOptions.TextFormattingMode="Display" Background="{DynamicResource WindowBackgroundBrush}" Foreground="{DynamicResource TextBrush}"
- WindowStartupLocation="CenterScreen" UseLayoutRounding="True" SnapsToDevicePixels="True" KeyDown="OnWindowKeyDown">
+ WindowStartupLocation="CenterScreen" UseLayoutRounding="True" SnapsToDevicePixels="True" KeyDown="OnWindowKeyDown" services:WindowAppearance.DarkCaption="True">
  <Window.Resources>
   <BooleanToVisibilityConverter x:Key="VisibleWhenTrue"/>
   <!-- 菜单绑定本次打开它的容器，右键先选中对应实例。 -->
@@ -19,61 +19,65 @@
    <Separator/>
    <MenuItem Header="重命名" Command="{Binding OpenInstanceSectionCommand}" CommandParameter="rename"/>
    <MenuItem Header="导出实例 ZIP" Command="{Binding Instances.ExportCommand}"/>
-   <MenuItem Header="删除实例…" Command="{Binding Instances.DeleteCommand}" Foreground="#AD3D39"/>
+   <MenuItem Header="删除实例…" Command="{Binding Instances.DeleteCommand}" Foreground="{DynamicResource DangerBrush}"/>
   </ContextMenu>
+  <!-- 分组标题不参与导航选择；八个原有路由仍由 Tag 绑定。 -->
+  <Style x:Key="NavigationSection" TargetType="ListBoxItem">
+   <Setter Property="IsEnabled" Value="False"/><Setter Property="Focusable" Value="False"/>
+   <Setter Property="Padding" Value="12,14,0,6"/><Setter Property="FontSize" Value="12"/>
+   <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter Margin="{TemplateBinding Padding}"/></ControlTemplate></Setter.Value></Setter>
+  </Style>
  </Window.Resources>
- <Grid>
+ <Grid Background="{DynamicResource WindowBackgroundBrush}">
   <Grid.ColumnDefinitions><ColumnDefinition Width="208"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
   <Border Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
-   <DockPanel Margin="20,28,20,20">
-    <StackPanel DockPanel.Dock="Top" Margin="10,0,0,36">
+   <DockPanel Margin="16,24,16,16">
+    <StackPanel DockPanel.Dock="Top" Margin="10,0,0,16">
      <StackPanel Orientation="Horizontal">
-      <Border Width="36" Height="36" CornerRadius="11" Background="{DynamicResource AccentBrush}" Margin="0,0,11,0">
-       <TextBlock Text="E" FontSize="23" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-      </Border>
-      <TextBlock Text="EML" FontSize="25" FontWeight="Bold" VerticalAlignment="Center"/>
+      <StackPanel VerticalAlignment="Center"><TextBlock Text="EML" FontSize="29" FontWeight="Bold" Foreground="{DynamicResource AccentBrush}"/><TextBlock Text="Minecraft 启动器" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Margin="0,3,0,0"/></StackPanel>
      </StackPanel>
-     <TextBlock Text="你的世界，从这里开始" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" Margin="0,12,0,0"/>
-    </StackPanel>
-    <StackPanel DockPanel.Dock="Bottom" Margin="10,20,0,0">
-     <Border Width="30" Height="3" Background="{DynamicResource AccentBrush}" HorizontalAlignment="Left" Margin="0,0,0,12"/>
-     <TextBlock Text="为长久的冒险而造" Foreground="{DynamicResource MutedTextBrush}" FontSize="11"/>
-     <TextBlock Text="Minecraft · GT New Horizons" Foreground="{DynamicResource MutedTextBrush}" FontSize="10" Margin="0,5,0,0"/>
     </StackPanel>
     <ListBox x:Name="NavigationList" SelectedValue="{Binding SelectedPage}" SelectedValuePath="Tag" BorderThickness="0" Background="Transparent"
       ItemContainerStyle="{StaticResource NavigationItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+     <ListBoxItem Content="游玩" Style="{StaticResource NavigationSection}"/>
      <ListBoxItem><ListBoxItem.Tag><sys:Int32>0</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE80F;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="本地实例"/></StackPanel></ListBoxItem>
+     <ListBoxItem><ListBoxItem.Tag><sys:Int32>4</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE7C1;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="GTNH 专区"/></StackPanel></ListBoxItem>
+     <ListBoxItem Content="发现与下载" Style="{StaticResource NavigationSection}"/>
      <ListBoxItem><ListBoxItem.Tag><sys:Int32>6</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="下载实例"/></StackPanel></ListBoxItem>
-     <ListBoxItem><ListBoxItem.Tag><sys:Int32>7</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="下载中心"/></StackPanel></ListBoxItem>
      <ListBoxItem><ListBoxItem.Tag><sys:Int32>1</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE719;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="在线模组"/></StackPanel></ListBoxItem>
+     <ListBoxItem><ListBoxItem.Tag><sys:Int32>7</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9D9;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="下载中心"/></StackPanel></ListBoxItem>
+     <ListBoxItem Content="环境与设置" Style="{StaticResource NavigationSection}"/>
      <ListBoxItem><ListBoxItem.Tag><sys:Int32>2</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="微软账号"/></StackPanel></ListBoxItem>
      <ListBoxItem><ListBoxItem.Tag><sys:Int32>3</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE943;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="Java 环境"/></StackPanel></ListBoxItem>
      <ListBoxItem><ListBoxItem.Tag><sys:Int32>5</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="启动设置"/></StackPanel></ListBoxItem>
-     <ListBoxItem><ListBoxItem.Tag><sys:Int32>4</sys:Int32></ListBoxItem.Tag><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE7C1;" FontFamily="Segoe MDL2 Assets" Margin="0,0,12,0" VerticalAlignment="Center"/><TextBlock Text="GTNH 专区"/></StackPanel></ListBoxItem>
     </ListBox>
    </DockPanel>
   </Border>
-  <Grid Grid.Column="1" Margin="32,28,32,24">
+  <Grid Grid.Column="1" Margin="28,24,28,20">
    <Grid Visibility="{Binding IsInstancePage, Converter={StaticResource VisibleWhenTrue}}" services:UiMotion.Enter="True">
     <Grid.Style><Style TargetType="Grid"><Style.Triggers><DataTrigger Binding="{Binding IsWorkspaceVisible}" Value="True"><Setter Property="IsEnabled" Value="False"/></DataTrigger></Style.Triggers></Style></Grid.Style>
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <DockPanel Margin="0,0,0,22">
+    <DockPanel Margin="0,0,0,18">
      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
       <Button Content="刷新" Command="{Binding Instances.RefreshCommand}" Style="{StaticResource QuietButton}" Margin="0,0,8,0"/>
-      <Button Content="+  导入实例" Command="{Binding Instances.ImportCommand}" Style="{StaticResource PrimaryButton}" ToolTip="支持 Prism、Modrinth、CurseForge 和通用 ZIP 整合包"/>
+      <Button Content="+  导入实例" Command="{Binding Instances.ImportCommand}" ToolTip="支持 Prism、Modrinth、CurseForge 和通用 ZIP 整合包">
+       <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding Instances.Instances.Count}" Value="0"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentForegroundBrush}"/><Setter Property="FontWeight" Value="SemiBold"/></DataTrigger></Style.Triggers></Style></Button.Style>
+      </Button>
      </StackPanel>
-     <StackPanel><TextBlock Text="本地实例" Style="{StaticResource PageTitle}"/><TextBlock Text="每一段冒险，都有自己的世界。" Style="{StaticResource PageSubtitle}" Margin="0,8,0,0"/></StackPanel>
+     <StackPanel><TextBlock Text="本地实例" Style="{StaticResource PageTitle}"/><TextBlock Text="管理整合包与游玩数据" Style="{StaticResource PageSubtitle}"/></StackPanel>
     </DockPanel>
-    <Border Grid.Row="1" Style="{StaticResource CardBorder}" Padding="24" Margin="0,0,0,22">
+    <Border Grid.Row="1" Padding="20" Margin="0,0,0,20">
+     <Border.Style><Style TargetType="Border" BasedOn="{StaticResource CardBorder}"><Style.Triggers><DataTrigger Binding="{Binding Instances.Instances.Count}" Value="0"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></Border.Style>
      <Grid>
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
       <Grid.ColumnDefinitions><ColumnDefinition Width="64"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Border Width="48" Height="48" CornerRadius="14" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
-       <TextBlock Text="&#xE7FC;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      <Border Width="48" Height="48" CornerRadius="10" Background="{DynamicResource RaisedSurfaceBrush}" VerticalAlignment="Center">
+       <TextBlock Text="&#xE7FC;" FontFamily="Segoe MDL2 Assets" FontSize="22" Foreground="{DynamicResource SecondaryAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
       </Border>
       <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,18,0">
-       <TextBlock Text="准备出发" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" Margin="0,0,0,5"/>
-       <TextBlock Text="{Binding Instances.SelectedInstance.Name, TargetNullValue=选择一个实例}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
+       <TextBlock Text="当前实例" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,5"/>
+       <TextBlock Text="{Binding Instances.SelectedInstance.Name, TargetNullValue=选择一个实例}" ToolTip="{Binding Instances.SelectedInstance.Name}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
        <TextBlock Text="{Binding Instances.SelectedInstance.LoaderDisplay, TargetNullValue=导入整合包，或在下方选择已有实例}" Foreground="{DynamicResource MutedTextBrush}" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
       </StackPanel>
       <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
@@ -81,15 +85,15 @@
        <Button Content="···" FontSize="20" Padding="12,5" Style="{StaticResource QuietButton}" Tag="{Binding}" ContextMenu="{StaticResource InstanceMenu}" Click="OnOpenInstanceMenu" ToolTip="当前实例的更多操作"/>
       </StackPanel>
       <views:LaunchIdentitySelector x:Name="InstanceLaunchIdentity" Grid.Row="1" Grid.ColumnSpan="3"
-                                    DataContext="{Binding Instances}" Margin="0,20,0,0"/>
-      <TextBlock Grid.Row="2" Grid.ColumnSpan="3" FontSize="11" Foreground="{DynamicResource MutedTextBrush}"
-                 Text="当前选择立即用于启动；要记住此实例的偏好，请在“启动设置”保存。" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                                    DataContext="{Binding Instances}" Margin="0,16,0,0"/>
+      <TextBlock Grid.Row="2" Grid.ColumnSpan="3" FontSize="12" Foreground="{DynamicResource MutedTextBrush}"
+                 Text="切换身份可能对应不同的背包与进度；可在“启动设置”保存偏好。" TextWrapping="Wrap" Margin="0,10,0,0"/>
      </Grid>
     </Border>
     <Grid Grid.Row="2">
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
      <DockPanel Margin="2,0,2,12">
-      <TextBlock DockPanel.Dock="Right" Text="右键实例，管理文件、模组与启动设置" Foreground="{DynamicResource MutedTextBrush}" FontSize="11"/>
+      <TextBlock DockPanel.Dock="Right" Text="右键或 ··· 管理实例" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
       <TextBlock Text="{Binding Instances.Instances.Count, StringFormat=实例库 · {0}}" FontWeight="SemiBold"/>
      </DockPanel>
      <Grid Grid.Row="1">
@@ -107,34 +111,35 @@
        <ListBox.ItemTemplate><DataTemplate>
         <Grid>
          <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-         <Border Width="32" Height="32" CornerRadius="9" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Center">
-          <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+         <Border Width="32" Height="32" CornerRadius="8" Background="{DynamicResource RaisedSurfaceBrush}" VerticalAlignment="Center">
+          <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource SecondaryAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
          </Border>
          <StackPanel Grid.Column="1" Margin="0,0,12,0">
-          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
-          <TextBlock Text="{Binding LoaderDisplay}" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
+          <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+          <TextBlock Text="{Binding LoaderDisplay}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,5,0,0" TextTrimming="CharacterEllipsis"/>
          </StackPanel>
          <StackPanel Grid.Column="2" VerticalAlignment="Center" MaxWidth="180">
           <TextBlock Text="{Binding MinecraftVersionDisplay}" TextAlignment="Right" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-          <TextBlock Text="{Binding Format}" TextAlignment="Right" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0"/>
+          <TextBlock Text="{Binding Format}" TextAlignment="Right" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Margin="0,4,0,0"/>
          </StackPanel>
         </Grid>
        </DataTemplate></ListBox.ItemTemplate>
       </ListBox>
-      <Border IsHitTestVisible="False" Margin="0,0,0,8">
+      <Border Margin="0,0,0,8">
        <Border.Style><Style TargetType="Border" BasedOn="{StaticResource CardBorder}"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Instances.Instances.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style>
        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-        <TextBlock Text="你的下一段冒险，尚未开始" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center"/>
-        <TextBlock Text="点击右上角“导入实例”，添加第一个整合包。" Foreground="{DynamicResource MutedTextBrush}" Margin="0,12,0,0" TextAlignment="Center"/>
+        <TextBlock Text="还没有本地实例" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+        <TextBlock Text="已有整合包？点击右上角“导入实例”。" Foreground="{DynamicResource MutedTextBrush}" Margin="0,12,0,0" TextAlignment="Center"/>
+        <Button Content="没有整合包？前往下载实例 →" Click="OnOpenDownloads" HorizontalAlignment="Center" Style="{StaticResource QuietButton}" Margin="0,12,0,0"/>
        </StackPanel>
       </Border>
      </Grid>
     </Grid>
     <StackPanel Grid.Row="3" Margin="0,14,0,0">
-     <TextBlock Text="{Binding Instances.InstancesRoot}" Foreground="{DynamicResource MutedTextBrush}" FontSize="10" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.InstancesRoot}"/>
-     <ProgressBar Value="{Binding Instances.TransferPercent}" Maximum="100" Height="3" Margin="0,10,0,6"/>
-     <TextBlock Text="{Binding Instances.TransferStatus}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.TransferStatus}"/>
-     <TextBlock Text="{Binding Instances.StatusText}" Foreground="{DynamicResource MutedTextBrush}" FontSize="11" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.StatusText}" Margin="0,3,0,0"/>
+     <TextBlock Text="{Binding Instances.InstancesRoot}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.InstancesRoot}"/>
+     <ProgressBar Value="{Binding Instances.TransferPercent, Mode=OneWay}" Maximum="100" Height="3" Margin="0,10,0,6" Visibility="{Binding Instances.IsBusy, Converter={StaticResource VisibleWhenTrue}}"/>
+     <TextBlock Text="{Binding Instances.TransferStatus}" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.TransferStatus}"/>
+     <TextBlock Text="{Binding Instances.StatusText}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.StatusText}" Margin="0,3,0,0"/>
      <WrapPanel Margin="0,6,0,0">
       <Button Content="取消导入 / 补全" Command="{Binding Instances.ImportCancelCommand}" Style="{StaticResource QuietButton}" Margin="0,0,6,0" Visibility="{Binding Instances.ImportCommand.IsRunning, Converter={StaticResource VisibleWhenTrue}}"/>
       <Button Content="取消导出" Command="{Binding Instances.ExportCancelCommand}" Style="{StaticResource QuietButton}" Margin="0,0,6,0" Visibility="{Binding Instances.ExportCommand.IsRunning, Converter={StaticResource VisibleWhenTrue}}"/>
@@ -147,8 +152,8 @@
    <Grid Visibility="{Binding IsOnlinePage, Converter={StaticResource VisibleWhenTrue}}" services:UiMotion.Enter="True">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <Grid Margin="0,0,0,20"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="280"/></Grid.ColumnDefinitions>
-     <StackPanel><TextBlock Text="在线模组" Style="{StaticResource PageTitle}"/><TextBlock Text="发现新玩法，为你的世界添一点不同。" Style="{StaticResource PageSubtitle}" Margin="0,8,0,0"/></StackPanel>
-     <StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="安装到实例" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,5"/>
+     <StackPanel><TextBlock Text="在线模组" Style="{StaticResource PageTitle}"/><TextBlock Text="搜索模组，选择版本并安装到当前实例" Style="{StaticResource PageSubtitle}"/></StackPanel>
+     <StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="安装到实例" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,5"/>
       <ComboBox ItemsSource="{Binding Instances.Instances}" SelectedItem="{Binding Instances.SelectedInstance}" DisplayMemberPath="Name" IsEnabled="{Binding Instances.CanInteract}" ToolTip="使用这个实例的版本、加载器及安装目录"/>
      </StackPanel>
     </Grid>
@@ -162,10 +167,10 @@
    <views:GtnhHubView DataContext="{Binding Gtnh}" Visibility="{Binding DataContext.IsGtnhPage, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource VisibleWhenTrue}}" services:UiMotion.Enter="True"/>
   </Grid>
   <!-- 收起工作区不停止后台操作，状态保留在对应实例服务中。 -->
-  <Grid x:Name="WorkspaceOverlay" Grid.Column="1" Background="#5517252C" Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource VisibleWhenTrue}}"
+  <Grid x:Name="WorkspaceOverlay" Grid.Column="1" Background="#B30C111C" Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource VisibleWhenTrue}}"
         services:UiMotion.Enter="True" MouseLeftButtonDown="OnWorkspaceBackdropClick" IsVisibleChanged="OnWorkspaceVisibilityChanged"
         KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Contained">
-   <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="18" Margin="22" Padding="24" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+   <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="10" Margin="22" Padding="24" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
      <DockPanel Margin="0,0,0,20">
       <Button x:Name="CloseWorkspaceButton" DockPanel.Dock="Right" Content="✕" Command="{Binding CloseInstanceWorkspaceCommand}" Style="{StaticResource QuietButton}" ToolTip="关闭面板（Esc），后台操作继续" AutomationProperties.Name="关闭实例面板" VerticalAlignment="Top"/>
@@ -173,9 +178,9 @@
      </DockPanel>
      <views:InstanceWorkspaceView Grid.Row="1" DataContext="{Binding Instances}"/>
      <StackPanel Grid.Row="2" Margin="0,12,0,0">
-      <ProgressBar Value="{Binding Instances.TransferPercent}" Maximum="100" Height="3"/>
-      <TextBlock Text="{Binding Instances.TransferStatus}" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" Margin="0,6,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.TransferStatus}"/>
-      <TextBox Text="{Binding Instances.StatusText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="64" MinHeight="0" Padding="0,4" BorderThickness="0" Background="Transparent" VerticalScrollBarVisibility="Auto" FontSize="11" Foreground="{DynamicResource MutedTextBrush}" AutomationProperties.Name="实例操作结果"/>
+      <ProgressBar Value="{Binding Instances.TransferPercent, Mode=OneWay}" Maximum="100" Height="3"/>
+      <TextBlock Text="{Binding Instances.TransferStatus}" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" Margin="0,6,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Instances.TransferStatus}"/>
+      <TextBox Text="{Binding Instances.StatusText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="64" MinHeight="0" Padding="0,4" BorderThickness="0" Background="Transparent" VerticalScrollBarVisibility="Auto" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" AutomationProperties.Name="实例操作结果"/>
      </StackPanel>
     </Grid>
    </Border>

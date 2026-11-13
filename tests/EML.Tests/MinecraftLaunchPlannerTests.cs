@@ -181,7 +181,10 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
     {
         var fixture = await CreateAsync();
         fixture.Probed = new("manual", "17.0.2", "amd64");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Planner.PrepareAsync(fixture.Instance, new() { JavaPath = "manual" }));
+        var error = await Assert.ThrowsAsync<JavaRuntimeRequiredException>(() => fixture.Planner.PrepareAsync(fixture.Instance, new() { JavaPath = "manual" }));
+        Assert.Equal([25], error.CompatibleMajorVersions);
+        Assert.Equal("x64", error.Architecture);
+        Assert.Equal("manual", error.RequestedJavaPath);
     }
 
     /// <summary>过期的发现结果必须由实时 Java 查询复核。</summary>
@@ -190,7 +193,57 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
     {
         var fixture = await CreateAsync();
         fixture.Probed = new("stale", "8", "amd64");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Planner.PrepareAsync(fixture.Instance, new()));
+        var error = await Assert.ThrowsAsync<JavaRuntimeRequiredException>(() => fixture.Planner.PrepareAsync(fixture.Instance, new()));
+        Assert.Equal([25], error.CompatibleMajorVersions);
+        Assert.Null(error.RequestedJavaPath);
+    }
+
+    /// <summary>不存在、无法执行或无法识别的指定 Java 携带精确下载要求，不吞掉原错误。</summary>
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("access")]
+    [InlineData("unrecognized")]
+    public async Task UnusableManualJavaHasStructuredRecoveryRequirement(string failure)
+    {
+        var fixture = await CreateAsync();
+        var original = failure switch
+        {
+            "missing" => (Exception)new FileNotFoundException("Java 已删除"),
+            "access" => new UnauthorizedAccessException("Java 无法执行"),
+            _ => new IOException("无法识别 Java 版本")
+        };
+        fixture.BeforeProbe = () => throw original;
+
+        var error = await Assert.ThrowsAsync<JavaRuntimeRequiredException>(() =>
+            fixture.Planner.PrepareAsync(fixture.Instance, new() { JavaPath = "manual" }));
+
+        Assert.Same(original, error.InnerException);
+        Assert.Equal([25], error.CompatibleMajorVersions);
+        Assert.Equal("x64", error.Architecture);
+    }
+
+    /// <summary>没有发现 Java 时表达可恢复的缺失，不要求界面从错误字符串解析版本。</summary>
+    [Fact]
+    public async Task EmptyJavaDiscoveryHasStructuredRecoveryRequirement()
+    {
+        var fixture = await CreateAsync();
+        fixture.Locator.Results = [];
+
+        var error = await Assert.ThrowsAsync<JavaRuntimeRequiredException>(() => fixture.Planner.PrepareAsync(fixture.Instance, new()));
+
+        Assert.Equal([25], error.CompatibleMajorVersions);
+        Assert.Equal("x64", error.Architecture);
+        Assert.Equal(0, fixture.ProbeCalls());
+    }
+
+    /// <summary>Java 探测被取消时保留取消语义，不能变成下载询问。</summary>
+    [Fact]
+    public async Task CanceledJavaProbeDoesNotRequestRuntimeDownload()
+    {
+        var fixture = await CreateAsync();
+        fixture.BeforeProbe = () => throw new OperationCanceledException();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            fixture.Planner.PrepareAsync(fixture.Instance, new() { JavaPath = "manual" }));
     }
 
     /// <summary>检测列表与实时查询使用不同的合法 x86 别名时，仍识别为同一架构。</summary>
@@ -400,7 +453,8 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
             loggingPath = Relative("assets/log_configs/client.xml"),
             compatibleJavaMajors = new[] { MinecraftLaunchPlanner.MajorVersion(version) },
             jvmArguments = new[] { "-Xmx1G", "-Dloader.flag=true", "-Djava.library.path=${natives_directory}", "-cp", "${classpath}" },
-            gameArguments = new[] { "--username", "${auth_player_name}", "--uuid", "${auth_uuid}", "--gameDir", "${game_directory}", "--tweakClass", "example.Tweaker" } }));
+            gameArguments = new[] { "--username", "${auth_player_name}", "--uuid", "${auth_uuid}", "--accessToken", "${auth_access_token}",
+                "--gameDir", "${game_directory}", "--tweakClass", "example.Tweaker" } }));
         var installed = new JavaInstallation("fake-java", version, arch);
         var fixture = new Fixture(instance, portablePath, standardPath, new FakeJavaLocator(installed));
         fixture.Resolver.Plan = new PrismRuntimePlan
@@ -453,6 +507,163 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
         Assert.DoesNotContain("online-secret", JsonSerializer.Serialize(plan));
         Assert.DoesNotContain("online-secret", plan.ToString());
         Assert.Equal(1, accounts.Calls);
+    }
+
+    /// <summary>导入参数中的旧身份和重复选项统一使用本次身份，同时保留加载器及未知参数。</summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task ImportedIdentityArgumentsUseCurrentIdentity(bool microsoft, bool inline)
+    {
+        var accounts = new OnlineAccountStub { Fail = !microsoft };
+        var fixture = await CreateAsync(format: "Zip", accounts: accounts);
+        var identity = new Dictionary<string, string>
+        {
+            ["--username"] = "Steve", ["--uuid"] = "old-player-id", ["--accessToken"] = "old-access-token",
+            ["--session"] = "old-session", ["--userType"] = "old-user-type", ["--xuid"] = "old-xuid",
+            ["--clientId"] = "old-client-id", ["--userProperties"] = "{\"old\":true}"
+        };
+        var source = new List<string> { "--tweakClass", "example.Tweaker", "--custom-mode", "unchanged" };
+        foreach (var (option, value) in identity)
+        {
+            if (inline) source.Add(option + "=" + value);
+            else source.AddRange([option, value]);
+        }
+        source.Add("--opaque=keep=unchanged");
+        foreach (var (option, value) in identity)
+        {
+            if (inline) source.AddRange([option, value]);
+            else source.Add(option + "=" + value);
+        }
+        await SetGameArgumentsAsync(fixture, source);
+        var before = File.ReadAllText(fixture.PortablePath);
+
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance,
+            new() { UseMicrosoftAccount = microsoft, PlayerName = "OfflineAlex" });
+
+        var playerId = microsoft ? MicrosoftMinecraftAuthTests.PlayerId : MinecraftLaunchPlanner.OfflineUuid("OfflineAlex");
+        var expected = new[]
+        {
+            "--tweakClass", "example.Tweaker", "--custom-mode", "unchanged",
+            "--username", microsoft ? "OnlineAlex" : "OfflineAlex", "--uuid", playerId,
+            "--accessToken", microsoft ? "online-secret" : "0",
+            "--session", microsoft ? "token:online-secret:" + playerId : "0",
+            "--userType", microsoft ? "msa" : "legacy", "--xuid", microsoft ? "123" : "",
+            "--clientId", microsoft ? MicrosoftMinecraftAuthTests.ClientId : "", "--userProperties", "{}",
+            "--opaque=keep=unchanged"
+        };
+        Assert.Equal(expected, plan.Arguments.SkipWhile(argument => argument != "example.Main").Skip(1));
+        Assert.Equal(microsoft ? 1 : 0, accounts.Calls);
+        Assert.Equal(before, File.ReadAllText(fixture.PortablePath));
+        Assert.DoesNotContain("online-secret", JsonSerializer.Serialize(plan));
+    }
+
+    /// <summary>缺失身份值不能误吞下一个游戏选项，重复选项也必须有完整语法。</summary>
+    [Theory]
+    [InlineData("--username")]
+    [InlineData("--accessToken=")]
+    [InlineData("--session", "--tweakClass", "example.Tweaker")]
+    [InlineData("--uuid", "old-player-id", "--uuid")]
+    [InlineData("--username", "")]
+    public async Task MissingIdentityArgumentValueIsRejected(params string[] arguments)
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub());
+        await SetGameArgumentsAsync(fixture, arguments);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Planner.PrepareAsync(
+            fixture.Instance, new() { UseMicrosoftAccount = true }));
+
+        Assert.Contains("缺少值", error.Message);
+        Assert.DoesNotContain("online-secret", error.Message);
+    }
+
+    /// <summary>离线启动允许模板中的 Xbox 和客户端 ID 占位符展开为空，不误判参数缺值。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OfflineIdentityPlaceholdersMayExpandToEmpty(bool inline)
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub { Fail = true });
+        await SetGameArgumentsAsync(fixture, inline
+            ? ["--xuid=${auth_xuid}", "--clientId=${clientid}"]
+            : ["--xuid", "${auth_xuid}", "--clientId", "${clientid}"]);
+
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance, new());
+
+        Assert.Equal(new[] { "--xuid", "", "--clientId", "" },
+            plan.Arguments.SkipWhile(argument => argument != "example.Main").Skip(1));
+    }
+
+    /// <summary>可选身份字段允许显式空串，由本次身份补入 Xbox、客户端 ID 和用户属性。</summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    public async Task OptionalIdentityArgumentsAllowExplicitEmptyValues(bool microsoft, bool inline)
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub { Fail = !microsoft });
+        var source = new List<string> { "--username", "Steve", "--uuid", "old-id", "--accessToken", "old-token" };
+        foreach (var option in new[] { "--xuid", "--clientId", "--userProperties" })
+        {
+            if (inline) source.Add(option + "=");
+            else source.AddRange([option, ""]);
+        }
+        await SetGameArgumentsAsync(fixture, source);
+
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance,
+            new() { UseMicrosoftAccount = microsoft, PlayerName = "OfflineAlex" });
+
+        Assert.Equal(new[] { "--username", microsoft ? "OnlineAlex" : "OfflineAlex", "--uuid",
+            microsoft ? MicrosoftMinecraftAuthTests.PlayerId : MinecraftLaunchPlanner.OfflineUuid("OfflineAlex"),
+            "--accessToken", microsoft ? "online-secret" : "0", "--xuid", microsoft ? "123" : "",
+            "--clientId", microsoft ? MicrosoftMinecraftAuthTests.ClientId : "", "--userProperties", "{}" },
+            plan.Arguments.SkipWhile(argument => argument != "example.Main").Skip(1));
+    }
+
+    /// <summary>正版模板缺失姓名或完整会话参数时明确失败，不把不完整身份交给游戏。</summary>
+    [Theory]
+    [InlineData("--uuid", "old-id", "--accessToken", "old-token")]
+    [InlineData("--username", "Steve", "--accessToken", "old-token")]
+    [InlineData("--username", "Steve", "--uuid", "old-id")]
+    public async Task IncompleteMicrosoftIdentityTemplateIsRejected(params string[] arguments)
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub());
+        await SetGameArgumentsAsync(fixture, arguments);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Planner.PrepareAsync(
+            fixture.Instance, new() { UseMicrosoftAccount = true }));
+
+        Assert.Contains("不能传递完整正版身份", error.Message);
+        Assert.DoesNotContain("online-secret", error.Message);
+    }
+
+    /// <summary>旧版本只声明用户名及 session 时更新这两项，不额外注入现代身份选项。</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LegacyIdentityTemplateKeepsItsSupportedOptions(bool microsoft)
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub());
+        await SetGameArgumentsAsync(fixture, ["--username=Steve", "--session", "old-session", "--version", "legacy-version"]);
+
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance,
+            new() { UseMicrosoftAccount = microsoft, PlayerName = "OfflineAlex" });
+
+        Assert.Equal(new[] { "--username", microsoft ? "OnlineAlex" : "OfflineAlex", "--session",
+            microsoft ? "token:online-secret:" + MicrosoftMinecraftAuthTests.PlayerId : "0", "--version", "legacy-version" },
+            plan.Arguments.SkipWhile(argument => argument != "example.Main").Skip(1));
+    }
+
+    /// <summary>只在隔离测试实例替换游戏参数，并模拟补全器登记生成文件基线。</summary>
+    private static async Task SetGameArgumentsAsync(Fixture fixture, IReadOnlyList<string> arguments)
+    {
+        var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(fixture.PortablePath))!;
+        json["gameArguments"] = JsonSerializer.SerializeToNode(arguments);
+        File.WriteAllText(fixture.PortablePath, json.ToJsonString());
+        await fixture.RefreshStateAsync();
     }
 
     /// <summary>正版刷新失败时不能继续生成离线启动计划。</summary>
@@ -555,11 +766,12 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
     private sealed class FakeJavaLocator(JavaInstallation java) : IJavaLocator
     {
         public int Calls { get; private set; }
+        public IReadOnlyList<JavaInstallation> Results { get; set; } = [java];
         /// <summary>统计发现调用；Java 版本查询另由注入探测器统计。</summary>
         public Task<IReadOnlyList<JavaInstallation>> FindAllAsync(CancellationToken cancellationToken = default)
         {
             Calls++;
-            return Task.FromResult<IReadOnlyList<JavaInstallation>>([java]);
+            return Task.FromResult(Results);
         }
     }
     /// <summary>仅清理当前测试唯一的临时目录。</summary>

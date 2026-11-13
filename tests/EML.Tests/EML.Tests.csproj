@@ -42,6 +42,7 @@
     <Compile Include="..\..\src\EML.App\Services\IInstanceMigrationDialogs.cs" Link="App\IInstanceMigrationDialogs.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\JavaSettingsViewModel.cs" Link="App\JavaSettingsViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\IInstanceDialogs.cs" Link="App\IInstanceDialogs.cs" />
+    <Compile Include="..\..\src\EML.App\Services\IJavaDownloadDialogs.cs" Link="App\IJavaDownloadDialogs.cs" />
     <Compile Include="..\..\src\EML.App\Services\BoundedLaunchProgress.cs" Link="App\BoundedLaunchProgress.cs" />
     <Compile Include="..\..\src\EML.App\Services\IOperationNotifications.cs" Link="App\IOperationNotifications.cs" />
   </ItemGroup>

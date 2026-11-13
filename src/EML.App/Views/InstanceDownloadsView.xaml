@@ -1,4 +1,4 @@
-<UserControl x:Class="EML.App.Views.InstanceDownloadsView"
+<UserControl x:Class="EML.App.Views.InstanceDownloadsView" Style="{StaticResource {x:Type UserControl}}"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:EML.App.Views">
  <UserControl.Resources>
@@ -9,7 +9,7 @@
   <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
   <StackPanel Margin="0,0,0,18">
    <TextBlock Text="下载实例" Style="{StaticResource PageTitle}"/>
-   <TextBlock Text="发现整合包，或从官方安装一个全新的原版世界。" Style="{StaticResource PageSubtitle}" Margin="0,8,0,0"/>
+   <TextBlock Text="下载整合包，或安装官方原版 Minecraft" Style="{StaticResource PageSubtitle}"/>
   </StackPanel>
   <Border Grid.Row="1" Style="{StaticResource CardBorder}" Padding="18" Margin="0,0,0,16">
    <StackPanel IsEnabled="{Binding CanBrowse}">
@@ -18,7 +18,7 @@
      <ComboBox ItemsSource="{Binding Providers}" SelectedIndex="{Binding ProviderIndex}" AutomationProperties.Name="实例下载来源"/>
      <TextBox x:Name="SearchInput" Grid.Column="2" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" MaxLength="256"
         ToolTip="输入平台上的整合包名称或 Minecraft 版本号；中文关键词由所选平台搜索" AutomationProperties.Name="搜索整合包或原版版本"/>
-     <Button Grid.Column="3" Content="搜索" Command="{Binding SearchCommand}" Style="{StaticResource PrimaryButton}" Margin="12,0,0,0"/>
+     <Button Grid.Column="3" Content="搜索" Command="{Binding SearchCommand}" Margin="12,0,0,0"/>
     </Grid>
     <WrapPanel Margin="0,14,0,0" Visibility="{Binding IsModpack, Converter={StaticResource Visible}}">
      <StackPanel Width="145" Margin="0,0,14,0"><TextBlock Text="Minecraft 版本（可留空）" FontSize="12" Margin="0,0,0,6"/>
@@ -46,8 +46,8 @@
       <ListBox.ItemTemplate><DataTemplate>
        <Grid Margin="8,10">
         <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-        <Border Width="46" Height="46" CornerRadius="12" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Top">
-         <Grid><TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource AccentBrush}" FontSize="20" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+        <Border Width="46" Height="46" CornerRadius="8" Background="{DynamicResource RaisedSurfaceBrush}" VerticalAlignment="Top">
+         <Grid><TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" Foreground="{DynamicResource SecondaryAccentBrush}" FontSize="20" VerticalAlignment="Center" HorizontalAlignment="Center"/>
           <Image Source="{Binding IconPath}" Stretch="Uniform" Width="40" Height="40"/></Grid>
         </Border>
         <StackPanel Grid.Column="1"><TextBlock Text="{Binding DisplayName}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap"/>
@@ -94,7 +94,7 @@
     </Grid>
    </Border>
   </Grid>
-  <Border Grid.Row="3" Background="{DynamicResource AccentSoftBrush}" CornerRadius="12" Padding="16,12" Margin="0,16,0,0">
+  <Border Grid.Row="3" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" CornerRadius="10" Padding="16,12" Margin="0,16,0,0">
    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
     <ScrollViewer MaxHeight="126" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,10,0">
      <StackPanel>

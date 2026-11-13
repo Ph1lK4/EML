@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -13,6 +14,8 @@ public static class UiMotion
         "Enter", typeof(bool), typeof(UiMotion), new PropertyMetadata(false, OnEnterChanged));
     public static readonly DependencyProperty PressProperty = DependencyProperty.RegisterAttached(
         "Press", typeof(bool), typeof(UiMotion), new PropertyMetadata(false, OnPressChanged));
+    public static readonly DependencyProperty SelectionProperty = DependencyProperty.RegisterAttached(
+        "Selection", typeof(bool), typeof(UiMotion), new PropertyMetadata(false, OnSelectionChanged));
 
     /// <summary>读取页面是否启用入场反馈。</summary>
     public static bool GetEnter(DependencyObject element) => (bool)element.GetValue(EnterProperty);
@@ -22,6 +25,43 @@ public static class UiMotion
     public static bool GetPress(DependencyObject element) => (bool)element.GetValue(PressProperty);
     /// <summary>为按钮启用或禁用悬停与按压反馈。</summary>
     public static void SetPress(DependencyObject element, bool value) => element.SetValue(PressProperty, value);
+    /// <summary>读取导航项是否启用短暂选中反馈。</summary>
+    public static bool GetSelection(DependencyObject element) => (bool)element.GetValue(SelectionProperty);
+    /// <summary>导航状态立即更新，动画只补充视觉反馈。</summary>
+    public static void SetSelection(DependencyObject element, bool value) => element.SetValue(SelectionProperty, value);
+
+    /// <summary>选中反馈仅操作模板内部表面，取消选择或卸载时释放动画。</summary>
+    private static void OnSelectionChanged(DependencyObject target, DependencyPropertyChangedEventArgs change)
+    {
+        if (target is not ListBoxItem item) return;
+        item.Selected -= OnItemSelected;
+        item.Unselected -= OnItemSelectionEnded;
+        item.Unloaded -= OnItemSelectionEnded;
+        ResetSelection(item);
+        if (change.NewValue is not true) return;
+        item.Selected += OnItemSelected;
+        item.Unselected += OnItemSelectionEnded;
+        item.Unloaded += OnItemSelectionEnded;
+    }
+
+    /// <summary>导航切换使用 150ms 淡入，首次布局和减少动态效果时直接显示。</summary>
+    private static void OnItemSelected(object sender, RoutedEventArgs args)
+    {
+        if (sender is not ListBoxItem item || !ReferenceEquals(args.OriginalSource, item) || !CanAnimate || !item.IsLoaded || !item.IsVisible) return;
+        if (item.Template?.FindName("ItemSurface", item) is Border surface)
+            surface.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0.65, 1, TimeSpan.FromMilliseconds(150))
+            { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+    }
+
+    /// <summary>快速往返切换或卸载时不残留半透明的导航项。</summary>
+    private static void OnItemSelectionEnded(object sender, RoutedEventArgs args) => ResetSelection((ListBoxItem)sender);
+
+    /// <summary>清理模板动画，不改动外部绑定和选中状态。</summary>
+    private static void ResetSelection(ListBoxItem item)
+    {
+        if (item.Template?.FindName("ItemSurface", item) is Border surface)
+            surface.BeginAnimation(UIElement.OpacityProperty, null);
+    }
 
     /// <summary>只在系统允许时播放过渡，关闭动画后控件立即进入目标状态。</summary>
     private static bool CanAnimate => SystemParameters.ClientAreaAnimation && !SystemParameters.HighContrast;
@@ -62,7 +102,7 @@ public static class UiMotion
         if (!CanAnimate || !element.IsVisible || element.Opacity <= 0) return;
         var opacity = element.Opacity;
         element.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(opacity * 0.45, opacity,
-            TimeSpan.FromMilliseconds(170)) { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
+            TimeSpan.FromMilliseconds(180)) { FillBehavior = FillBehavior.Stop, EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
     }
 
     /// <summary>按钮反馈不处理事件，保留原有鼠标、键盘和命令执行规则。</summary>

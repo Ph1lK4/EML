@@ -1,4 +1,4 @@
-<UserControl x:Class="EML.App.Views.LaunchIdentitySelector"
+<UserControl x:Class="EML.App.Views.LaunchIdentitySelector" Style="{StaticResource {x:Type UserControl}}"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <!-- 本地实例与启动设置共用同一个模型；本控件只展示公开玩家名，不读取认证令牌。 -->
@@ -8,7 +8,7 @@
       <TextBlock Text="启动模式" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
       <ComboBox x:Name="ModeSelector" ItemsSource="{Binding LaunchModes}"
                 SelectedItem="{Binding SelectedLaunchMode, Mode=TwoWay}"
-                AutomationProperties.Name="启动模式" ToolTip="当前选择立即用于启动，本地实例与启动设置同步"/>
+                AutomationProperties.Name="启动模式" ToolTip="同一实例的两处选择即时同步，以最后选择为准；正版模式使用已登录账号"/>
     </StackPanel>
     <Grid Grid.Column="2" MaxWidth="360" HorizontalAlignment="Left" MinWidth="200">
       <StackPanel>

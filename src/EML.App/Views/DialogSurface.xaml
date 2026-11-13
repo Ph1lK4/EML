@@ -23,10 +23,10 @@
    </Grid>
    <Grid Grid.Row="1" Margin="24,12,24,20">
     <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-    <Border x:Name="ToneTile" Width="46" Height="46" CornerRadius="13" Background="{DynamicResource AccentSoftBrush}"
+    <Border x:Name="ToneTile" Width="46" Height="46" CornerRadius="10" Background="{DynamicResource InfoSoftBrush}"
       VerticalAlignment="Top" Margin="0,0,14,0">
      <TextBlock x:Name="ToneIcon" Text="&#xE946;" FontFamily="Segoe MDL2 Assets" FontSize="22"
-       Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+       Foreground="{DynamicResource SecondaryAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
     <StackPanel Grid.Column="1">
      <TextBlock x:Name="HeadingText" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"/>

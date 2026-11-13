@@ -150,7 +150,7 @@ public sealed partial class MinecraftLaunchPlanner
         var mainClass = RequiredString(profile, "mainClass");
         if (!MainClassPattern().IsMatch(mainClass)) throw new InvalidDataException("无效的游戏主类。");
         arguments.Add(mainClass);
-        arguments.AddRange(StringArray(profile, "gameArguments").Select(argument => Expand(argument, values)));
+        arguments.AddRange(BuildGameArguments(StringArray(profile, "gameArguments"), values, session is not null));
         token.ThrowIfCancellationRequested();
         InstanceEffectiveRequirements.EnsureUnchanged(root, manifest, sourceSnapshot);
         var currentRuntime = _resolver.Resolve(root, manifest);
@@ -207,8 +207,18 @@ public sealed partial class MinecraftLaunchPlanner
     {
         if (!string.IsNullOrWhiteSpace(specified))
         {
-            var chosen = await _probe(specified, token).ConfigureAwait(false);
-            if (!Compatible(chosen)) throw new InvalidOperationException($"指定 Java {chosen.Version} / {chosen.Architecture} 不符合实例要求：Java {string.Join('/', allowed)} / {architecture}。");
+            JavaInstallation chosen;
+            try { chosen = await _probe(specified, token).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is IOException or ArgumentException or InvalidOperationException or
+                System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+            {
+                token.ThrowIfCancellationRequested();
+                throw new JavaRuntimeRequiredException("指定 Java 无法使用：" + ex.Message,
+                    allowed, NormalizeArchitecture(architecture), specified, ex);
+            }
+            if (!Compatible(chosen)) throw new JavaRuntimeRequiredException(
+                $"指定 Java {chosen.Version} / {chosen.Architecture} 不符合实例要求：Java {string.Join('/', allowed)} / {architecture}。",
+                allowed, NormalizeArchitecture(architecture), specified);
             return chosen;
         }
         await _javaLock.WaitAsync(token).ConfigureAwait(false);
@@ -221,7 +231,8 @@ public sealed partial class MinecraftLaunchPlanner
             if (await ProbeCandidatesAsync(_knownJava).ConfigureAwait(false) is { } found) return found;
         }
         finally { _javaLock.Release(); }
-        throw new InvalidOperationException($"未找到可用的 Java {string.Join('/', allowed)}（{architecture}）。请在启动设置中指定兼容的 java.exe。");
+        throw new JavaRuntimeRequiredException($"未找到可用的 Java {string.Join('/', allowed)}（{architecture}）。请在启动设置中指定兼容的 java.exe。",
+            allowed, NormalizeArchitecture(architecture));
 
         bool Compatible(JavaInstallation value) => allowed.Contains(MajorVersion(value.Version)) &&
             NormalizeArchitecture(value.Architecture) == NormalizeArchitecture(architecture);
@@ -300,6 +311,50 @@ public sealed partial class MinecraftLaunchPlanner
         var path = allowRoot && relative == "." ? root : InstanceImportPaths.Within(root, relative);
         InstanceImportPaths.EnsureNoLinks(path);
         return path;
+    }
+
+    /// <summary>模板已声明的身份选项始终采用本次账号，兼容两种赋值语法并去重，不为旧版本增添选项。</summary>
+    private static IReadOnlyList<string> BuildGameArguments(IReadOnlyList<string> template,
+        IReadOnlyDictionary<string, string> values, bool microsoft)
+    {
+        var result = new List<string>(template.Count);
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < template.Count; index++)
+        {
+            var argument = template[index];
+            var separator = argument.IndexOf('=');
+            var option = separator < 0 ? argument : argument[..separator];
+            var identityKey = option switch
+            {
+                "--username" => "auth_player_name", "--uuid" => "auth_uuid", "--accessToken" => "auth_access_token",
+                "--session" => "auth_session", "--userType" => "user_type", "--xuid" => "auth_xuid",
+                "--clientId" => "clientid", "--userProperties" => "user_properties", _ => null
+            };
+            if (identityKey is null)
+            {
+                result.Add(Expand(argument, values));
+                continue;
+            }
+
+            if (separator < 0 && (index + 1 >= template.Count || template[index + 1].StartsWith('-')))
+                throw new InvalidDataException("启动身份参数缺少值：" + option);
+            var originalValue = separator < 0 ? template[++index] : argument[(separator + 1)..];
+            var allowsEmpty = option is "--xuid" or "--clientId" or "--userProperties";
+            if (string.IsNullOrWhiteSpace(originalValue) && !(allowsEmpty && originalValue.Length == 0))
+                throw new InvalidDataException("启动身份参数缺少值：" + option);
+            // 在展开前检查语法，允许离线 xuid/clientId 占位符展开为空；仍拒绝原值中的非法字符和占位符。
+            _ = Expand(originalValue, values);
+            if (identities.Add(option))
+            {
+                result.Add(option);
+                result.Add(values[identityKey]);
+            }
+        }
+        // session 是旧版本完整身份的传递方式；现代模板必须同时传递玩家 UUID 和访问令牌。
+        if (microsoft && (!identities.Contains("--username") ||
+            !(identities.Contains("--session") || identities.Contains("--accessToken") && identities.Contains("--uuid"))))
+            throw new InvalidDataException("启动配置不能传递完整正版身份：需要用户名，以及 session 或 UUID 与访问令牌。请重新补全实例或检查版本启动配置。");
+        return result;
     }
 
     /// <summary>只按键替换占位符，不执行变量表达式，也不递归解释用户输入。</summary>

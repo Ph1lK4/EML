@@ -11,6 +11,7 @@ using EML.Core.Minecraft.Mods.Online;
 using EML.Core.Minecraft.Gtnh;
 using EML.Core.Minecraft.Catalog;
 using EML.Core.Downloads;
+using EML.Core.Java;
 
 namespace EML.App.ViewModels;
 
@@ -68,7 +69,8 @@ public partial class InstancesViewModel : ObservableObject
         IModIconCache? modIcons = null, Action<Uri>? openModWebsite = null,
         IOnlineModLocalization? modLocalization = null, IGtnhAddonService? gtnhAddons = null,
         IOperationNotifications? notifications = null, MinecraftAccountViewModel? accounts = null,
-        IGtnhPackService? gtnhPacks = null)
+        IGtnhPackService? gtnhPacks = null, IJavaRuntimeService? javaRuntimes = null,
+        IJavaDownloadDialogs? javaDownloadDialogs = null)
     {
         _locator = locator;
         _manager = manager;
@@ -80,6 +82,8 @@ public partial class InstancesViewModel : ObservableObject
         _instanceDownloader = instanceDownloader;
         _launcher = launcher;
         _launchSettingsStore = launchSettingsStore;
+        _javaRuntimes = javaRuntimes;
+        _javaDownloadDialogs = javaDownloadDialogs;
         Java = java;
         Accounts = accounts;
         _migration = migration; _migrationDialogs = migrationDialogs;
@@ -139,6 +143,7 @@ public partial class InstancesViewModel : ObservableObject
         try
         {
             var path = await _manager.RenameAsync(instance.InstancePath, name);
+            MoveLaunchSettingsDraft(instance.InstancePath, path);
             var refreshed = await ReloadAfterChangeAsync(path, "已重命名为：" + name);
             _notifications.Report(CreateOperationNotice(refreshed ? OperationNoticeKind.Success : OperationNoticeKind.Warning,
                 refreshed ? "重命名完成" : "已重命名，列表刷新未完成", StatusText, [instance.InstancePath, path]));
@@ -159,6 +164,7 @@ public partial class InstancesViewModel : ObservableObject
             if (!_dialogs.ConfirmDelete(instance)) return;
             ClearCheckResults();
             await _manager.DeleteAsync(instance.InstancePath);
+            ForgetLaunchSettingsDraft(instance.InstancePath);
             var refreshed = await ReloadAfterChangeAsync(null, "实例已删除，回收结果以 Windows 系统处理为准。");
             _notifications.Report(CreateOperationNotice(refreshed ? OperationNoticeKind.Success : OperationNoticeKind.Warning,
                 refreshed ? "删除操作完成" : "已删除，列表刷新未完成", StatusText, [instance.InstancePath]));
@@ -356,6 +362,7 @@ public partial class InstancesViewModel : ObservableObject
     private async Task ReloadAsync(string? selectedPath)
     {
         var result = await _locator.FindAllAsync();
+        PruneLaunchSettingsDrafts(result);
         Instances.Clear();
         foreach (var instance in result) Instances.Add(instance);
         SelectedInstance = Instances.FirstOrDefault(i => string.Equals(i.InstancePath, selectedPath,

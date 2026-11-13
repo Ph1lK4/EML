@@ -1,4 +1,4 @@
-<UserControl x:Class="EML.App.Views.GtnhHubView"
+<UserControl x:Class="EML.App.Views.GtnhHubView" Style="{StaticResource {x:Type UserControl}}"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  xmlns:views="clr-namespace:EML.App.Views">
@@ -9,7 +9,7 @@
    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="280"/></Grid.ColumnDefinitions>
    <StackPanel Margin="0,0,20,0">
     <TextBlock Text="GTNH 专区" Style="{StaticResource PageTitle}"/>
-    <TextBlock Text="为下一段长途冒险，准备好工具和行囊。" Style="{StaticResource PageSubtitle}"/>
+    <TextBlock Text="本体下载、适配资源与旧版数据迁移。" Style="{StaticResource PageSubtitle}"/>
    </StackPanel>
    <StackPanel Grid.Column="1">
     <StackPanel.Style><Style TargetType="StackPanel"><Style.Triggers><DataTrigger Binding="{Binding IsPackDownloads}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
@@ -31,19 +31,19 @@
     </Button>
     <WrapPanel>
      <Button Content="下载本体" Command="{Binding ShowPackDownloadsCommand}" Margin="0,0,8,0">
-      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsPackDownloads}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsPackDownloads}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource SelectionBorderBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style>
      </Button>
      <Button Content="推荐模组" Command="{Binding ShowRecommendationsCommand}" Margin="0,0,8,0">
-      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsRecommendations}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsRecommendations}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource SelectionBorderBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style>
      </Button>
      <Button Content="资源包" Command="{Binding ShowResourcePacksCommand}" Margin="0,0,8,0">
-      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsResourcePacks}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsResourcePacks}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource SelectionBorderBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style>
      </Button>
      <Button Content="光影" Command="{Binding ShowShadersCommand}" Margin="0,0,8,0">
-      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsShaders}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsShaders}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource SelectionBorderBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style>
      </Button>
      <Button Content="数据迁移" Command="{Binding ShowMigrationCommand}">
-      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsMigration}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentBrush}"/><Setter Property="Foreground" Value="White"/></DataTrigger></Style.Triggers></Style></Button.Style>
+      <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers><DataTrigger Binding="{Binding IsMigration}" Value="True"><Setter Property="Background" Value="{DynamicResource AccentSoftBrush}"/><Setter Property="Foreground" Value="{DynamicResource AccentBrush}"/><Setter Property="BorderBrush" Value="{DynamicResource SelectionBorderBrush}"/></DataTrigger></Style.Triggers></Style></Button.Style>
      </Button>
     </WrapPanel>
    </DockPanel>
@@ -73,8 +73,8 @@
        BorderThickness="0" Background="Transparent" ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch">
       <ListBox.ItemTemplate><DataTemplate>
        <StackPanel Margin="2,8">
-        <TextBlock Text="{Binding Category}" Foreground="{DynamicResource AccentBrush}" FontSize="11" Margin="0,0,0,4"/>
-        <TextBlock Text="非星门规则" Foreground="{DynamicResource DangerBrush}" FontSize="11" Margin="0,0,0,4" Visibility="{Binding IsNonStargate, Converter={StaticResource VisibleWhenTrue}}"/>
+        <TextBlock Text="{Binding Category}" Foreground="{DynamicResource SecondaryAccentBrush}" FontSize="12" Margin="0,0,0,4"/>
+        <TextBlock Text="非星门规则" Foreground="{DynamicResource DangerBrush}" FontSize="12" Margin="0,0,0,4" Visibility="{Binding IsNonStargate, Converter={StaticResource VisibleWhenTrue}}"/>
         <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,6"/>
         <TextBlock Text="{Binding Summary}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap"/>
        </StackPanel>
@@ -93,7 +93,7 @@
       <TextBlock Text="{Binding SelectedAddon.SourceDisplay, StringFormat=来源：{0}}" FontSize="12" Foreground="{DynamicResource MutedTextBrush}"/>
       <TextBlock Text="{Binding SelectedAddon.ProjectUrl}" FontSize="12" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
       <WrapPanel Margin="0,8,0,16"><Button Content="作者主页 ↗" Command="{Binding OpenAddonWebsiteCommand}" Style="{StaticResource QuietButton}"/><Button Content="刷新发行版本" Command="{Binding RefreshReleasesCommand}" Style="{StaticResource QuietButton}"/></WrapPanel>
-      <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="9" Padding="12">
+      <Border Background="{DynamicResource InfoSoftBrush}" CornerRadius="9" Padding="12">
        <StackPanel><TextBlock Text="安装前看这里" FontWeight="SemiBold" Margin="0,0,0,6"/>
         <TextBlock Text="{Binding SelectedAddon.Notes, TargetNullValue=这里收录专门适配 GTNH 的项目。请先选择目标实例，再核对作者的版本说明。}" TextWrapping="Wrap"/>
        </StackPanel>
@@ -137,22 +137,39 @@
    <ScrollViewer x:Name="MigrationScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel>
      <TextBlock Text="把熟悉的世界，带到新版 GTNH" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"/>
-     <TextBlock Text="迁移需要两个实例：带有本地数据的旧版，以及准备接收数据的新版。旧版还在其他启动器中？先从这里导入。" Style="{StaticResource PageSubtitle}" TextWrapping="Wrap" Margin="0,10,0,20"/>
-     <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="10" Padding="16" Margin="0,0,0,18">
+     <TextBlock Text="旧实例保留原件，新实例接收存档与本地记录。预览并确认后才会复制文件。" Style="{StaticResource PageSubtitle}" TextWrapping="Wrap" Margin="0,8,0,16"/>
+     <!-- 来源仍在迁移弹窗中选择，页面不将当前目标误标成已选来源。 -->
+     <Grid Margin="0,0,0,18">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="40"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border Background="{DynamicResource RaisedSurfaceBrush}" CornerRadius="8" Padding="14">
+       <StackPanel>
+        <TextBlock Text="来源 · 旧实例" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
+        <TextBlock Text="在迁移预览中选择" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,0"/>
+       </StackPanel>
+      </Border>
+      <TextBlock Grid.Column="1" Text="→" FontSize="22" Foreground="{DynamicResource SecondaryAccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      <Border Grid.Column="2" Background="{DynamicResource RaisedSurfaceBrush}" CornerRadius="8" Padding="14">
+       <StackPanel>
+        <TextBlock Text="接收 · 新实例" Foreground="{DynamicResource MutedTextBrush}" FontSize="12"/>
+        <TextBlock Text="{Binding SelectedTarget.Name, TargetNullValue=请在页面上方选择新版, FallbackValue=请在页面上方选择新版}" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,6,0,0"/>
+       </StackPanel>
+      </Border>
+     </Grid>
+     <Border Background="{DynamicResource InfoSoftBrush}" CornerRadius="10" Padding="16" Margin="0,0,0,18">
       <StackPanel>
        <TextBlock Text="1  导入带本地数据的旧实例" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,8"/>
-       <TextBlock Text="请选择从 Prism 等启动器导出的完整 ZIP，导出时包含存档、地图、服务器列表等个人数据。重新下载的整合包安装包不包含你的游玩记录。旧实例已经在 EML 中时，可跳过这一步。" TextWrapping="Wrap" Margin="0,0,0,12"/>
+       <TextBlock Text="旧实例已在 EML 中可跳过。否则请导入 Prism 等启动器导出的完整 ZIP，包含存档、地图、服务器列表等个人数据；重新下载的安装包不含游玩记录。" TextWrapping="Wrap" Margin="0,0,0,12"/>
        <WrapPanel>
-        <Button x:Name="ImportOldInstanceButton" Content="导入旧实例（含本地数据）" Command="{Binding ImportOldInstanceCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8" AutomationProperties.Name="导入旧 GTNH 实例及本地数据"/>
+        <Button x:Name="ImportOldInstanceButton" Content="导入旧实例（含本地数据）" Command="{Binding ImportOldInstanceCommand}" Margin="0,0,8,8" AutomationProperties.Name="导入旧 GTNH 实例及本地数据"/>
         <Button Content="取消导入" Command="{Binding ImportOldInstanceCancelCommand}" Margin="0,0,0,8" Visibility="{Binding IsImportingOldInstance, Converter={StaticResource VisibleWhenTrue}}"/>
        </WrapPanel>
        <TextBlock Text="{Binding MigrationImportHint}" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" TextWrapping="Wrap"/>
       </StackPanel>
      </Border>
      <TextBlock Text="2  准备并选择新版实例" FontWeight="SemiBold" Margin="0,0,0,8"/>
-     <TextBlock Text="导入或下载新版 GTNH，完成依赖补全并试运行。然后在上方“接收数据的新版 GTNH”中选择新版，保留旧版作为迁移来源。" TextWrapping="Wrap" Margin="0,0,0,16"/>
+     <TextBlock Text="先为新版完成依赖补全并试运行，再在页面上方选择接收实例。保留旧版作为迁移来源。" TextWrapping="Wrap" Margin="0,0,0,16"/>
      <TextBlock Text="3  预览并迁移本地数据" FontWeight="SemiBold" Margin="0,0,0,8"/>
-     <TextBlock Text="点击下方“从旧 GTNH 迁入数据”，在弹窗中选择旧实例，核对迁移范围和冲突后再开始复制。导入不会自动执行迁移。" TextWrapping="Wrap" Margin="0,0,0,12"/>
+     <TextBlock Text="点击“从旧 GTNH 迁入数据”，选择旧实例、核对范围与冲突后开始复制。导入不会自动迁移。" TextWrapping="Wrap" Margin="0,0,0,12"/>
      <TextBlock Text="语言偏好会保留，旧版完整汉化包不会复制到新版。额外模组迁移需单独选择并确认兼容风险；不要直接跨越多个大版本迁移存档。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,18"/>
      <WrapPanel IsEnabled="{Binding HasTarget}">
       <Button Content="从旧 GTNH 迁入数据" Command="{Binding Instances.MigratePlayerDataCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"/>

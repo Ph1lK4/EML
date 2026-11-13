@@ -2,7 +2,6 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Shell;
 using EML.App.Views;
 
@@ -64,17 +63,37 @@ internal class DialogWindow : Window
             Surface.Resources["MutedTextBrush"] = SystemColors.WindowTextBrush;
             Surface.Resources["BorderBrush"] = SystemColors.WindowTextBrush;
             Surface.Resources["AccentBrush"] = SystemColors.HighlightBrush;
+            Surface.Resources["AccentForegroundBrush"] = SystemColors.HighlightTextBrush;
             Surface.Resources["AccentSoftBrush"] = SystemColors.WindowBrush;
+            Surface.Resources["RaisedSurfaceBrush"] = SystemColors.WindowBrush;
+            Surface.Resources["SelectionBorderBrush"] = SystemColors.HighlightBrush;
+            Surface.Resources["SecondaryAccentBrush"] = SystemColors.WindowTextBrush;
+            Surface.Resources["HoverBrush"] = SystemColors.WindowBrush;
+            Surface.Resources["FocusSoftBrush"] = SystemColors.WindowTextBrush;
             Surface.Resources["DangerBrush"] = SystemColors.WindowTextBrush;
+            Surface.Resources["DangerSoftBrush"] = SystemColors.WindowBrush;
+            Surface.Resources["DangerBorderBrush"] = SystemColors.WindowTextBrush;
+            Surface.Resources["SuccessBrush"] = SystemColors.WindowTextBrush;
+            Surface.Resources["SuccessSoftBrush"] = SystemColors.WindowBrush;
+            Surface.Resources["WarningBrush"] = SystemColors.WindowTextBrush;
+            Surface.Resources["WarningSoftBrush"] = SystemColors.WindowBrush;
+            Surface.Resources["WarningBorderBrush"] = SystemColors.WindowTextBrush;
+            Surface.Resources["InfoSoftBrush"] = SystemColors.WindowBrush;
         }
         Surface.ToneIcon.Text = tone switch
         {
             DialogTone.Success => "\uE73E", DialogTone.Danger => "\uEA39", DialogTone.Warning => "\uE7BA", _ => "\uE946"
         };
-        if (tone == DialogTone.Success) return;
-        if (tone == DialogTone.Information || SystemParameters.HighContrast) return;
-        Surface.ToneTile.Background = new SolidColorBrush(tone == DialogTone.Danger ? Color.FromRgb(255, 240, 241) : Color.FromRgb(255, 246, 229));
-        Surface.ToneIcon.Foreground = new SolidColorBrush(tone == DialogTone.Danger ? Color.FromRgb(174, 59, 66) : Color.FromRgb(143, 91, 20));
+        // 使用共享语义色，成功、警告和失败不再与主操作共用金色或写死浅色底。
+        var (background, foreground) = tone switch
+        {
+            DialogTone.Success => ("SuccessSoftBrush", "SuccessBrush"),
+            DialogTone.Warning => ("WarningSoftBrush", "WarningBrush"),
+            DialogTone.Danger => ("DangerSoftBrush", "DangerBrush"),
+            _ => ("InfoSoftBrush", "SecondaryAccentBrush")
+        };
+        Surface.ToneTile.SetResourceReference(Border.BackgroundProperty, background);
+        Surface.ToneIcon.SetResourceReference(TextBlock.ForegroundProperty, foreground);
     }
 
     /// <summary>仅输入类确认显式使用 Enter；其余确认保留取消作为默认操作。</summary>

@@ -28,6 +28,7 @@ public partial class MainWindow : Window
 {
     private readonly HttpFileDownloader _fileDownloader;
     private readonly DownloadTaskCenter _downloadCenter;
+    private readonly TemurinJavaRuntimeService _javaRuntimes;
     private readonly MinecraftAccountService _accountService = new(MicrosoftLoginOptions.Load(AppContext.BaseDirectory));
     private readonly ModrinthApiClient _modrinth = new();
     private readonly CurseForgeApiClient _curseForge = new();
@@ -53,8 +54,9 @@ public partial class MainWindow : Window
             Path.Combine(launcherRoot, "settings", "downloads.json"));
         var locator = new LauncherRootMinecraftInstanceLocator(launcherRoot);
         var checker = new MinecraftInstanceChecker(launcherRoot);
-        var javaLocator = new WindowsJavaLocator();
-        var java = new JavaSettingsViewModel(javaLocator, notifications: _notifications);
+        _javaRuntimes = new TemurinJavaRuntimeService(launcherRoot, _downloadCenter);
+        var javaLocator = new WindowsJavaLocator([_javaRuntimes.InstallationRoot]);
+        var java = new JavaSettingsViewModel(javaLocator, notifications: _notifications, runtimes: _javaRuntimes);
         var localMods = new LocalModManager(launcherRoot);
         var onlineCatalog = new OnlineModCatalog(_modrinth, _curseForge);
         _gtnhAddons = new GtnhAddonService(launcherRoot, _downloadCenter, localMods, onlineCatalog: onlineCatalog,
@@ -73,7 +75,8 @@ public partial class MainWindow : Window
                 new GtnhInstanceMigrationService(launcherRoot), new InstanceMigrationDialogs(this),
                 localMods, new ModManagementDialogs(this), onlineCatalog, onlineInstaller, _modIcons,
                 uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
-                ChineseModCatalog.Default, _gtnhAddons, notifications: _notifications, accounts: accounts, gtnhPacks: _gtnhPacks);
+                ChineseModCatalog.Default, _gtnhAddons, notifications: _notifications, accounts: accounts, gtnhPacks: _gtnhPacks,
+                javaRuntimes: _javaRuntimes, javaDownloadDialogs: new WpfJavaDownloadDialogs(this));
         _instanceCatalog = new InstanceCatalog(_modrinth, _curseForge);
         var archives = new InstanceArchiveService(launcherRoot, _instanceCatalog, _downloadCenter);
         var downloads = new InstanceDownloadsViewModel(_instanceCatalog,
@@ -124,9 +127,10 @@ public partial class MainWindow : Window
         var onlineCleanup = viewModel.Instances.OnlineMods?.StopAsync() ?? Task.CompletedTask;
         var gtnhCleanup = viewModel.Gtnh?.StopAsync() ?? Task.CompletedTask;
         var downloadCleanup = viewModel.Downloads?.StopAsync() ?? Task.CompletedTask;
+        var javaCleanup = viewModel.Java.StopAsync();
         var queueCleanup = _downloadCenter.StopAsync();
         var pending = operations.Where(command => command.IsRunning)
-            .Select(command => command.ExecutionTask).OfType<Task>().Append(modListCleanup).Append(onlineCleanup).Append(gtnhCleanup).Append(downloadCleanup).Append(queueCleanup)
+            .Select(command => command.ExecutionTask).OfType<Task>().Append(modListCleanup).Append(onlineCleanup).Append(gtnhCleanup).Append(downloadCleanup).Append(javaCleanup).Append(queueCleanup)
             .Where(task => !task.IsCompleted).ToArray();
         if (pending.Length == 0) return;
         e.Cancel = true;
@@ -153,7 +157,7 @@ public partial class MainWindow : Window
     {
         _notifications.Dispose();
         if (DataContext is MainViewModel viewModel) viewModel.Dispose();
-        _instanceCatalog.Dispose(); _gtnhPacks.Dispose(); _gtnhAddons.Dispose(); _fileDownloader.Dispose(); _accountService.Dispose(); _modrinth.Dispose(); _curseForge.Dispose(); _modIcons.Dispose();
+        _javaRuntimes.Dispose(); _instanceCatalog.Dispose(); _gtnhPacks.Dispose(); _gtnhAddons.Dispose(); _fileDownloader.Dispose(); _accountService.Dispose(); _modrinth.Dispose(); _curseForge.Dispose(); _modIcons.Dispose();
     }
 
     /// <summary>鼠标右键先更新实例选择，菜单命令始终作用于点击的那一项。</summary>
@@ -186,6 +190,12 @@ public partial class MainWindow : Window
         menu.PlacementTarget = button;
         menu.Placement = PlacementMode.Bottom;
         menu.IsOpen = true;
+    }
+
+    /// <summary>空实例库的引导只切换到现有下载页面，不直接下载或创建实例。</summary>
+    private void OnOpenDownloads(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel) viewModel.SelectedPage = 6;
     }
 
     /// <summary>点击遮罩收起面板；面板内的点击不会被当成关闭操作。</summary>

@@ -1,4 +1,4 @@
-<UserControl x:Class="EML.App.Views.OnlineModsView"
+<UserControl x:Class="EML.App.Views.OnlineModsView" Style="{StaticResource {x:Type UserControl}}"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:EML.App.Views"
@@ -40,7 +40,7 @@
               </TextBlock.Style>
             </TextBlock>
           </Grid>
-          <Button Grid.Column="1" Content="搜索模组" Command="{Binding SearchCommand}" Style="{StaticResource PrimaryButton}" Height="40" Margin="0"/>
+          <Button Grid.Column="1" Content="搜索模组" Command="{Binding SearchCommand}" Height="40" Margin="0"/>
         </Grid>
         <!-- 每个标签与输入框作为一组换行，小窗口下不会拆散标签和对应选项。 -->
         <WrapPanel Margin="0,16,0,0">
@@ -92,9 +92,9 @@
               <DataTemplate>
                 <Grid Margin="0,4">
                   <Grid.ColumnDefinitions><ColumnDefinition Width="56"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                  <Border Width="44" Height="44" CornerRadius="10" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Top" HorizontalAlignment="Left">
+                  <Border Width="44" Height="44" CornerRadius="8" Background="{DynamicResource RaisedSurfaceBrush}" VerticalAlignment="Top" HorizontalAlignment="Left">
                     <Grid>
-                      <TextBlock Text="{Binding Placeholder}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}">
+                      <TextBlock Text="{Binding Placeholder}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource SecondaryAccentBrush}">
                         <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IconPath}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
                       </TextBlock>
                       <Image Source="{Binding IconPath}" Width="40" Height="40" Stretch="Uniform"/>

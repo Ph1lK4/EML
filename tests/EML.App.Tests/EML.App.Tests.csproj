@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <EmbeddedResource Include="..\..\src\EML.App\MainWindow.xaml" LogicalName="EML.App.Tests.MainWindow.preview.xaml" />
   </ItemGroup>
 
   <!-- 引用实际桌面程序集和编译后的 XAML；测试不启动主窗口或真实业务服务。 -->

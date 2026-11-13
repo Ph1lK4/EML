@@ -115,7 +115,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
     }
 
     /// <summary>按深度和时间限制搜索目录，跳过无法访问的位置及链接子目录。</summary>
-    private static void ScanRoot(string root, int maxDepth,
+    internal static void ScanRoot(string root, int maxDepth,
         HashSet<string> executables, CancellationToken token)
     {
         var queue = new Queue<(string Path, int Depth)>();
@@ -127,7 +127,7 @@ public sealed class WindowsJavaLocator : IJavaLocator
         {
             token.ThrowIfCancellationRequested();
             var (path, depth) = queue.Dequeue();
-            if (!visited.Add(path)) continue;
+            if (!visited.Add(path) || IsManagedInstallationStagingPath(path)) continue;
             AddExecutable(path, executables);
             if (depth >= maxDepth) continue;
             try
@@ -151,13 +151,29 @@ public sealed class WindowsJavaLocator : IJavaLocator
     }
 
     /// <summary>将指定目录里存在的 java.exe 加入去重集合。</summary>
-    private static void AddExecutable(string? directory, HashSet<string> paths)
+    internal static void AddExecutable(string? directory, HashSet<string> paths)
     {
         var normalized = Normalize(directory);
-        if (normalized is null) return;
+        if (normalized is null || IsManagedInstallationStagingPath(normalized)) return;
         // javaw 与 java 属于同一运行时；使用控制台入口可靠读取版本输出。
         var executable = Path.Combine(normalized, "java.exe");
         if (File.Exists(executable)) paths.Add(executable);
+    }
+
+    /// <summary>跳过 EML 尚未校验发布的安装目录，包含从父目录、PATH 或直接搜索根进入的情况。</summary>
+    private static bool IsManagedInstallationStagingPath(string path)
+    {
+        // 只匹配安装器保留的精确目录结构，不排除其他位置的用户 Java 或普通 .install-* 目录。
+        for (var directory = new DirectoryInfo(path); directory is not null; directory = directory.Parent)
+        {
+            var name = directory.Name;
+            if (name.StartsWith(".install-", StringComparison.OrdinalIgnoreCase) &&
+                Guid.TryParseExact(name[9..], "N", out _) &&
+                string.Equals(directory.Parent?.Name, "java", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(directory.Parent?.Parent?.Name, "runtimes", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>从用户和系统的 32/64 位注册表收集 JavaHome 与软件安装目录。</summary>
