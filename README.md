@@ -10,6 +10,26 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 
 当前为 **1.0-RC1 候选测试版**，不是已完成全部环境验收的正式版。使用和升级说明见 [RC1 发布指南](docs/release-rc1.md)。
 
+## 界面预览
+
+以下为中文界面截图，个人信息已作遮挡。
+
+![EML 本地实例与启动模式](docs/images/main.png)
+
+<details>
+<summary>GTNH 专区：推荐模组</summary>
+
+![GTNH 专区的推荐模组目录](docs/images/gtnh.png)
+
+</details>
+
+<details>
+<summary>GTNH 玩家数据迁移引导</summary>
+
+![GTNH 玩家数据迁移引导页面](docs/images/migration.png)
+
+</details>
+
 ## 主要功能
 
 ### 安装与启动
