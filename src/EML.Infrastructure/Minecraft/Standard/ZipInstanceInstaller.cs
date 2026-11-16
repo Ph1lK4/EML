@@ -50,6 +50,7 @@ public sealed class ZipInstanceInstaller : IPrismInstanceInstaller
         {
             var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
             Migration.MigrationJournalStore.EnsureSettled(root);
+            EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
             try
             {
                 manifest = ReadManifest(root);

@@ -9,4 +9,6 @@ public sealed record FileDownloadOptions
     public TimeSpan AttemptTimeout { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMilliseconds(500);
     public TimeSpan MaximumRetryDelay { get; init; } = TimeSpan.FromSeconds(10);
+    /// <summary>可选的绝对缓存目录；只有有可信摘要的请求才缓存并保留可续传片段。</summary>
+    public string? CacheDirectory { get; init; }
 }

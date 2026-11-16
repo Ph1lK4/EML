@@ -130,6 +130,49 @@ public sealed class CurseForgeApiClient : ICurseForgeApiClient, IDisposable
         return result;
     }
 
+    /// <summary>读取真实文件列表并核对项目归属，分页与查询参数使用独立编码。</summary>
+    public async Task<CurseForgeFilePage> GetModFilesAsync(long projectId, CurseForgeFileFilter filter,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateId(projectId);
+        ArgumentNullException.ThrowIfNull(filter);
+        if (filter.Index < 0 || filter.PageSize is < 1 or > 50 || filter.Index > 10000 - filter.PageSize)
+            throw new ArgumentOutOfRangeException(nameof(filter), "文件列表分页超出允许范围。");
+        if (filter.ModLoaderType is { } loader && (!Enum.IsDefined(loader) || string.IsNullOrWhiteSpace(filter.GameVersion)))
+            throw new ArgumentException("加载器筛选须指定有效编号和 Minecraft 版本。", nameof(filter));
+        var query = new List<KeyValuePair<string, string>>
+        {
+            new("index", Number(filter.Index)), new("pageSize", Number(filter.PageSize))
+        };
+        if (filter.GameVersion is not null) query.Add(new("gameVersion", ValidateText(filter.GameVersion, 128)));
+        if (filter.ModLoaderType.HasValue) query.Add(new("modLoaderType", Number((int)filter.ModLoaderType.Value)));
+        var result = await SendAsync<CurseForgeFilePage>(HttpMethod.Get, $"mods/{Number(projectId)}/files?" +
+            string.Join('&', query.Select(pair => Uri.EscapeDataString(pair.Key) + "=" + Uri.EscapeDataString(pair.Value))),
+            null, cancellationToken).ConfigureAwait(false);
+        if (result.Data is null || result.Pagination is null || result.Data.Any(file => file is null || file.ModId != projectId || file.Id <= 0) ||
+            result.Data.Select(file => file.Id).Distinct().Count() != result.Data.Count)
+            throw new InvalidDataException("CurseForge 文件列表缺失或包含其他项目的文件。");
+        return result;
+    }
+
+    /// <summary>获取正文 data 字符串；仍使用统一的有界响应和凭据保护。</summary>
+    public async Task<string> GetModDescriptionAsync(long projectId, CancellationToken cancellationToken = default)
+    {
+        ValidateId(projectId);
+        var result = await SendAsync<ApiEnvelope<string>>(HttpMethod.Get, $"mods/{Number(projectId)}/description",
+            null, cancellationToken).ConfigureAwait(false);
+        return result.Data ?? "";
+    }
+
+    /// <summary>只请求 Minecraft 模组分类，不把整合包或资源包分类混入筛选。</summary>
+    public async Task<IReadOnlyList<CurseForgeCategory>> GetModCategoriesAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await SendAsync<ApiEnvelope<List<CurseForgeCategory>>>(HttpMethod.Get,
+            "categories?gameId=432&classId=6", null, cancellationToken).ConfigureAwait(false);
+        return result.Data?.Where(category => category is not null && category.GameId == 432 && category.ClassId is null or 6).ToArray()
+            ?? throw new InvalidDataException("CurseForge 分类响应缺少 data。");
+    }
+
     /// <summary>只向固定官方主机发送当前密钥，并将传输异常换成不含秘密的固定诊断。</summary>
     private async Task<T> SendAsync<T>(HttpMethod method, string relativePath, object? body, CancellationToken cancellationToken)
     {

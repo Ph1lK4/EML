@@ -3,6 +3,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EML.App.Services;
+using EML.Core.Java;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Launching;
 
@@ -14,11 +15,18 @@ public partial class InstancesViewModel
     private const int MaximumLogLines = 1000;
     private readonly IMinecraftGameLauncher? _launcher;
     private readonly IMinecraftLaunchSettingsStore? _launchSettingsStore;
+    private readonly IJavaRuntimeService? _javaRuntimes;
+    private readonly IJavaDownloadDialogs? _javaDownloadDialogs;
     private CancellationTokenSource? _settingsLoadCancellation;
     private CancellationTokenSource? _launchCancellation;
     private int _settingsRevision;
     private int _launchRevision;
     private string? _loadedSettingsPath;
+    private readonly Dictionary<string, LaunchSettingsDraft> _launchSettingsDrafts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>只在当前窗口保留每实例的编辑文本；不存账号令牌，也不将未完成输入强制解析为设置。</summary>
+    private sealed record LaunchSettingsDraft(string PlayerName, bool UseMicrosoftAccount, string JavaPath,
+        string MinMemoryMb, string MaxMemoryMb, string JvmArguments, MinecraftLogEncoding LogEncoding);
 
     /// <summary>复用 Java 页面已检测的结果，空路径仍由启动服务自动匹配版本。</summary>
     public JavaSettingsViewModel? Java { get; }
@@ -29,20 +37,54 @@ public partial class InstancesViewModel
 
     [ObservableProperty] private string playerName = "Steve";
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName))]
+    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName), nameof(SelectedLaunchMode))]
     private bool useMicrosoftAccount;
-    public bool CanEditOfflinePlayerName => !UseMicrosoftAccount;
+    /// <summary>启动模式显示文本；设置文件仍使用旧的布尔字段，保持已有实例兼容。</summary>
+    public IReadOnlyList<string> LaunchModes { get; } = ["离线模式", "正版模式"];
+    /// <summary>将界面选择映射到现有正版开关，避免改变旧设置文件格式。</summary>
+    public string SelectedLaunchMode
+    {
+        get => UseMicrosoftAccount ? "正版模式" : "离线模式";
+        set
+        {
+            // 绑定暂时清空选择时保留原模式，避免误切换到另一个 UUID。
+            if (value is "正版模式" or "离线模式") UseMicrosoftAccount = value == "正版模式";
+        }
+    }
+    /// <summary>只有当前实例设置已读取且选择离线模式时，才允许编辑离线玩家名。</summary>
+    public bool CanEditOfflinePlayerName => CanEditLaunchSettings && !UseMicrosoftAccount;
     [ObservableProperty] private string selectedJavaPath = "";
     [ObservableProperty] private string minMemoryMbText = "1024";
     [ObservableProperty] private string maxMemoryMbText = "8192";
     [ObservableProperty] private string additionalJvmArguments = "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedLogEncodingMode))]
+    private MinecraftLogEncoding logEncoding;
+    /// <summary>日志读取偏好仅作用于本实例，不改变 JVM 参数或游戏文件的编码。</summary>
+    public IReadOnlyList<string> LogEncodingModes { get; } = ["自动（UTF-8 优先，兼容系统编码）", "UTF-8", "系统编码（旧版 Java）"];
+    /// <summary>将中文选项映射到持久化枚举；绑定暂时清空时保留用户已经选择的模式。</summary>
+    public string SelectedLogEncodingMode
+    {
+        get => LogEncoding switch
+        {
+            MinecraftLogEncoding.Utf8 => "UTF-8",
+            MinecraftLogEncoding.SystemDefault => "系统编码（旧版 Java）",
+            _ => "自动（UTF-8 优先，兼容系统编码）"
+        };
+        set
+        {
+            if (value == "自动（UTF-8 优先，兼容系统编码）") LogEncoding = MinecraftLogEncoding.Auto;
+            else if (value == "UTF-8") LogEncoding = MinecraftLogEncoding.Utf8;
+            else if (value == "系统编码（旧版 Java）") LogEncoding = MinecraftLogEncoding.SystemDefault;
+        }
+    }
     [ObservableProperty] private string launchSettingsStatus = "请选择实例后设置启动参数。";
     [ObservableProperty] private string launchStatus = "尚未启动游戏。";
     [ObservableProperty] private string launchLogPath = "";
     [ObservableProperty] private int? lastExitCode;
     [ObservableProperty] private string runningInstanceName = "";
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanEditLaunchSettings))]
+    [NotifyPropertyChangedFor(nameof(CanEditLaunchSettings), nameof(CanEditOfflinePlayerName))]
     [NotifyCanExecuteChangedFor(nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand))]
     private bool isLaunchSettingsLoaded;
     [ObservableProperty]
@@ -58,9 +100,12 @@ public partial class InstancesViewModel
     /// <summary>设置未读取或正在执行实例操作时禁止编辑，避免迟到的磁盘结果覆盖输入。</summary>
     public bool CanEditLaunchSettings => !IsBusy && IsLaunchSettingsLoaded && SelectedInstance is not null;
 
-    /// <summary>切换目标立即取消旧读取并恢复默认显示，旧任务无论何时返回都不能覆盖新实例。</summary>
-    private void BeginLoadLaunchSettings(MinecraftInstance? instance)
+    /// <summary>切换目标时保留各实例草稿，只有首次选择或显式重读才读取磁盘；旧异步结果不能覆盖新实例。</summary>
+    private void BeginLoadLaunchSettings(MinecraftInstance? instance, bool notifySuccess = false, bool discardDraft = false)
     {
+        if (IsLaunchSettingsLoaded && _loadedSettingsPath is { } previousPath)
+            _launchSettingsDrafts[previousPath] = CaptureLaunchSettingsDraft();
+        if (discardDraft && instance is not null) _launchSettingsDrafts.Remove(instance.InstancePath);
         _settingsLoadCancellation?.Cancel();
         _settingsLoadCancellation = null;
         var revision = ++_settingsRevision;
@@ -75,15 +120,31 @@ public partial class InstancesViewModel
             return;
         }
 
+        if (_launchSettingsDrafts.TryGetValue(instance.InstancePath, out var draft))
+        {
+            PlayerName = draft.PlayerName;
+            UseMicrosoftAccount = draft.UseMicrosoftAccount;
+            SelectedJavaPath = draft.JavaPath;
+            MinMemoryMbText = draft.MinMemoryMb;
+            MaxMemoryMbText = draft.MaxMemoryMb;
+            AdditionalJvmArguments = draft.JvmArguments;
+            LogEncoding = draft.LogEncoding;
+            _loadedSettingsPath = instance.InstancePath;
+            IsLaunchSettingsLoaded = true;
+            LaunchSettingsStatus = "已恢复本次编辑；两处启动模式同步，以最后选择为准。重启 EML 后保留偏好需点击“保存设置”。";
+            LaunchSettingsLoadTask = Task.CompletedTask;
+            return;
+        }
+
         var cancellation = new CancellationTokenSource();
         _settingsLoadCancellation = cancellation;
         IsLaunchSettingsLoading = true;
         LaunchSettingsStatus = "正在读取此实例的启动设置……";
-        LaunchSettingsLoadTask = LoadLaunchSettingsAsync(instance.InstancePath, revision, cancellation);
+        LaunchSettingsLoadTask = LoadLaunchSettingsAsync(instance.InstancePath, revision, cancellation, notifySuccess);
     }
 
     /// <summary>读取并校验持久化设置；失败时保留错误，不使用默认值偷偷覆盖损坏配置。</summary>
-    private async Task LoadLaunchSettingsAsync(string instancePath, int revision, CancellationTokenSource cancellation)
+    private async Task LoadLaunchSettingsAsync(string instancePath, int revision, CancellationTokenSource cancellation, bool notifySuccess)
     {
         try
         {
@@ -94,12 +155,16 @@ public partial class InstancesViewModel
             _loadedSettingsPath = instancePath;
             IsLaunchSettingsLoaded = true;
             LaunchSettingsStatus = "设置已加载；修改后点击“保存设置”，或直接使用当前输入启动。";
+            if (notifySuccess) _notifications.Success("启动设置读取完成", LaunchSettingsStatus, instancePath);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception ex)
         {
             if (revision == _settingsRevision)
+            {
                 LaunchSettingsStatus = "启动设置读取失败：" + ex.Message + "。修复后可点击“重新读取”。";
+                _notifications.Failure("启动设置读取失败", ex, instancePath);
+            }
         }
         finally
         {
@@ -121,22 +186,58 @@ public partial class InstancesViewModel
         MinMemoryMbText = settings.MinMemoryMb.ToString(CultureInfo.InvariantCulture);
         MaxMemoryMbText = settings.MaxMemoryMb.ToString(CultureInfo.InvariantCulture);
         AdditionalJvmArguments = settings.AdditionalJvmArguments;
+        LogEncoding = settings.LogEncoding;
     }
 
-    /// <summary>从文本输入创建独立快照，输入错误必须报错，不能沿用上一次有效数值。</summary>
-    private MinecraftLaunchSettings ReadLaunchSettings()
+    /// <summary>在发送界面状态通知前冻结原始输入，保留尚未填完的文本和当前身份。</summary>
+    private LaunchSettingsDraft CaptureLaunchSettingsDraft() => new(PlayerName, UseMicrosoftAccount, SelectedJavaPath,
+        MinMemoryMbText, MaxMemoryMbText, AdditionalJvmArguments, LogEncoding);
+
+    /// <summary>实例删除或消失后同时作废读取与草稿，防止同名新实例继承旧身份。</summary>
+    private void ForgetLaunchSettingsDraft(string instancePath)
     {
-        if (!int.TryParse(MinMemoryMbText, NumberStyles.None, CultureInfo.InvariantCulture, out var minimum) ||
-            !int.TryParse(MaxMemoryMbText, NumberStyles.None, CultureInfo.InvariantCulture, out var maximum))
+        if (string.Equals(SelectedInstance?.InstancePath, instancePath, StringComparison.OrdinalIgnoreCase))
+            BeginLoadLaunchSettings(null);
+        _launchSettingsDrafts.Remove(instancePath);
+    }
+
+    /// <summary>目录改名成功后让草稿跟随实例迁移，不覆盖其他实例的输入。</summary>
+    private void MoveLaunchSettingsDraft(string oldPath, string newPath)
+    {
+        if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase)) return;
+        var draft = IsLaunchSettingsLoaded && string.Equals(_loadedSettingsPath, oldPath, StringComparison.OrdinalIgnoreCase)
+            ? CaptureLaunchSettingsDraft() : _launchSettingsDrafts.GetValueOrDefault(oldPath);
+        ForgetLaunchSettingsDraft(oldPath);
+        _launchSettingsDrafts.Remove(newPath);
+        if (draft is not null) _launchSettingsDrafts[newPath] = draft;
+    }
+
+    /// <summary>成功扫描后丢弃已不存在的实例草稿；扫描失败不影响当前编辑。</summary>
+    private void PruneLaunchSettingsDrafts(IReadOnlyList<MinecraftInstance> instances)
+    {
+        var paths = instances.Select(instance => instance.InstancePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (SelectedInstance is { } selected && !paths.Contains(selected.InstancePath))
+            ForgetLaunchSettingsDraft(selected.InstancePath);
+        foreach (var path in _launchSettingsDrafts.Keys.Where(path => !paths.Contains(path)).ToArray())
+            _launchSettingsDrafts.Remove(path);
+    }
+
+    /// <summary>验证当前输入或已冻结的草稿，输入错误必须报错，不能沿用上一次有效数值。</summary>
+    private MinecraftLaunchSettings ReadLaunchSettings(LaunchSettingsDraft? input = null)
+    {
+        input ??= CaptureLaunchSettingsDraft();
+        if (!int.TryParse(input.MinMemoryMb, NumberStyles.None, CultureInfo.InvariantCulture, out var minimum) ||
+            !int.TryParse(input.MaxMemoryMb, NumberStyles.None, CultureInfo.InvariantCulture, out var maximum))
             throw new ArgumentException("初始内存和最大内存必须填写以 MB 为单位的整数。");
         var settings = new MinecraftLaunchSettings
         {
-            PlayerName = PlayerName.Trim(),
-            UseMicrosoftAccount = UseMicrosoftAccount,
-            JavaPath = string.IsNullOrWhiteSpace(SelectedJavaPath) ? null : SelectedJavaPath.Trim(),
+            PlayerName = input.PlayerName.Trim(),
+            UseMicrosoftAccount = input.UseMicrosoftAccount,
+            JavaPath = string.IsNullOrWhiteSpace(input.JavaPath) ? null : input.JavaPath.Trim(),
             MinMemoryMb = minimum,
             MaxMemoryMb = maximum,
-            AdditionalJvmArguments = AdditionalJvmArguments
+            AdditionalJvmArguments = input.JvmArguments,
+            LogEncoding = input.LogEncoding
         };
         MinecraftLaunchValidation.Validate(settings);
         return settings;
@@ -158,7 +259,7 @@ public partial class InstancesViewModel
     private Task ReloadLaunchSettingsAsync()
     {
         if (!CanReloadLaunchSettings()) return Task.CompletedTask;
-        BeginLoadLaunchSettings(SelectedInstance);
+        BeginLoadLaunchSettings(SelectedInstance, notifySuccess: true, discardDraft: true);
         return LaunchSettingsLoadTask;
     }
 
@@ -169,16 +270,18 @@ public partial class InstancesViewModel
         if (!CanSaveLaunchSettings()) return;
         var instancePath = SelectedInstance!.InstancePath;
         var revision = _settingsRevision;
-        IsBusy = true;
         try
         {
             var settings = ReadLaunchSettings();
+            IsBusy = true;
             await _launchSettingsStore!.SaveAsync(instancePath, settings);
             if (revision == _settingsRevision) LaunchSettingsStatus = "已保存此实例的启动设置。";
+            _notifications.Success("启动设置已保存", "已保存此实例的玩家、内存、Java、JVM 和日志编码设置。", instancePath);
         }
         catch (Exception ex)
         {
             if (revision == _settingsRevision) LaunchSettingsStatus = "保存失败：" + ex.Message;
+            _notifications.Failure("启动设置保存失败", ex, instancePath);
         }
         finally { IsBusy = false; }
     }
@@ -189,6 +292,8 @@ public partial class InstancesViewModel
     {
         if (!CanLaunchGame()) return;
         var instance = SelectedInstance!;
+        // 先冻结点击启动时的输入，再触发禁用控件与打开日志等界面通知。
+        var input = CaptureLaunchSettingsDraft();
         IsBusy = true;
         IsPreparingLaunch = true;
         IsGameRunning = false;
@@ -205,31 +310,43 @@ public partial class InstancesViewModel
         StatusText = LaunchStatus;
         try
         {
-            var settings = ReadLaunchSettings();
+            var settings = ReadLaunchSettings(input);
             using var progress = new BoundedLaunchProgress(p => ApplyLaunchProgress(revision, p));
             MinecraftLaunchResult result;
-            try { result = await _launcher!.RunAsync(instance.InstancePath, settings, progress, cancellation.Token); }
+            try { result = await RunWithJavaRecoveryAsync(instance, settings, progress, cancellation.Token); }
             finally { progress.Complete(); }
             LastExitCode = result.ExitCode;
             LaunchLogPath = result.LogPath ?? LaunchLogPath;
-            LaunchStatus = result.IsCanceled
-                ? result.Started ? "游戏进程已停止。" : "已取消启动准备。"
-                : result.Started ? $"游戏进程已退出，退出码：{result.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "未知"}。"
-                : "未创建游戏进程，请查看日志中的原因。";
+            LaunchStatus = DescribeLaunchResult(result);
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
+            switch (result.Outcome)
+            {
+                case MinecraftLaunchOutcome.Canceled:
+                    _notifications.Cancelled(result.Started ? "游戏已停止" : "启动已取消", LaunchStatus, instance.InstancePath, LaunchLogPath);
+                    break;
+                case MinecraftLaunchOutcome.ProcessExited:
+                    _notifications.Warning("游戏进程已退出", LaunchStatus, instance.InstancePath, LaunchLogPath);
+                    break;
+                default:
+                    _notifications.Failure(result.Started ? "游戏启动或运行失败" : "游戏启动失败",
+                        LaunchStatus, instance.InstancePath, LaunchLogPath);
+                    break;
+            }
         }
         catch (OperationCanceledException)
         {
             LaunchStatus = IsGameRunning ? "游戏停止操作已结束。" : "已取消启动准备。";
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
+            _notifications.Cancelled("启动或运行已取消", LaunchStatus, instance.InstancePath, LaunchLogPath);
         }
         catch (Exception ex)
         {
             LaunchStatus = "启动或运行失败：" + ex.Message;
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
+            _notifications.Failure("启动或运行失败", ex, instance.InstancePath, LaunchLogPath);
         }
         finally
         {
@@ -241,6 +358,93 @@ public partial class InstancesViewModel
             CancelLaunchPreparationCommand.NotifyCanExecuteChanged();
             StopGameCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    /// <summary>只根据本次退出结果描述状态；明确致命证据优先于零退出码，不推断游戏已加载成功。</summary>
+    private static string DescribeLaunchResult(MinecraftLaunchResult result)
+    {
+        var exitCode = $"退出码：{result.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "未知"}。";
+        return result.Outcome switch
+        {
+            MinecraftLaunchOutcome.Canceled => result.Started ? "游戏进程已停止。" : "已取消启动准备。",
+            MinecraftLaunchOutcome.ProcessExited => $"游戏进程已退出，{exitCode}\n退出码为 0 不能证明游戏已成功加载，请结合游戏窗口和运行日志确认。",
+            _ => (result.Started ? "游戏启动或运行失败。" : "未创建游戏进程。") +
+                (result.Failure is { } failure ? $"\n{failure.Summary}\n错误信息：{failure.Evidence}" : "") +
+                $"\n请查看本次运行日志中的错误信息。\n{exitCode}"
+        };
+    }
+
+    /// <summary>仅在启动前明确缺少兼容 Java 时询问；安装后使用原身份和参数重试一次，其他错误不触发下载。</summary>
+    private async Task<MinecraftLaunchResult> RunWithJavaRecoveryAsync(MinecraftInstance instance,
+        MinecraftLaunchSettings settings, BoundedLaunchProgress progress, CancellationToken token)
+    {
+        JavaRuntimeRequiredException requirement;
+        try { return await _launcher!.RunAsync(instance.InstancePath, settings, progress, token); }
+        catch (JavaRuntimeRequiredException ex) when (_javaRuntimes is not null && _javaDownloadDialogs is not null)
+        {
+            progress.FlushPending();
+            token.ThrowIfCancellationRequested();
+            if (IsGameRunning) throw;
+            requirement = ex;
+        }
+
+        var versions = requirement.CompatibleMajorVersions.Where(version => version is 8 or 11 or 17 or 21 or 25)
+            .Distinct().OrderDescending().ToArray();
+        var architecture = requirement.Architecture.ToLowerInvariant() switch
+        {
+            "x64" => "x64", "x86" => "x86", "arm64" or "aarch64" => "aarch64", _ => null
+        };
+        if (versions.Length == 0 || architecture is null)
+            throw new InvalidOperationException(requirement.Message + "\n此版本或架构暂不支持自动下载，请手动安装符合实例要求的 Java。", requirement);
+        if (!_javaDownloadDialogs!.ConfirmDownload(instance.Name, requirement, _javaRuntimes!.InstallationRoot))
+            return new(false, null, true, null);
+        token.ThrowIfCancellationRequested();
+        progress.Report(new(MinecraftLaunchStage.Preparing, "已确认下载，正在查询实例所需的官方 Java……"));
+        progress.FlushPending();
+
+        JavaRuntimePackage? package = null;
+        foreach (var version in versions)
+        {
+            var packages = await _javaRuntimes.GetPackagesAsync(version, architecture, token);
+            token.ThrowIfCancellationRequested();
+            package = packages.FirstOrDefault(candidate => candidate.MajorVersion == version &&
+                candidate.Architecture.Equals(architecture, StringComparison.OrdinalIgnoreCase));
+            if (package is not null) break;
+        }
+        if (package is null)
+            throw new InvalidOperationException($"官方暂无可下载的 Java {string.Join('/', versions)}（{architecture}）Windows 包，请手动安装兼容 Java。");
+
+        JavaInstallation installation;
+        using (var installProgress = new JavaInstallLaunchProgress(progress))
+            installation = await _javaRuntimes.InstallAsync(package, installProgress, token);
+        token.ThrowIfCancellationRequested();
+        Java?.RegisterInstallation(installation);
+        if (string.Equals(SelectedInstance?.InstancePath, instance.InstancePath, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedJavaPath = installation.ExecutablePath;
+            LaunchSettingsStatus = "已为本次启动选择新安装的 Java；需要记住此实例偏好时请点击“保存设置”。";
+        }
+        _notifications.Success("Java 安装完成", "已验证 Java 环境，将继续启动原实例。玩家身份和其他启动参数保持不变。",
+            installation.ExecutablePath);
+        progress.Report(new(MinecraftLaunchStage.Preparing, "Java 已安装，正在使用原身份和设置重新准备启动……"));
+        progress.FlushPending();
+        // 重试不再进入恢复分支，防止环境仍不兼容时循环下载或反复弹窗。
+        return await _launcher!.RunAsync(instance.InstancePath, settings with { JavaPath = installation.ExecutablePath }, progress, token);
+    }
+
+    /// <summary>将后台安装阶段送入有界日志，结束后丢弃迟到进度，避免覆盖后续游戏状态。</summary>
+    private sealed class JavaInstallLaunchProgress(BoundedLaunchProgress target) : IProgress<JavaRuntimeInstallProgress>, IDisposable
+    {
+        private int _active = 1;
+        /// <summary>仅显示安装阶段和百分比，不输出下载凭证或完整请求地址。</summary>
+        public void Report(JavaRuntimeInstallProgress value)
+        {
+            if (Volatile.Read(ref _active) == 0) return;
+            var suffix = value.Percent is { } percent ? $"（{percent:F1}%）" : "";
+            target.Report(new(MinecraftLaunchStage.Preparing, "Java 安装：" + value.Stage + suffix));
+        }
+        /// <summary>安装结束后停止接收本次进度。</summary>
+        public void Dispose() => Interlocked.Exchange(ref _active, 0);
     }
 
     /// <summary>只接收当前进程的进度，退出后的迟到事件不能重新将界面标记为运行中。</summary>

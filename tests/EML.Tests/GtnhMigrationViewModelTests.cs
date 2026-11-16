@@ -15,7 +15,8 @@ public sealed partial class GtnhMigrationTests
         var old = await CreateAsync("old"); var target = await CreateAsync("new");
         Write(old.Game, "servers.dat", "old");
         var dialogs = new MigrationDialogs();
-        var vm = CreateViewModel(old, target, dialogs);
+        var notifications = new MigrationNoticeRecorder();
+        var vm = CreateViewModel(old, target, dialogs, notifications);
         await vm.MigrationStateLoadTask;
         Assert.True(vm.MigratePlayerDataCommand.CanExecute(null));
         Assert.False(vm.RestoreMigrationCommand.CanExecute(null));
@@ -24,9 +25,16 @@ public sealed partial class GtnhMigrationTests
         Assert.False(vm.IsBusy); Assert.True(vm.RestoreMigrationCommand.CanExecute(null));
         Assert.Contains("迁移完成", vm.MigrationStatus); Assert.True(File.Exists(vm.MigrationJournalPath));
         Assert.Equal(target.Path, dialogs.Target?.InstancePath);
+        var migrationNotice = Assert.Single(notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Success, migrationNotice.Kind);
+        Assert.Contains(old.Path, migrationNotice.Paths);
+        Assert.Contains(target.Path, migrationNotice.Paths);
+        Assert.Contains(vm.MigrationJournalPath, migrationNotice.Paths);
         await vm.RestoreMigrationCommand.ExecuteAsync(null);
         Assert.False(File.Exists(Path.Combine(target.Game, "servers.dat")));
         Assert.False(vm.RestoreMigrationCommand.CanExecute(null));
+        Assert.Equal(2, notifications.Notices.Count);
+        Assert.Equal(OperationNoticeKind.Success, notifications.Notices[^1].Kind);
     }
 
     /// <summary>用户在最终预览取消时不建立事务，也不修改目标。</summary>
@@ -34,12 +42,14 @@ public sealed partial class GtnhMigrationTests
     public async Task ViewModelFinalPreviewCancelDoesNotWriteFiles()
     {
         var old = await CreateAsync("old"); var target = await CreateAsync("new"); Write(old.Game, "servers.dat", "old");
-        var vm = CreateViewModel(old, target, new MigrationDialogs { Confirmation = null });
+        var notifications = new MigrationNoticeRecorder();
+        var vm = CreateViewModel(old, target, new MigrationDialogs { Confirmation = null }, notifications);
         await vm.MigrationStateLoadTask;
         await vm.MigratePlayerDataCommand.ExecuteAsync(null);
         Assert.False(File.Exists(Path.Combine(target.Game, "servers.dat")));
         Assert.False(Directory.Exists(Path.Combine(target.Path, ".eml-runtime")));
         Assert.False(vm.IsBusy); Assert.Contains("取消", vm.MigrationStatus);
+        Assert.Equal(OperationNoticeKind.Cancelled, Assert.Single(notifications.Notices).Kind);
     }
 
     /// <summary>未识别包不开放迁移，忙碌期间所有迁移入口都禁用。</summary>
@@ -64,10 +74,16 @@ public sealed partial class GtnhMigrationTests
     public async Task ViewModelReportsStalePreviewAndReleasesBusyState()
     {
         var old = await CreateAsync("old"); var target = await CreateAsync("new"); Write(old.Game, "servers.dat", "old");
-        var vm = CreateViewModel(old, target, new MigrationDialogs { BeforeConfirmation = () => Write(old.Game, "servers.dat", "changed") });
+        var notifications = new MigrationNoticeRecorder();
+        var vm = CreateViewModel(old, target, new MigrationDialogs { BeforeConfirmation = () => Write(old.Game, "servers.dat", "changed") }, notifications);
         await vm.MigrationStateLoadTask; await vm.MigratePlayerDataCommand.ExecuteAsync(null);
         Assert.Contains("预览后发生变化", vm.MigrationStatus); Assert.False(vm.IsBusy);
         Assert.False(File.Exists(Path.Combine(target.Game, "servers.dat")));
+        var notice = Assert.Single(notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("预览后发生变化", notice.Message);
+        Assert.Contains(old.Path, notice.Paths);
+        Assert.Contains(target.Path, notice.Paths);
     }
 
     /// <summary>界面必须把单独的模组风险确认传给服务，缺少确认时保持实例不变。</summary>
@@ -89,15 +105,23 @@ public sealed partial class GtnhMigrationTests
     }
 
     /// <summary>使用生产 ViewModel 和迁移服务，仅把用户交互替换为固定选择。</summary>
-    private InstancesViewModel CreateViewModel(Instance old, Instance target, MigrationDialogs dialogs)
+    private InstancesViewModel CreateViewModel(Instance old, Instance target, MigrationDialogs dialogs, IOperationNotifications? notifications = null)
     {
         var locator = new LauncherRootMinecraftInstanceLocator(_root); var checker = new MinecraftInstanceChecker(_root);
         var vm = new InstancesViewModel(locator, new MinecraftInstanceManager(_root), new MinecraftInstanceImporter(_root),
             dialogs, locator.InstancesRoot, checker, new MinecraftInstanceDownloader(_root, checker, new NoDownload()),
-            migration: Service, migrationDialogs: dialogs);
+            migration: Service, migrationDialogs: dialogs, notifications: notifications);
         vm.Instances.Add(new("old", old.Path, old.Game, ["1.7.10"]));
         vm.Instances.Add(new("new", target.Path, target.Game, ["1.7.10"]));
         vm.SelectedInstance = vm.Instances[1]; return vm;
+    }
+
+    /// <summary>捕获迁移结果通知，检查源目录、目标目录和恢复日志是否可供复制。</summary>
+    private sealed class MigrationNoticeRecorder : IOperationNotifications
+    {
+        public List<OperationNotice> Notices { get; } = [];
+        /// <summary>保留结果顺序，验证最终预览取消不会成为失败。</summary>
+        public void Report(OperationNotice notice) => Notices.Add(notice);
     }
 
     /// <summary>明确模拟选择与确认，不弹出 WPF 对话框。</summary>

@@ -10,6 +10,7 @@ public static partial class MinecraftLaunchValidation
     public static void Validate(MinecraftLaunchSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        if (!Enum.IsDefined(settings.LogEncoding)) throw new ArgumentException("日志编码选项无效，请重新选择。");
         if (!settings.UseMicrosoftAccount && (settings.PlayerName is null || !PlayerNamePattern().IsMatch(settings.PlayerName)))
             throw new ArgumentException("离线玩家名须为 1–16 位英文字母、数字或下划线。");
         if (settings.MinMemoryMb < 256 || settings.MaxMemoryMb < 512 || settings.MaxMemoryMb > 1048576 ||

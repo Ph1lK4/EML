@@ -8,6 +8,7 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <None Update="microsoft-login.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <InternalsVisibleTo Include="EML.App.Tests" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -17,5 +18,27 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <!-- 正式打包入口显式开启；不影响日常 F5、单元测试或普通源码构建。 -->
+  <PropertyGroup Condition="'$(EMLReleasePackage)' == 'true'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <UseAppHost>true</UseAppHost>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <RuntimeFrameworkVersion>$(EMLReleaseRuntimeVersion)</RuntimeFrameworkVersion>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <!-- 拒绝命令行覆盖成依赖机器环境的包，避免文件名与实际发布模式不一致。 -->
+  <Target Name="ValidateEMLReleasePackage" BeforeTargets="Publish" Condition="'$(EMLReleasePackage)' == 'true'">
+    <Error Condition="'$(Configuration)' != 'Release' Or '$(RuntimeIdentifier)' != 'win-x64'"
+           Text="EML 发布包必须使用 Release / win-x64。" />
+    <Error Condition="'$(SelfContained)' != 'true' Or '$(UseAppHost)' != 'true' Or '$(PublishSingleFile)' != 'false' Or '$(PublishTrimmed)' != 'false'"
+           Text="EML 发布包必须包含本地 .NET 运行时和 apphost，且不能使用单文件或裁剪模式。" />
+  </Target>
 
 </Project>

@@ -28,10 +28,11 @@ public sealed class InstanceDialogs(Window owner) : IInstanceDialogs
     }
 
     /// <summary>显示删除范围并返回是否确认，默认选择取消。</summary>
-    public bool ConfirmDelete(MinecraftInstance instance) => MessageBox.Show(owner,
-        $"删除实例：{instance.Name}\n{instance.InstancePath}\n\n包含存档、模组和配置，请先关闭游戏。\n将请求 Windows 回收站；若系统提示永久删除，请谨慎选择。",
-        "确认删除实例", MessageBoxButton.OKCancel, MessageBoxImage.Warning,
-        MessageBoxResult.Cancel) == MessageBoxResult.OK;
+    public bool ConfirmDelete(MinecraftInstance instance) => DialogPrompt.Confirm(owner,
+        "删除这个实例？",
+        "此操作包含实例内的存档、模组和配置，请先正常关闭游戏。\n\n" +
+        "EML 将请求 Windows 回收站；若系统提示永久删除，请谨慎选择。",
+        "删除实例", DialogTone.Danger, instance.Name, instance.InstancePath);
 
     /// <summary>选择未使用的 ZIP 保存路径；重名时重新选择，取消时返回 null。</summary>
     public string? ChooseExportPath(MinecraftInstance instance)
@@ -45,7 +46,7 @@ public sealed class InstanceDialogs(Window owner) : IInstanceDialogs
         while (dialog.ShowDialog(owner) == true)
         {
             if (!File.Exists(dialog.FileName) && !Directory.Exists(dialog.FileName)) return dialog.FileName;
-            MessageBox.Show(owner, "目标已存在，请选择新的文件名。", "无法覆盖备份");
+            DialogPrompt.Inform(owner, "无法覆盖备份", "目标已存在，请选择新的文件名。");
         }
         return null;
     }

@@ -47,6 +47,7 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
         {
             var root = ValidateInstance(instancePath);
             Migration.MigrationJournalStore.EnsureSettled(root);
+            EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
             var manifest = InstanceManifestStore.Read(Path.Combine(root, InstanceImportManifest.FileName));
             if (!manifest.SourceFormat.Equals(_sourceFormat, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"此安装器只处理 {_sourceFormat} 实例。");
@@ -206,7 +207,9 @@ internal sealed class InstanceRuntimeInstaller : IPrismInstanceInstaller
             var result = await _downloader.DownloadAsync(new FileDownloadRequest
             {
                 DestinationPath = path, Urls = file.Downloads, Hashes = file.Hashes,
-                ExpectedSize = file.Size, MaximumBytes = maximumBytes
+                ExpectedSize = file.Size, MaximumBytes = maximumBytes,
+                DisplayName = file.Path, GroupName = Path.GetFileName(root) + " · 运行依赖",
+                Priority = maximumBytes.HasValue ? DownloadPriority.High : DownloadPriority.Normal
             }, new InlineProgress<FileDownloadProgress>(value => progress?.Report(
                 new("下载运行依赖", completed, total, file.Path!, value))), token).ConfigureAwait(false);
             if (file.Hashes.Count > 0 && !result.HashVerified)

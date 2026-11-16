@@ -41,6 +41,7 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
             var root = EmbeddedFileBaseline.ValidateInstance(_launcherRoot, instancePath);
             using var lease = InstanceOperationLease.Acquire(root);
             MigrationJournalStore.EnsureSettled(root);
+            EML.Infrastructure.Minecraft.Mods.ModOperationJournal.EnsureSettled(root);
             var plan = await _planner.PrepareForRunAsync(instancePath, settings, progress, cancellationToken).ConfigureAwait(false);
             return await RunPreparedAsync(plan, progress, cancellationToken).ConfigureAwait(false);
         }
@@ -73,6 +74,9 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
         using var process = new Process();
         var started = false;
         var canceled = false;
+        var failures = new LaunchFailureDetector();
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        var systemOutputEncoding = Encoding.GetEncoding(OperatingSystem.IsWindows() ? (int)GetACP() : 65001);
         try
         {
             process.StartInfo = CreateStartInfo(plan);
@@ -117,8 +121,11 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
                 started = process.Start();
                 if (!started) throw new IOException("未能创建 Java 进程。");
                 // 两条管道同时读取，不串行 ReadToEnd；长行分段，避免无换行输出无限增长。
-                readers = Task.WhenAll(ReadOutputAsync(process.StandardOutput, false, channel.Writer, readCancellation.Token, plan.SensitiveValues),
-                    ReadOutputAsync(process.StandardError, true, channel.Writer, readCancellation.Token, plan.SensitiveValues));
+                // 不让 Process 默认 StreamReader 先按宿主代码页错误解码，直接读取各自的字节管道。
+                readers = Task.WhenAll(ReadOutputAsync(process.StandardOutput.BaseStream, false, channel.Writer, readCancellation.Token,
+                    plan.SensitiveValues, failures, plan.LogEncoding, systemOutputEncoding),
+                    ReadOutputAsync(process.StandardError.BaseStream, true, channel.Writer, readCancellation.Token,
+                    plan.SensitiveValues, failures, plan.LogEncoding, systemOutputEncoding));
                 Report(progress, new(MinecraftLaunchStage.Running, "Java 已启动，正在等待游戏初始化。", LogPath: logPath));
                 try { await process.WaitForExitAsync(token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -150,7 +157,8 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
                     }
                 }
             }
-            return new(started, started ? process.ExitCode : null, canceled, logPath);
+            // 等待两条管道及日志消费者结束后再取证，尾部错误和被界面丢弃的旧行也能参与结果判定。
+            return new(started, started ? process.ExitCode : null, canceled, logPath) { Failure = failures.Failure };
         }
         catch (EncoderFallbackException ex)
         {
@@ -227,28 +235,34 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
     }
 
     /// <summary>并发消费单条输出管道；固定缓冲及分段上限避免大日志耗尽内存。</summary>
-    private static async Task ReadOutputAsync(StreamReader reader, bool standardError,
-        ChannelWriter<MinecraftLaunchProgress> output, CancellationToken token, IReadOnlyList<string> secrets)
+    private static async Task ReadOutputAsync(Stream reader, bool standardError,
+        ChannelWriter<MinecraftLaunchProgress> output, CancellationToken token, IReadOnlyList<string> secrets,
+        LaunchFailureDetector failures, MinecraftLogEncoding encodingMode, Encoding systemEncoding)
     {
-        var buffer = new char[4096];
+        var buffer = new byte[4096];
         var line = new StringBuilder(OutputFragmentLength);
+        var decoder = new LaunchOutputDecoder(encodingMode, systemEncoding);
         var redactor = new LaunchOutputRedactor(secrets);
         try
         {
             int count;
             while ((count = await reader.ReadAsync(buffer.AsMemory(), token).ConfigureAwait(false)) != 0)
             {
-                await ConsumeAsync(redactor.Append(new string(buffer, 0, count))).ConfigureAwait(false);
+                await ConsumeAsync(redactor.Append(decoder.Append(buffer.AsSpan(0, count)))).ConfigureAwait(false);
             }
+            await ConsumeAsync(redactor.Append(decoder.Append([], completed: true))).ConfigureAwait(false);
             await ConsumeAsync(redactor.Append("", completed: true)).ConfigureAwait(false);
             if (line.Length > 0) await EmitAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (IOException) { output.TryWrite(new(MinecraftLaunchStage.Output, "读取进程输出失败。", true)); }
+        finally { failures.Complete(standardError); }
 
         // 先脱敏再按行分段，避免长行上限或多次 ReadAsync 将令牌拆开后写入日志。
         async Task ConsumeAsync(string safeText)
         {
+            // 诊断使用脱敏后的原始流，不依赖 UI 截断、进度投递或磁盘日志是否写入成功。
+            failures.Append(safeText, standardError);
             for (var index = 0; index < safeText.Length; index++)
             {
                 var value = safeText[index];

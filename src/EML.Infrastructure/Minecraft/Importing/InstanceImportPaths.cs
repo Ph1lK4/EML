@@ -1,3 +1,5 @@
+using EML.Infrastructure.IO;
+
 namespace EML.Infrastructure.Minecraft.Importing;
 
 /// <summary>导入专用路径约束：压缩包和清单中的路径永远按不可信相对路径处理。</summary>
@@ -6,20 +8,15 @@ internal static class InstanceImportPaths
     /// <summary>将包内路径统一为斜杠分隔的相对路径，拒绝越界路径及 Windows 非法文件名。</summary>
     internal static string Relative(string value)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Length > 1024 || value.StartsWith('/') || value.StartsWith('\\'))
+        if (string.IsNullOrEmpty(value) || value.Length > 1024 || value.StartsWith('/') || value.StartsWith('\\'))
             throw new InvalidDataException("无效的包内相对路径：" + value);
         var normalized = value.Replace('\\', '/');
         var parts = normalized.Split('/');
         if (parts.Length > 64) throw new InvalidDataException("包内路径层级过深。");
         foreach (var part in parts)
         {
-            if (part.Length == 0 || part.Length > 255 || part is "." or ".." || part.EndsWith('.') ||
-                part != part.Trim() || part.Any(c => c < 32 || "<>:\"|?*".Contains(c)))
-                throw new InvalidDataException("包内路径含非法文件名：" + value);
-            var stem = part.Split('.')[0].TrimEnd().ToUpperInvariant();
-            if (stem is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$" ||
-                (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && "123456789¹²³".Contains(stem[3])))
-                throw new InvalidDataException("包内路径包含 Windows 保留名称：" + value);
+            if (WindowsFileNameRules.InvalidReason(part) is { } reason)
+                throw new InvalidDataException($"包内路径含非法文件名：{value}。文件名“{part}”：{reason}。");
         }
         return normalized;
     }
@@ -29,6 +26,7 @@ internal static class InstanceImportPaths
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(value)) throw new InvalidDataException("实例名称不能为空。");
             var name = Relative(value);
             if (name.Contains('/') || name.Length > 128) throw new InvalidDataException("实例名称须为不超过 128 字符的单个文件夹名。");
             return name;

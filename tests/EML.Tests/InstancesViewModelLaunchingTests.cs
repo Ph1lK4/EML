@@ -1,6 +1,8 @@
 using EML.App.Services;
 using EML.App.ViewModels;
+using EML.Core.Java;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft.Launching;
 
 namespace EML.Tests;
@@ -21,9 +23,598 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal("1024", fixture.ViewModel.MinMemoryMbText);
         Assert.Equal("8192", fixture.ViewModel.MaxMemoryMbText);
         Assert.Equal("", fixture.ViewModel.SelectedJavaPath);
+        Assert.Equal(MinecraftLogEncoding.Auto, fixture.ViewModel.LogEncoding);
+        Assert.Equal("自动（UTF-8 优先，兼容系统编码）", fixture.ViewModel.SelectedLogEncodingMode);
         Assert.True(fixture.ViewModel.CanEditLaunchSettings);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.SaveLaunchSettingsCommand.CanExecute(null));
+        Assert.Empty(fixture.Notifications.Notices);
+    }
+
+    /// <summary>启动界面用两个明确模式替代隐含复选框；正版模式锁定离线名称输入。</summary>
+    [Fact]
+    public async Task LaunchModeSwitchesBetweenOfflineAndMicrosoftIdentity()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+
+        Assert.Equal(["离线模式", "正版模式"], fixture.ViewModel.LaunchModes);
+        Assert.Equal("离线模式", fixture.ViewModel.SelectedLaunchMode);
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.True(fixture.ViewModel.CanEditOfflinePlayerName);
+
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("正版模式", fixture.ViewModel.SelectedLaunchMode);
+        Assert.False(fixture.ViewModel.CanEditOfflinePlayerName);
+
+        fixture.ViewModel.SelectedLaunchMode = "离线模式";
+
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.True(fixture.ViewModel.CanEditOfflinePlayerName);
+    }
+
+    /// <summary>兼容已保存的布尔模式，两个入口选择后都把本次身份直接交给启动服务。</summary>
+    [Theory]
+    [InlineData(true, "正版模式")]
+    [InlineData(false, "离线模式")]
+    public async Task ModeSelectionLoadsSavesAndLaunchesWithoutChangingOfflineName(bool microsoft, string mode)
+    {
+        var fixture = new Fixture();
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+            { UseMicrosoftAccount = microsoft, PlayerName = "MyOfflineName" });
+        await fixture.SelectAsync();
+        Assert.Equal(mode, fixture.ViewModel.SelectedLaunchMode);
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.SelectedLaunchMode = "离线模式";
+        Assert.Equal("MyOfflineName", fixture.ViewModel.PlayerName);
+        fixture.ViewModel.SelectedLaunchMode = mode;
+
+        await fixture.ViewModel.SaveLaunchSettingsCommand.ExecuteAsync(null);
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(microsoft, Assert.Single(fixture.Store.Saved).Settings.UseMicrosoftAccount);
+        var launched = Assert.Single(fixture.Launcher.Calls).Settings;
+        Assert.Equal(microsoft, launched.UseMicrosoftAccount);
+        Assert.Equal("MyOfflineName", launched.PlayerName);
+    }
+
+    /// <summary>绑定清空或异常值不能把已经选中的正版模式改成离线。</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("未知")]
+    public async Task UnknownModeDoesNotChangeIdentity(string? selection)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.SelectedLaunchMode = selection!;
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+    }
+
+    /// <summary>日志编码使用每实例设置加载、保存与启动，不改写附加 JVM 参数。</summary>
+    [Theory]
+    [InlineData(MinecraftLogEncoding.Auto, "自动（UTF-8 优先，兼容系统编码）")]
+    [InlineData(MinecraftLogEncoding.Utf8, "UTF-8")]
+    [InlineData(MinecraftLogEncoding.SystemDefault, "系统编码（旧版 Java）")]
+    public async Task LogEncodingSelectionLoadsSavesAndLaunches(MinecraftLogEncoding encoding, string label)
+    {
+        var fixture = new Fixture();
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+            { LogEncoding = encoding, AdditionalJvmArguments = "-Dfile.encoding=GBK" });
+        await fixture.SelectAsync();
+        Assert.Equal(label, fixture.ViewModel.SelectedLogEncodingMode);
+        Assert.Equal(3, fixture.ViewModel.LogEncodingModes.Count);
+        fixture.ViewModel.SelectedLogEncodingMode = "UTF-8";
+        fixture.ViewModel.SelectedLogEncodingMode = label;
+
+        await fixture.ViewModel.SaveLaunchSettingsCommand.ExecuteAsync(null);
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(encoding, Assert.Single(fixture.Store.Saved).Settings.LogEncoding);
+        var launched = Assert.Single(fixture.Launcher.Calls).Settings;
+        Assert.Equal(encoding, launched.LogEncoding);
+        Assert.Equal("-Dfile.encoding=GBK", launched.AdditionalJvmArguments);
+    }
+
+    /// <summary>空白或未知下拉值不覆盖已经选择的日志编码。</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("未知")]
+    public async Task UnknownLogEncodingSelectionKeepsCurrentValue(string? selection)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLogEncodingMode = "系统编码（旧版 Java）";
+
+        fixture.ViewModel.SelectedLogEncodingMode = selection!;
+
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, fixture.ViewModel.LogEncoding);
+    }
+
+    /// <summary>切换实例保留各自的未保存编码草稿，重新读取才丢弃当前实例草稿。</summary>
+    [Fact]
+    public async Task LogEncodingDraftsAreIsolatedAndExplicitReloadDiscardsThem()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.SystemDefault;
+        var other = fixture.Instance with { Name = "Other", InstancePath = fixture.Instance.InstancePath + "2" };
+        fixture.ViewModel.SelectedInstance = other;
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.Equal(MinecraftLogEncoding.Auto, fixture.ViewModel.LogEncoding);
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.Utf8;
+
+        await fixture.SelectAsync();
+
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, fixture.ViewModel.LogEncoding);
+        await StartLaunch(fixture.ViewModel);
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, Assert.Single(fixture.Launcher.Calls).Settings.LogEncoding);
+        await fixture.ViewModel.ReloadLaunchSettingsCommand.ExecuteAsync(null);
+        Assert.Equal(MinecraftLogEncoding.Auto, fixture.ViewModel.LogEncoding);
+        fixture.ViewModel.SelectedInstance = other;
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.Equal(MinecraftLogEncoding.Utf8, fixture.ViewModel.LogEncoding);
+    }
+
+    /// <summary>开始启动前冻结日志偏好，忙碌状态造成的界面变更不能影响本次解码。</summary>
+    [Fact]
+    public async Task LaunchCapturesLogEncodingBeforeBusyNotifications()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.SystemDefault;
+        fixture.ViewModel.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(InstancesViewModel.IsBusy) && fixture.ViewModel.IsBusy)
+                fixture.ViewModel.LogEncoding = MinecraftLogEncoding.Utf8;
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, Assert.Single(fixture.Launcher.Calls).Settings.LogEncoding);
+    }
+
+    /// <summary>确认下载后只替换 Java 路径，重试仍使用点击启动时的身份、内存和 JVM 参数。</summary>
+    [Fact]
+    public async Task MissingJavaDownloadsAfterConsentAndRetriesFrozenSettings()
+    {
+        var runtimes = new RuntimeService();
+        var dialogs = new JavaDialogs();
+        var java = new JavaSettingsViewModel(new JavaLocator());
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: dialogs, java: java);
+        await fixture.SelectAsync();
+        fixture.ViewModel.PlayerName = "OriginalName";
+        fixture.ViewModel.UseMicrosoftAccount = true;
+        fixture.ViewModel.MaxMemoryMbText = "6144";
+        fixture.ViewModel.AdditionalJvmArguments = "-Dtest=value";
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.SystemDefault;
+        fixture.Launcher.Run = (_, _) => fixture.Launcher.Calls.Count == 1
+            ? Task.FromException<MinecraftLaunchResult>(MissingJava())
+            : Task.FromResult(new MinecraftLaunchResult(true, 0, false, null));
+        dialogs.OnConfirm = () =>
+        {
+            fixture.ViewModel.PlayerName = "ChangedLater";
+            fixture.ViewModel.UseMicrosoftAccount = false;
+            fixture.ViewModel.LogEncoding = MinecraftLogEncoding.Utf8;
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Single(dialogs.Calls);
+        Assert.Single(runtimes.Queries);
+        Assert.Single(runtimes.Installs);
+        Assert.Equal(2, fixture.Launcher.Calls.Count);
+        var second = fixture.Launcher.Calls[1];
+        Assert.Equal(fixture.Instance.InstancePath, second.Path);
+        Assert.Equal(fixture.Launcher.Calls[0].Settings with { JavaPath = runtimes.Installation.ExecutablePath }, second.Settings);
+        Assert.True(second.Settings.UseMicrosoftAccount);
+        Assert.Equal("OriginalName", second.Settings.PlayerName);
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, second.Settings.LogEncoding);
+        Assert.Equal(runtimes.Installation.ExecutablePath, fixture.ViewModel.SelectedJavaPath);
+        Assert.Equal(runtimes.Installation, Assert.Single(java.Installations));
+        Assert.Empty(fixture.Store.Saved);
+        Assert.Contains(fixture.Notifications.Notices, notice => notice.Title == "Java 安装完成");
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>取消确认不会查询网络或安装环境，也不会再次启动。</summary>
+    [Fact]
+    public async Task DecliningJavaDownloadDoesNotQueryOrRetry()
+    {
+        var runtimes = new RuntimeService();
+        var dialogs = new JavaDialogs { Accept = false };
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: dialogs);
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(MissingJava());
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Single(dialogs.Calls);
+        Assert.Single(fixture.Launcher.Calls);
+        Assert.Empty(runtimes.Queries);
+        Assert.Empty(runtimes.Installs);
+        Assert.Equal(OperationNoticeKind.Cancelled, Assert.Single(fixture.Notifications.Notices).Kind);
+    }
+
+    /// <summary>下载失败或网络查询失败保留原因，不用原本不兼容的 Java 偷偷重试。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task JavaAcquisitionFailureDoesNotRetry(bool queryFails)
+    {
+        var runtimes = new RuntimeService();
+        if (queryFails) runtimes.Query = (_, _) => throw new IOException("查询网络失败");
+        else runtimes.Install = _ => throw new IOException("Java 下载失败");
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: new JavaDialogs());
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(MissingJava());
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Single(fixture.Launcher.Calls);
+        Assert.Contains(queryFails ? "查询网络失败" : "Java 下载失败", fixture.ViewModel.LaunchStatus);
+        Assert.Equal("", fixture.ViewModel.SelectedJavaPath);
+        Assert.Empty(fixture.Store.Saved);
+    }
+
+    /// <summary>第二次仍缺 Java 时终止，避免重复弹窗和无限下载。</summary>
+    [Fact]
+    public async Task JavaRecoveryRetriesAtMostOnce()
+    {
+        var runtimes = new RuntimeService();
+        var dialogs = new JavaDialogs();
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: dialogs);
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(MissingJava());
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(2, fixture.Launcher.Calls.Count);
+        Assert.Single(dialogs.Calls);
+        Assert.Single(runtimes.Installs);
+        Assert.Contains("失败", fixture.ViewModel.LaunchStatus);
+    }
+
+    /// <summary>认证和实例文件错误不触发 Java 下载，已经运行后的异常也不重复创建游戏进程。</summary>
+    [Theory]
+    [InlineData("authentication")]
+    [InlineData("file")]
+    [InlineData("running")]
+    public async Task NonJavaFailureNeverOffersDownload(string failure)
+    {
+        var runtimes = new RuntimeService();
+        var dialogs = new JavaDialogs();
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: dialogs);
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            if (failure == "running") progress!.Report(new(MinecraftLaunchStage.Running, "running"));
+            Exception error = failure switch
+            {
+                "authentication" => new MinecraftAuthenticationException("会话失效"),
+                "file" => new FileNotFoundException("缺少游戏类库"),
+                _ => MissingJava()
+            };
+            return Task.FromException<MinecraftLaunchResult>(error);
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Single(fixture.Launcher.Calls);
+        Assert.Empty(dialogs.Calls);
+        Assert.Empty(runtimes.Queries);
+    }
+
+    /// <summary>下载中的取消沿用启动令牌，完成前保持忙碌且不会创建第二次进程。</summary>
+    [Fact]
+    public async Task CancelDuringJavaInstallStopsLaunchRecovery()
+    {
+        var entered = NewSignal<bool>();
+        var runtimes = new RuntimeService
+        {
+            Install = async token =>
+            {
+                entered.SetResult(true);
+                await Task.Delay(Timeout.Infinite, token);
+                throw new InvalidOperationException("不会执行");
+            }
+        };
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: new JavaDialogs());
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(MissingJava());
+
+        var operation = StartLaunch(fixture.ViewModel);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(fixture.ViewModel.IsBusy);
+        fixture.ViewModel.CancelLaunchPreparationCommand.Execute(null);
+        await operation.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Single(fixture.Launcher.Calls);
+        Assert.Contains("取消", fixture.ViewModel.LaunchStatus);
+        Assert.Equal("", fixture.ViewModel.SelectedJavaPath);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>官方无更高版本包时，只在实例声明兼容的版本内继续查找，不猜测其他 Java。</summary>
+    [Fact]
+    public async Task RecoveryUsesOnlyDeclaredCompatibleVersions()
+    {
+        var runtimes = new RuntimeService { Query = (major, _) => major == 25 ? [] : [Package(major)] };
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: new JavaDialogs());
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => fixture.Launcher.Calls.Count == 1
+            ? Task.FromException<MinecraftLaunchResult>(new JavaRuntimeRequiredException("缺少 Java", [17, 25], "x64"))
+            : Task.FromResult(new MinecraftLaunchResult(true, 0, false, null));
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal([25, 17], runtimes.Queries.Select(query => query.Major));
+        Assert.Equal(17, Assert.Single(runtimes.Installs).MajorVersion);
+    }
+
+    /// <summary>未提供对应官方包时说明手动安装，不下载不兼容版本。</summary>
+    [Fact]
+    public async Task NoCompatibleOfficialPackageDoesNotInstallOrRetry()
+    {
+        var runtimes = new RuntimeService { Query = (_, _) => [] };
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: new JavaDialogs());
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(MissingJava());
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Single(fixture.Launcher.Calls);
+        Assert.Empty(runtimes.Installs);
+        Assert.Contains("官方暂无", fixture.ViewModel.LaunchStatus);
+    }
+
+    /// <summary>未支持的版本或架构只提示手动处理，不询问下载另一套不兼容 Java。</summary>
+    [Theory]
+    [InlineData(26, "x64")]
+    [InlineData(25, "unknown")]
+    public async Task UnsupportedJavaRequirementDoesNotOfferWrongDownload(int major, string architecture)
+    {
+        var runtimes = new RuntimeService();
+        var dialogs = new JavaDialogs();
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: dialogs);
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(
+            new JavaRuntimeRequiredException("缺少 Java", [major], architecture));
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Single(fixture.Launcher.Calls);
+        Assert.Empty(dialogs.Calls);
+        Assert.Empty(runtimes.Queries);
+        Assert.Contains("手动安装", fixture.ViewModel.LaunchStatus);
+    }
+
+    /// <summary>安装元数据返回错误版本或架构时不采用该包，也不尝试启动。</summary>
+    [Theory]
+    [InlineData(17, "x64")]
+    [InlineData(25, "x86")]
+    public async Task MismatchedPackageMetadataIsNotInstalled(int major, string architecture)
+    {
+        var runtimes = new RuntimeService { Query = (_, _) => [Package(major) with { Architecture = architecture }] };
+        var fixture = new Fixture(javaRuntimes: runtimes, javaDialogs: new JavaDialogs());
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromException<MinecraftLaunchResult>(MissingJava());
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Empty(runtimes.Installs);
+        Assert.Single(fixture.Launcher.Calls);
+    }
+
+    /// <summary>为启动恢复测试构造结构化的 Java 需求。</summary>
+    private static JavaRuntimeRequiredException MissingJava() => new("缺少兼容 Java", [25], "x64");
+
+    /// <summary>模拟官方校验元数据，不发起实际下载。</summary>
+    private static JavaRuntimePackage Package(int major) => new(major, major + ".0.1", "x64", "java.zip",
+        "https://example.invalid/java.zip", new string('a', 64), 100);
+
+    /// <summary>内存安装服务用于记录查询、下载和取消，绝不启动真实可执行文件。</summary>
+    private sealed class RuntimeService : IJavaRuntimeService
+    {
+        public string InstallationRoot => @"C:\Test root\runtimes\java";
+        public JavaInstallation Installation { get; } = new(@"C:\Test root\runtimes\java\jdk-25\bin\java.exe", "25.0.1", "amd64");
+        public List<(int Major, string Architecture)> Queries { get; } = [];
+        public List<JavaRuntimePackage> Installs { get; } = [];
+        public Func<int, string, IReadOnlyList<JavaRuntimePackage>> Query { get; set; } = (major, _) => [Package(major)];
+        public Func<CancellationToken, Task<JavaInstallation>>? Install { get; set; }
+        /// <summary>记录请求的主版本与架构，允许测试模拟无包或网络错误。</summary>
+        public Task<IReadOnlyList<JavaRuntimePackage>> GetPackagesAsync(int majorVersion, string architecture, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Queries.Add((majorVersion, architecture));
+            return Task.FromResult(Query(majorVersion, architecture));
+        }
+        /// <summary>返回内存安装结果，或由测试控制取消与错误。</summary>
+        public Task<JavaInstallation> InstallAsync(JavaRuntimePackage package, IProgress<JavaRuntimeInstallProgress>? progress = null, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Installs.Add(package);
+            progress?.Report(new("正在解压", 75));
+            return Install?.Invoke(cancellationToken) ?? Task.FromResult(Installation with
+            {
+                ExecutablePath = Installation.ExecutablePath.Replace("jdk-25", "jdk-" + package.MajorVersion, StringComparison.Ordinal),
+                Version = package.Version
+            });
+        }
+    }
+
+    /// <summary>记录一次用户确认，不创建 WPF 对话框。</summary>
+    private sealed class JavaDialogs : IJavaDownloadDialogs
+    {
+        public bool Accept { get; set; } = true;
+        public Action? OnConfirm { get; set; }
+        public List<(string Instance, JavaRuntimeRequiredException Requirement)> Calls { get; } = [];
+        /// <summary>返回测试预设的同意或取消。</summary>
+        public bool ConfirmDownload(string instanceName, JavaRuntimeRequiredException requirement, string installationRoot)
+        {
+            Calls.Add((instanceName, requirement));
+            OnConfirm?.Invoke();
+            return Accept;
+        }
+    }
+
+    /// <summary>Java 页面注册测试不应调用整机扫描。</summary>
+    private sealed class JavaLocator : IJavaLocator
+    {
+        /// <summary>误调用检测立即失败。</summary>
+        public Task<IReadOnlyList<JavaInstallation>> FindAllAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>切换实例再返回时保留本次选择，磁盘中的旧离线偏好不能覆盖当前正版草稿。</summary>
+    [Fact]
+    public async Task ReturningToInstanceKeepsUnsavedIdentityAndText()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.PlayerName = "OfflineDraft";
+        fixture.ViewModel.MaxMemoryMbText = "尚未填完";
+        var other = fixture.Instance with { Name = "Other", InstancePath = fixture.Instance.InstancePath + "2" };
+        fixture.ViewModel.SelectedInstance = other;
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("Steve", fixture.ViewModel.PlayerName);
+
+        await fixture.SelectAsync();
+
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("OfflineDraft", fixture.ViewModel.PlayerName);
+        Assert.Equal("尚未填完", fixture.ViewModel.MaxMemoryMbText);
+        Assert.Empty(fixture.Store.Saved);
+        fixture.ViewModel.MaxMemoryMbText = "8192";
+        await StartLaunch(fixture.ViewModel);
+        Assert.True(Assert.Single(fixture.Launcher.Calls).Settings.UseMicrosoftAccount);
+    }
+
+    /// <summary>列表刷新时会先清空选择再生成对象，同路径新对象仍使用当前模式。</summary>
+    [Fact]
+    public async Task RescannedInstanceKeepsDraftUntilExplicitReload()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.SelectedInstance = null;
+        fixture.ViewModel.SelectedInstance = fixture.Instance with { Name = "Refreshed" };
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+
+        await fixture.ViewModel.ReloadLaunchSettingsCommand.ExecuteAsync(null);
+
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        await StartLaunch(fixture.ViewModel);
+        Assert.False(Assert.Single(fixture.Launcher.Calls).Settings.UseMicrosoftAccount);
+    }
+
+    /// <summary>启动先冻结本次选择，忙碌状态通知不能改变实际送入启动器的身份。</summary>
+    [Fact]
+    public async Task LaunchCapturesIdentityBeforeBusyNotifications()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(InstancesViewModel.IsBusy) && fixture.ViewModel.IsBusy)
+                fixture.ViewModel.UseMicrosoftAccount = false;
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.True(Assert.Single(fixture.Launcher.Calls).Settings.UseMicrosoftAccount);
+    }
+
+    /// <summary>删除成功即丢弃草稿，即使随后刷新失败，同名新实例也要读取自己的设置。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeletedInstanceDoesNotPassDraftToReusedPath(bool scanFails)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.Services.ConfirmRemoval = () => true;
+        fixture.Services.Remove = () => Task.CompletedTask;
+        fixture.Services.Find = () => scanFails
+            ? Task.FromException<IReadOnlyList<MinecraftInstance>>(new IOException("扫描失败"))
+            : Task.FromResult<IReadOnlyList<MinecraftInstance>>([]);
+
+        await fixture.ViewModel.DeleteCommand.ExecuteAsync(null);
+        fixture.ViewModel.SelectedInstance = null;
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings { PlayerName = "NewInstance" });
+        await fixture.SelectAsync();
+
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("NewInstance", fixture.ViewModel.PlayerName);
+    }
+
+    /// <summary>扫描确认实例已被外部删除时，也必须清除其草稿以支持同名重新导入。</summary>
+    [Fact]
+    public async Task MissingInstanceDoesNotPassDraftToReusedPath()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.Services.Find = () => Task.FromResult<IReadOnlyList<MinecraftInstance>>([]);
+
+        await fixture.ViewModel.RefreshCommand.ExecuteAsync(null);
+        await fixture.SelectAsync();
+
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+    }
+
+    /// <summary>改名后保留当前实例的草稿，但旧目录名后来被重用时不能继承该草稿。</summary>
+    [Fact]
+    public async Task RenamedInstanceKeepsDraftAtNewPathOnly()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        fixture.ViewModel.PlayerName = "OriginalDraft";
+        var renamed = fixture.Instance with { Name = "Renamed", InstancePath = fixture.Instance.InstancePath + " renamed" };
+        fixture.Services.Rename = () => Task.FromResult(renamed.InstancePath);
+        fixture.Services.Find = () => Task.FromResult<IReadOnlyList<MinecraftInstance>>([renamed]);
+
+        await fixture.ViewModel.RenameCommand.ExecuteAsync(null);
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.Equal(renamed.InstancePath, fixture.ViewModel.SelectedInstance!.InstancePath);
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("OriginalDraft", fixture.ViewModel.PlayerName);
+        await fixture.SelectAsync();
+        Assert.False(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("Steve", fixture.ViewModel.PlayerName);
+    }
+
+    /// <summary>展示共享账号档案；登录、换号、退出无需再次选实例，也不请求或复制游戏令牌。</summary>
+    [Fact]
+    public async Task AccountDisplayFollowsLoginAndLogoutWhileKeepingOfflineName()
+    {
+        var service = new AccountDisplayService();
+        var accounts = new MinecraftAccountViewModel(service);
+        var fixture = new Fixture(accounts);
+        await fixture.SelectAsync();
+        fixture.ViewModel.PlayerName = "OfflineName";
+        fixture.ViewModel.SelectedLaunchMode = "正版模式";
+        Assert.Same(accounts, fixture.ViewModel.Accounts);
+        Assert.Equal("尚未登录", fixture.ViewModel.Accounts!.AccountName);
+
+        await accounts.LoginCommand.ExecuteAsync(null);
+        Assert.Equal("OnlineAlex", fixture.ViewModel.Accounts.AccountName);
+        service.NextName = "AnotherPlayer";
+        await accounts.LoginCommand.ExecuteAsync(null);
+        Assert.Equal("AnotherPlayer", fixture.ViewModel.Accounts.AccountName);
+        await accounts.LogoutCommand.ExecuteAsync(null);
+        Assert.Equal("尚未登录", fixture.ViewModel.Accounts.AccountName);
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("OfflineName", fixture.ViewModel.PlayerName);
     }
 
     /// <summary>读取尚未结束时，即使直接执行命令也不能保存或使用上一实例的设置启动。</summary>
@@ -101,6 +692,9 @@ public sealed class InstancesViewModelLaunchingTests
         await fixture.SelectAsync();
 
         Assert.Contains("设置无法读取", fixture.ViewModel.LaunchSettingsStatus);
+        var failedNotice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, failedNotice.Kind);
+        Assert.Contains(fixture.Instance.InstancePath, failedNotice.Paths);
         Assert.False(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
         Assert.False(fixture.ViewModel.SaveLaunchSettingsCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.ReloadLaunchSettingsCommand.CanExecute(null));
@@ -109,6 +703,7 @@ public sealed class InstancesViewModelLaunchingTests
         await fixture.ViewModel.ReloadLaunchSettingsCommand.ExecuteAsync(null);
         Assert.Equal("Recovered", fixture.ViewModel.PlayerName);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
+        Assert.Equal(OperationNoticeKind.Success, fixture.Notifications.Notices[^1].Kind);
     }
 
     /// <summary>界面将本次实例和用户输入作为独立设置传入启动服务，不依赖上次保存。</summary>
@@ -195,6 +790,9 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Contains("磁盘写入失败", fixture.ViewModel.LaunchSettingsStatus);
         Assert.Equal("SavedPlayer", fixture.ViewModel.PlayerName);
         Assert.False(fixture.ViewModel.IsBusy);
+        Assert.Equal([OperationNoticeKind.Success, OperationNoticeKind.Failure], fixture.Notifications.Notices.Select(notice => notice.Kind));
+        Assert.Contains("磁盘写入失败", fixture.Notifications.Notices[^1].Message);
+        Assert.Contains(fixture.Instance.InstancePath, fixture.Notifications.Notices[^1].Paths);
     }
 
     /// <summary>从完整检查到进程结束持续占用界面，停止只请求取消并等待启动服务退出。</summary>
@@ -225,6 +823,10 @@ public sealed class InstancesViewModelLaunchingTests
         AssertConflictingCommandsDisabled(fixture.ViewModel);
         progress.Report(new(MinecraftLaunchStage.Running, "Java 已创建", LogPath: "current.log"));
         Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
+        progress.Report(new(MinecraftLaunchStage.Running, "重复阶段事件", LogPath: "current.log"));
+        Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
+        Assert.Empty(fixture.Notifications.Notices);
+        Assert.Contains("请在游戏窗口确认加载结果", fixture.ViewModel.LaunchStatus);
         Assert.True(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsPreparingLaunch);
         Assert.True(fixture.ViewModel.StopGameCommand.CanExecute(null));
@@ -245,6 +847,7 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal("current.log", fixture.ViewModel.LaunchLogPath);
         Assert.True(fixture.ViewModel.RenameCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
+        Assert.Equal(OperationNoticeKind.Cancelled, Assert.Single(fixture.Notifications.Notices).Kind);
     }
 
     /// <summary>准备阶段取消会传递到共享检查流程，最终不会保留运行状态。</summary>
@@ -269,6 +872,7 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.False(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsBusy);
         Assert.Null(fixture.ViewModel.LastExitCode);
+        Assert.Equal(OperationNoticeKind.Cancelled, Assert.Single(fixture.Notifications.Notices).Kind);
     }
 
     /// <summary>检查或启动失败清楚报告原因，不把失败结果伪装成已进入游戏。</summary>
@@ -286,6 +890,10 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.False(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsBusy);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("必要运行库缺失", notice.Message);
+        Assert.Contains(fixture.Instance.InstancePath, notice.Paths);
     }
 
     /// <summary>异常退出保留退出码与日志路径，不能用成功创建进程推断游戏加载成功。</summary>
@@ -301,6 +909,134 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal(1, fixture.ViewModel.LastExitCode);
         Assert.Equal("failure.log", fixture.ViewModel.LaunchLogPath);
         Assert.Contains("退出码：1", fixture.ViewModel.LaunchStatus);
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("failure.log", notice.Paths);
+    }
+
+    /// <summary>即使进程返回零，启动服务提供的明确致命证据也必须显示为失败并保留实际退出码。</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public async Task FatalEvidenceReportsFailureRegardlessOfExitCode(int exitCode)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        var failure = new MinecraftLaunchFailure("SdlInitializationFailed", "游戏图形初始化失败。", "SDL_Init failed: test error");
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            progress!.Report(new(MinecraftLaunchStage.Running, "Java 已创建", LogPath: "fatal.log"));
+            return Task.FromResult(new MinecraftLaunchResult(true, exitCode, false, "fatal.log") { Failure = failure });
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains(failure.Summary, notice.Message);
+        Assert.Contains(failure.Evidence, notice.Message);
+        Assert.Contains($"退出码：{exitCode}", notice.Message);
+        Assert.Contains(fixture.Instance.InstancePath, notice.Paths);
+        Assert.Contains("fatal.log", notice.Paths);
+        Assert.Contains(failure.Summary, fixture.ViewModel.LaunchStatus);
+        Assert.Contains(failure.Evidence, fixture.ViewModel.LaunchStatus);
+        Assert.Equal(exitCode, fixture.ViewModel.LastExitCode);
+        Assert.False(fixture.ViewModel.IsGameRunning);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>零退出码且无明确错误只表示进程退出，不能显示为游戏加载或游玩成功。</summary>
+    [Fact]
+    public async Task ZeroExitWithoutFatalEvidenceReportsNeutralWarning()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            progress!.Report(new(MinecraftLaunchStage.Running, "Java 已创建", LogPath: "neutral.log"));
+            return Task.FromResult(new MinecraftLaunchResult(true, 0, false, "neutral.log"));
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Equal("游戏进程已退出", notice.Title);
+        Assert.Contains("退出码：0", notice.Message);
+        Assert.Contains("不能证明游戏已成功加载", notice.Message);
+        Assert.DoesNotContain("正常退出", notice.Message);
+        Assert.Contains("neutral.log", notice.Paths);
+    }
+
+    /// <summary>用户停止或取消的结果优先于附带诊断，不能把取消误报为失败。</summary>
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(true, 143)]
+    [InlineData(false, null)]
+    public async Task CancellationTakesPrecedenceOverFatalEvidence(bool started, int? exitCode)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(started, exitCode, true, "canceled.log")
+        {
+            Failure = new("SdlInitializationFailed", "游戏图形初始化失败。", "SDL_Init failed: canceled")
+        });
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Cancelled, notice.Kind);
+        Assert.Contains(started ? "已停止" : "取消启动准备", fixture.ViewModel.LaunchStatus);
+        Assert.DoesNotContain("SDL_Init", notice.Message);
+        Assert.Equal(exitCode, fixture.ViewModel.LastExitCode);
+        Assert.Contains("canceled.log", notice.Paths);
+    }
+
+    /// <summary>未创建进程或无法取得退出码时不能依赖缺省值报告成功。</summary>
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(false, 0)]
+    [InlineData(true, null)]
+    public async Task MissingProcessOrUnknownExitCodeReportsFailure(bool started, int? exitCode)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(started, exitCode, false, "unknown.log"));
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains(started ? "启动或运行失败" : "未创建游戏进程", notice.Message);
+        Assert.Contains(exitCode is null ? "退出码：未知" : "退出码：0", notice.Message);
+        Assert.Contains("unknown.log", notice.Paths);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>下一次启动只使用新的结果，不能继承上一次的错误摘要、日志或退出状态。</summary>
+    [Fact]
+    public async Task SubsequentLaunchDoesNotReusePreviousFailure()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(true, 0, false, "first-failure.log")
+        {
+            Failure = new("SdlInitializationFailed", "游戏图形初始化失败。", "SDL_Init failed: first run")
+        });
+        await StartLaunch(fixture.ViewModel);
+        Assert.Equal(OperationNoticeKind.Failure, Assert.Single(fixture.Notifications.Notices).Kind);
+        fixture.Notifications.Notices.Clear();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(true, 0, false, "second.log"));
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.DoesNotContain("初始化失败", fixture.ViewModel.LaunchStatus);
+        Assert.DoesNotContain(fixture.ViewModel.LaunchLogLines, line => line.Contains("SDL_Init", StringComparison.Ordinal));
+        Assert.Equal("second.log", fixture.ViewModel.LaunchLogPath);
+        Assert.Contains("second.log", notice.Paths);
+        Assert.DoesNotContain("first-failure.log", notice.Paths);
     }
 
     /// <summary>大量输出只留下最近一千行，任务结束后的排队事件也不能改变状态。</summary>
@@ -402,12 +1138,16 @@ public sealed class InstancesViewModelLaunchingTests
         public MinecraftInstance Instance { get; } = new("Test instance", "C:\\Test root\\instances\\Test instance", "C:\\Test root\\instances\\Test instance\\.minecraft", []);
         public FakeLauncher Launcher { get; } = new();
         public FakeSettingsStore Store { get; } = new();
+        public RecordingNotifications Notifications { get; } = new();
+        public UnusedServices Services { get; } = new();
         public InstancesViewModel ViewModel { get; }
         /// <summary>让所有非启动服务在误调用时直接失败。</summary>
-        public Fixture()
+        public Fixture(MinecraftAccountViewModel? accounts = null, IJavaRuntimeService? javaRuntimes = null,
+            IJavaDownloadDialogs? javaDialogs = null, JavaSettingsViewModel? java = null)
         {
-            var unused = new UnusedServices();
-            ViewModel = new(unused, unused, unused, unused, "C:\\Test root\\instances", unused, unused, Launcher, Store);
+            var unused = Services;
+            ViewModel = new(unused, unused, unused, unused, "C:\\Test root\\instances", unused, unused, Launcher, Store,
+                notifications: Notifications, accounts: accounts, java: java, javaRuntimes: javaRuntimes, javaDownloadDialogs: javaDialogs);
         }
         /// <summary>选择测试实例并等待本次启动设置载入。</summary>
         public async Task SelectAsync()
@@ -415,6 +1155,27 @@ public sealed class InstancesViewModelLaunchingTests
             ViewModel.SelectedInstance = Instance;
             await ViewModel.LaunchSettingsLoadTask;
         }
+    }
+
+    /// <summary>仅提供公开玩家档案；UI 误取会话令牌时测试直接失败。</summary>
+    private sealed class AccountDisplayService : IMinecraftAccountService
+    {
+        public bool IsConfigured => true;
+        public string NextName { get; set; } = "OnlineAlex";
+        public Task<MinecraftAccount?> LoadAccountAsync(CancellationToken cancellationToken = default) => Task.FromResult<MinecraftAccount?>(null);
+        public Task<MinecraftAccount> SignInAsync(IProgress<MinecraftLoginPrompt>? progress = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new MinecraftAccount("test-profile", NextName));
+        public Task SignOutAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<MinecraftAccountSession> GetSessionAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("显示玩家名不能读取登录令牌。");
+    }
+
+    /// <summary>记录启动生命周期的可见结果，测试不会弹出窗口。</summary>
+    private sealed class RecordingNotifications : IOperationNotifications
+    {
+        public List<OperationNotice> Notices { get; } = [];
+        /// <summary>保存每条通知，以验证进度事件不会造成重复弹窗。</summary>
+        public void Report(OperationNotice notice) => Notices.Add(notice);
     }
 
     /// <summary>记录实际启动目标和设置，由测试控制准备、输出、退出和取消。</summary>
@@ -456,12 +1217,16 @@ public sealed class InstancesViewModelLaunchingTests
     private sealed class UnusedServices : IMinecraftInstanceLocator, IMinecraftInstanceManager, IMinecraftInstanceImporter,
         IMinecraftInstanceChecker, IMinecraftInstanceDownloader, IInstanceDialogs
     {
+        public Func<Task<IReadOnlyList<MinecraftInstance>>> Find { get; set; } = () => throw new NotSupportedException();
+        public Func<Task> Remove { get; set; } = () => throw new NotSupportedException();
+        public Func<Task<string>> Rename { get; set; } = () => throw new NotSupportedException();
+        public Func<bool> ConfirmRemoval { get; set; } = () => throw new NotSupportedException();
         /// <summary>禁止启动流程偷偷刷新扫描。</summary>
-        public Task<IReadOnlyList<MinecraftInstance>> FindAllAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<MinecraftInstance>> FindAllAsync(CancellationToken cancellationToken = default) => Find();
         /// <summary>禁止启动流程删除实例。</summary>
-        public Task DeleteAsync(string instancePath, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task DeleteAsync(string instancePath, CancellationToken cancellationToken = default) => Remove();
         /// <summary>禁止启动流程改名实例。</summary>
-        public Task<string> RenameAsync(string instancePath, string newName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<string> RenameAsync(string instancePath, string newName, CancellationToken cancellationToken = default) => Rename();
         /// <summary>禁止启动流程导出实例。</summary>
         public Task ExportAsync(string instancePath, string destinationZip, IProgress<InstanceExportProgress>? progress = null,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -477,7 +1242,7 @@ public sealed class InstancesViewModelLaunchingTests
         public Task<InstanceDownloadReport> DownloadMissingAsync(string instancePath,
             IProgress<InstanceDownloadProgress>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         /// <summary>不允许启动测试显示删除确认。</summary>
-        public bool ConfirmDelete(MinecraftInstance instance) => throw new NotSupportedException();
+        public bool ConfirmDelete(MinecraftInstance instance) => ConfirmRemoval();
         /// <summary>不允许启动测试弹出导出选择。</summary>
         public string? ChooseExportPath(MinecraftInstance instance) => throw new NotSupportedException();
         /// <summary>不允许启动测试弹出导入选择。</summary>

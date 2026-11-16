@@ -17,6 +17,11 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 模组中文展示目录随程序离线提供；整合包名称与介绍直接使用平台内容。 -->
+    <EmbeddedResource Include="Minecraft\Mods\Online\Resources\OnlineMods.zh-CN.json" LogicalName="EML.OnlineMods.zh-CN.json" WithCulture="false" />
+  </ItemGroup>
+
   <!-- 仅开发机保存加密构建输入，运行时仍只使用程序集常量。 -->
   <PropertyGroup>
     <_EMLCurseForgeLocalFile>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../../.eml-build/curseforge.key.dpapi'))</_EMLCurseForgeLocalFile>

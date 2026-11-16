@@ -9,7 +9,7 @@ namespace EML.Infrastructure.Minecraft.Importing;
 internal static class InstanceManifestStore
 {
     // EML 记录包内全部文件（包括存档和地图），不能沿用平台组件清单的 8 MiB 上限。
-    internal const int MaximumBytes = 64 * 1024 * 1024;
+    internal const int MaximumBytes = InstanceArchiveLimits.MaximumInstanceManifestBytes;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -89,10 +89,11 @@ internal static class InstanceManifestStore
     {
         if (manifest.SchemaVersion != 1 || string.IsNullOrWhiteSpace(manifest.SourceFormat) || manifest.Name is null ||
             manifest.Files is null || manifest.Components is null || manifest.Notes is null ||
-            manifest.Files.Count > SafeInstanceArchive.MaxEntries || manifest.Components.Count > 1024)
+            manifest.Files.Count > InstanceArchiveLimits.MaximumFileRequirements || manifest.Components.Count > 1024)
             throw new InvalidDataException("不支持或损坏的 EML 实例清单。");
         if (manifest.GameDirectory != ".") InstanceImportPaths.Relative(manifest.GameDirectory);
         if (manifest.MigratedPlayerFiles is not null) MigrationDataStore.Validate(manifest, manifest.MigratedPlayerFiles);
+        if (manifest.ManagedMods is not null) Mods.ModManagementStore.Validate(manifest, manifest.ManagedMods);
         var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var component in manifest.Components)
             if (component is null || string.IsNullOrWhiteSpace(component.Id) || string.IsNullOrWhiteSpace(component.Version))
@@ -123,6 +124,8 @@ internal static class InstanceManifestStore
             }
             // 未解析平台引用可以暂缺大小/摘要；实际文件验证阶段再执行来源完整性约束。
             if (file.Origin is { } origin && !Enum.IsDefined(origin)) throw new InvalidDataException("未知的文件内容来源。");
+            if (file.Origin == InstanceFileOrigin.GithubReleaseDownload || file.GithubReleaseOrigin is not null)
+                _ = InstanceFileIntegrity.HashesFor(file);
             if (file.Origin == InstanceFileOrigin.MigratedPlayerData)
             {
                 if (!EML.Core.Minecraft.Migration.GtnhPlayerDataPolicy.IsMigrated(file, manifest.GameDirectory) || file.Required)

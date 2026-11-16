@@ -1,12 +1,119 @@
 using EML.App.Services;
 using EML.App.ViewModels;
+using EML.Core.Downloads;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Catalog;
 
 namespace EML.Tests;
 
 /// <summary>执行真实界面命令，验证导入与自动补全的衔接；替身不读写磁盘，也不访问网络。</summary>
 public sealed class InstancesViewModelImportTests
 {
+    /// <summary>导入与自动补全只弹一次成功，必须以完整运行条件通过为依据。</summary>
+    [Fact]
+    public async Task ImportAndCompletionPublishOneSuccessfulNotice()
+    {
+        var fixture = new Fixture();
+        fixture.Downloader.Download = (_, _) =>
+        {
+            var report = fixture.SuccessReport();
+            return Task.FromResult(report with { CheckReport = report.CheckReport! with { LaunchProfilePath = "launch.json" } });
+        };
+
+        await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Success, notice.Kind);
+        Assert.Contains("导入与补全完成", notice.Title);
+        Assert.Contains(fixture.Result.InstancePath, notice.Paths);
+        Assert.Contains("test-pack.zip", notice.Paths);
+    }
+
+    /// <summary>原包导入失败保留实际原因和原包路径，不发送成功或重复通知。</summary>
+    [Fact]
+    public async Task ImportFailureNoticeIncludesArchiveAndReason()
+    {
+        var fixture = new Fixture();
+        fixture.Importer.Import = _ => Task.FromException<InstanceImportResult>(new InvalidDataException("中文路径含非法冒号 U+003A"));
+
+        await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains("U+003A", notice.Message);
+        Assert.Contains("test-pack.zip", notice.Paths);
+        Assert.Contains(fixture.InstancesRoot, notice.Paths);
+        Assert.Empty(fixture.Downloader.Paths);
+    }
+
+    /// <summary>补全异常仅提示一次部分完成，明确保留实例并提供后续处理的路径。</summary>
+    [Fact]
+    public async Task ImportedInstanceWithCompletionFailurePublishesOneWarning()
+    {
+        var fixture = new Fixture();
+        fixture.Downloader.Download = (_, _) => Task.FromException<InstanceDownloadReport>(new IOException("下载连接中断"));
+
+        await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Contains("实例已导入", notice.Message);
+        Assert.Contains("下载连接中断", notice.Message);
+        Assert.Contains(fixture.Result.InstancePath, notice.Paths);
+        Assert.Contains("test-pack.zip", notice.Paths);
+    }
+
+    /// <summary>补全异常的 FileName 应进入独立路径列表，不能只保留实例根目录。</summary>
+    [Fact]
+    public async Task CompletionFailurePreservesExplicitExceptionFilename()
+    {
+        var fixture = new Fixture();
+        var path = Path.Combine(fixture.Result.GameDirectory, "config", "\u3000中文配置（原包）\u3000.json");
+        fixture.Downloader.Download = (_, _) => Task.FromException<InstanceDownloadReport>(
+            new FileNotFoundException("补全时无法读取原包配置", path));
+
+        await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Contains(path, notice.Paths);
+        Assert.Contains("补全时无法读取原包配置", notice.Message);
+    }
+
+    /// <summary>汇总失败清单中的具体原因和文件路径，不能把返回的报告误当成补全成功。</summary>
+    [Fact]
+    public async Task CompletionNoticePreservesFailedFileReasonsAndPaths()
+    {
+        var fixture = new Fixture();
+        var requirement = new InstanceFileRequirement { Path = ".minecraft/mods/中文模组.jar", Source = InstanceFileSource.DirectDownload };
+        fixture.Downloader.Download = (_, _) => Task.FromResult(new InstanceDownloadReport(
+            [new(requirement, InstanceDownloadState.Failed, "HTTP 403：禁止下载")],
+            fixture.SuccessReport().CheckReport! with { Files = [new(requirement, InstanceFileState.Missing, "缺少必要模组")] }));
+
+        await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Contains("HTTP 403", notice.Message);
+        Assert.Contains("缺少必要模组", notice.Message);
+        Assert.Contains(Path.Combine(fixture.Result.InstancePath, ".minecraft", "mods", "中文模组.jar"), notice.Paths);
+    }
+
+    /// <summary>用户取消是独立结果，不伪装为下载失败，也不额外发送导入成功通知。</summary>
+    [Fact]
+    public async Task CanceledCompletionPublishesOneCanceledNotice()
+    {
+        var fixture = new Fixture();
+        fixture.Downloader.Download = (_, _) => Task.FromResult(fixture.SuccessReport() with { IsCanceled = true });
+
+        await fixture.ViewModel.ImportCommand.ExecuteAsync(null);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Cancelled, notice.Kind);
+        Assert.Contains("已导入", notice.Title);
+        Assert.Contains(fixture.Result.InstancePath, notice.Paths);
+    }
+
     /// <summary>四种受支持整合包在导入提交后自动补全，并显示同一次补全的最终复查。</summary>
     [Theory]
     [InlineData("Prism")]
@@ -25,6 +132,258 @@ public sealed class InstancesViewModelImportTests
         Assert.Single(fixture.ViewModel.DownloadFiles);
         Assert.Single(fixture.ViewModel.CheckFiles);
         Assert.Equal(2, fixture.ViewModel.SelectedDetailTab);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>整合包平台与官方原版均通过已校验缓存进入同一导入及自动补全流程。</summary>
+    [Theory]
+    [InlineData(InstanceCatalogProvider.Modrinth, "Modrinth")]
+    [InlineData(InstanceCatalogProvider.CurseForge, "CurseForge")]
+    [InlineData(InstanceCatalogProvider.Minecraft, "Zip")]
+    public async Task OnlineDownloadImportsPreparedArchiveAndCompletesDependencies(InstanceCatalogProvider provider, string format)
+    {
+        var fixture = new Fixture(format);
+        var archive = new PreparedInstanceArchive("cache/verified-pack.zip", "Online pack", format);
+        var archives = new FakeArchives(archive);
+        var progress = new Progress<FileDownloadProgress>();
+
+        await fixture.ViewModel.DownloadInstanceAsync(archives, provider, "project-id", "release-id", progress, CancellationToken.None);
+
+        Assert.Equal((provider, "project-id", "release-id"), Assert.Single(archives.Requests));
+        Assert.Same(progress, archives.Progress);
+        Assert.Equal([archive.ArchivePath], fixture.Importer.InspectedPaths);
+        Assert.Equal([archive.ArchivePath], fixture.Importer.ImportedPaths);
+        Assert.True(fixture.Importer.Committed);
+        Assert.Equal([fixture.Result.InstancePath], fixture.Downloader.Paths);
+        Assert.Equal(fixture.Result.InstancePath, fixture.ViewModel.SelectedInstance?.InstancePath);
+        Assert.Single(fixture.ViewModel.DownloadFiles);
+        Assert.Single(fixture.ViewModel.CheckFiles);
+        Assert.Equal(2, fixture.ViewModel.SelectedDetailTab);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>在线原包下载、导入与依赖补全之间没有空闲窗口，不允许其他实例任务插入。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnlinePrepareImportAndCompletionKeepBusyWithoutAnIdleGap(bool mirror)
+    {
+        var fixture = new Fixture(mirror ? "Prism" : "Modrinth");
+        var archive = new PreparedInstanceArchive(mirror ? "cache/gtnh-prism.zip" : "cache/verified-pack.mrpack",
+            "Online pack", mirror ? "Prism" : "Modrinth");
+        var prepared = NewSignal<PreparedInstanceArchive>();
+        var importing = NewSignal<bool>();
+        var imported = NewSignal<InstanceImportResult>();
+        var downloading = NewSignal<bool>();
+        var downloaded = NewSignal<InstanceDownloadReport>();
+        var archives = new FakeArchives(archive) { Prepare = token => prepared.Task.WaitAsync(token) };
+        fixture.Importer.Import = token =>
+        {
+            importing.TrySetResult(true);
+            return imported.Task.WaitAsync(token);
+        };
+        fixture.Downloader.Download = (_, token) =>
+        {
+            downloading.TrySetResult(true);
+            return downloaded.Task.WaitAsync(token);
+        };
+        var busyChanges = new List<bool>();
+        fixture.ViewModel.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(InstancesViewModel.IsBusy)) busyChanges.Add(fixture.ViewModel.IsBusy);
+        };
+        using var cancellation = new CancellationTokenSource();
+        var operation = mirror
+            ? fixture.ViewModel.DownloadInstanceAsync((_, token) => prepared.Task.WaitAsync(token), null, cancellation.Token)
+            : fixture.ViewModel.DownloadInstanceAsync(archives, InstanceCatalogProvider.Modrinth,
+                "project", "version", null, cancellation.Token);
+        try
+        {
+            Assert.True(fixture.ViewModel.IsBusy);
+            Assert.Empty(fixture.Importer.InspectedPaths);
+            Assert.False(fixture.ViewModel.RefreshCommand.CanExecute(null));
+            prepared.SetResult(archive);
+            await importing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(fixture.ViewModel.IsBusy);
+            Assert.False(fixture.ViewModel.ImportCommand.CanExecute(null));
+            Assert.Equal([true], busyChanges);
+            imported.SetResult(fixture.Result);
+            await downloading.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(fixture.ViewModel.IsBusy);
+            Assert.False(fixture.ViewModel.CanInteract);
+            Assert.False(fixture.ViewModel.DownloadMissingCommand.CanExecute(null));
+            Assert.False(fixture.ViewModel.DeleteCommand.CanExecute(null));
+            Assert.Equal([true], busyChanges);
+            downloaded.SetResult(fixture.SuccessReport());
+            await operation.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal([true, false], busyChanges);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            await operation.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    /// <summary>独立镜像入口仍验证 Prism 格式，补全失败时保留实例且只报告一次结果。</summary>
+    [Theory]
+    [InlineData("Prism", false)]
+    [InlineData("Prism", true)]
+    [InlineData("Zip", false)]
+    public async Task MirrorArchiveRetainsFormatChecksAndCompletionResults(string format, bool completionFails)
+    {
+        var fixture = new Fixture(format);
+        var archive = new PreparedInstanceArchive("cache/gtnh-prism.zip", "GTNH 镜像实例", "Prism");
+        if (completionFails)
+            fixture.Downloader.Download = (_, _) => Task.FromException<InstanceDownloadReport>(new IOException("运行依赖下载失败"));
+        else
+            fixture.Downloader.Download = (_, _) =>
+            {
+                var report = fixture.SuccessReport();
+                return Task.FromResult(report with { CheckReport = report.CheckReport! with { LaunchProfilePath = "launch.json" } });
+            };
+
+        var status = await fixture.ViewModel.DownloadInstanceAsync((_, _) => Task.FromResult(archive), null, CancellationToken.None);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Contains(archive.ArchivePath, notice.Paths);
+        Assert.False(fixture.ViewModel.IsBusy);
+        if (format != "Prism")
+        {
+            Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+            Assert.Contains("格式不符", status);
+            Assert.False(fixture.Importer.Committed);
+            Assert.Empty(fixture.Downloader.Paths);
+            Assert.Equal(0, fixture.Dialogs.Confirmations);
+        }
+        else
+        {
+            Assert.True(fixture.Importer.Committed);
+            Assert.Equal(fixture.Result.InstancePath, fixture.ViewModel.SelectedInstance?.InstancePath);
+            Assert.Equal([fixture.Result.InstancePath], fixture.Downloader.Paths);
+            Assert.Contains(fixture.Result.InstancePath, notice.Paths);
+            if (completionFails) Assert.Contains("运行依赖下载失败", status);
+            Assert.Equal(completionFails ? OperationNoticeKind.Warning : OperationNoticeKind.Success, notice.Kind);
+        }
+    }
+
+    /// <summary>原包下载失败时不读取或导入缓存，也不会开始实例补全。</summary>
+    [Fact]
+    public async Task OnlineArchiveFailureDoesNotInspectOrImport()
+    {
+        var fixture = new Fixture();
+        var archives = new FakeArchives(new("cache/unused.zip", "Online pack", "CurseForge"))
+        { Prepare = _ => Task.FromException<PreparedInstanceArchive>(new HttpRequestException("原包下载网络故障")) };
+
+        var status = await fixture.ViewModel.DownloadInstanceAsync(archives, InstanceCatalogProvider.CurseForge,
+            "project", "version", null, CancellationToken.None);
+
+        Assert.Contains("原包下载网络故障", status);
+        Assert.Empty(fixture.Importer.InspectedPaths);
+        Assert.Empty(fixture.Importer.ImportedPaths);
+        Assert.Empty(fixture.Downloader.Paths);
+        Assert.Empty(fixture.ViewModel.Instances);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>取消原包下载传递令牌，下载器即使迟到返回缓存也不能继续导入。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanceledOnlineArchiveDoesNotInspectOrImport(bool returnsAfterCancellation)
+    {
+        var fixture = new Fixture();
+        var archive = new PreparedInstanceArchive("cache/verified.zip", "Online pack", "CurseForge");
+        var preparing = NewSignal<bool>();
+        var prepared = NewSignal<PreparedInstanceArchive>();
+        var archives = new FakeArchives(archive)
+        {
+            Prepare = token =>
+            {
+                preparing.TrySetResult(true);
+                return returnsAfterCancellation ? prepared.Task : prepared.Task.WaitAsync(token);
+            }
+        };
+        using var cancellation = new CancellationTokenSource();
+        var operation = fixture.ViewModel.DownloadInstanceAsync(archives, InstanceCatalogProvider.CurseForge,
+            "project", "version", null, cancellation.Token);
+        await preparing.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cancellation.Cancel();
+        prepared.TrySetResult(archive);
+        var status = await operation.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(archives.Token.IsCancellationRequested);
+        Assert.Contains("尚未导入", status);
+        Assert.Contains("取消", fixture.ViewModel.TransferStatus);
+        Assert.Empty(fixture.Importer.InspectedPaths);
+        Assert.Empty(fixture.Importer.ImportedPaths);
+        Assert.Empty(fixture.Downloader.Paths);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>下载来源声明与实际包格式不符时，在命名确认及导入之前拒绝。</summary>
+    [Theory]
+    [InlineData("Modrinth", "CurseForge")]
+    [InlineData("CurseForge", "Zip")]
+    [InlineData("Zip", "Prism")]
+    public async Task OnlineArchiveFormatMismatchRejectsBeforeConfirmation(string expected, string actual)
+    {
+        var fixture = new Fixture(actual);
+        var archive = new PreparedInstanceArchive("cache/mismatched.zip", "Online pack", expected);
+        var archives = new FakeArchives(archive);
+
+        var status = await fixture.ViewModel.DownloadInstanceAsync(archives, InstanceCatalogProvider.CurseForge,
+            "project", "version", null, CancellationToken.None);
+
+        Assert.Contains("格式不符", status);
+        Assert.Contains(expected, status);
+        Assert.Contains(actual, status);
+        Assert.Equal([archive.ArchivePath], fixture.Importer.InspectedPaths);
+        Assert.Equal(0, fixture.Dialogs.Confirmations);
+        Assert.Empty(fixture.Importer.ImportedPaths);
+        Assert.Empty(fixture.Downloader.Paths);
+        Assert.Empty(fixture.ViewModel.Instances);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>用户在命名预览中取消后不安装，已经成功准备的缓存记录仍保留供后续使用。</summary>
+    [Fact]
+    public async Task CancelOnlineImportNameKeepsPreparedArchiveWithoutInstalling()
+    {
+        var fixture = new Fixture("Modrinth");
+        fixture.Dialogs.Confirm = _ => null;
+        var archive = new PreparedInstanceArchive("cache/verified.mrpack", "Online pack", "Modrinth");
+        var archives = new FakeArchives(archive);
+
+        var status = await fixture.ViewModel.DownloadInstanceAsync(archives, InstanceCatalogProvider.Modrinth,
+            "project", "version", null, CancellationToken.None);
+
+        Assert.Contains("取消导入", status);
+        Assert.Equal(archive, Assert.Single(archives.CachedArchives));
+        Assert.Equal(1, fixture.Dialogs.Confirmations);
+        Assert.Empty(fixture.Importer.ImportedPaths);
+        Assert.Empty(fixture.Downloader.Paths);
+        Assert.Empty(fixture.ViewModel.Instances);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>在线安装的补全失败仍显示已导入实例和明确失败信息，可再次补全。</summary>
+    [Fact]
+    public async Task OnlineCompletionFailurePreservesImportedInstance()
+    {
+        var fixture = new Fixture("CurseForge");
+        fixture.Downloader.Download = (_, _) => Task.FromException<InstanceDownloadReport>(new IOException("依赖下载失败"));
+        var archives = new FakeArchives(new("cache/verified.zip", "Online pack", "CurseForge"));
+
+        var status = await fixture.ViewModel.DownloadInstanceAsync(archives, InstanceCatalogProvider.CurseForge,
+            "project", "version", null, CancellationToken.None);
+
+        Assert.True(fixture.Importer.Committed);
+        Assert.Equal(fixture.Result.InstancePath, fixture.ViewModel.SelectedInstance?.InstancePath);
+        Assert.Single(fixture.ViewModel.Instances);
+        Assert.Contains("已导入", status);
+        Assert.Contains("依赖下载失败", status);
+        Assert.True(fixture.ViewModel.DownloadMissingCommand.CanExecute(null));
         Assert.False(fixture.ViewModel.IsBusy);
     }
 
@@ -263,6 +622,8 @@ public sealed class InstancesViewModelImportTests
         public FakeImporter Importer { get; }
         public FakeLocator Locator { get; }
         public FakeDownloader Downloader { get; }
+        public FakeDialogs Dialogs { get; } = new();
+        public RecordingNotifications Notifications { get; } = new();
         public InstancesViewModel ViewModel { get; }
 
         /// <summary>设置一个可识别的导入结果，不创建目录或依赖真实整合包。</summary>
@@ -277,8 +638,8 @@ public sealed class InstancesViewModelImportTests
             Importer = new FakeImporter(Result);
             Locator = new FakeLocator { Find = _ => Task.FromResult<IReadOnlyList<MinecraftInstance>>([Instance]) };
             Downloader = new FakeDownloader { Download = (_, _) => Task.FromResult(SuccessReport()) };
-            ViewModel = new(Locator, new UnusedManager(), Importer, new FakeDialogs(), InstancesRoot,
-                new UnusedChecker(), Downloader);
+            ViewModel = new(Locator, new UnusedManager(), Importer, Dialogs, InstancesRoot,
+                new UnusedChecker(), Downloader, notifications: Notifications);
         }
 
         /// <summary>提供下载及最终复查结果，验证界面发布的是共享补全工作流的真实返回值。</summary>
@@ -293,23 +654,59 @@ public sealed class InstancesViewModelImportTests
         }
     }
 
+    /// <summary>收集真实命令发出的结果通知，不显示窗口。</summary>
+    private sealed class RecordingNotifications : IOperationNotifications
+    {
+        public List<OperationNotice> Notices { get; } = [];
+        /// <summary>按发送顺序记录结果，以检查重复、误报成功和遗漏路径。</summary>
+        public void Report(OperationNotice notice) => Notices.Add(notice);
+    }
+
     /// <summary>模拟可暂停或失败的导入，只在成功返回时记录提交。</summary>
     private sealed class FakeImporter(InstanceImportResult result) : IMinecraftInstanceImporter
     {
         public Func<CancellationToken, Task<InstanceImportResult>> Import { get; set; } = _ => Task.FromResult(result);
         public bool Committed { get; private set; }
+        public List<string> InspectedPaths { get; } = [];
+        public List<string> ImportedPaths { get; } = [];
 
         /// <summary>返回已知格式的预览，跳过真实压缩包读取。</summary>
-        public Task<InstanceImportPreview> InspectAsync(string archivePath, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new InstanceImportPreview(result.Manifest.Name, result.Manifest.SourceFormat, "1.20.1", [], 1, 1, 0, []));
+        public Task<InstanceImportPreview> InspectAsync(string archivePath, CancellationToken cancellationToken = default)
+        {
+            InspectedPaths.Add(archivePath);
+            return Task.FromResult(new InstanceImportPreview(result.Manifest.Name, result.Manifest.SourceFormat, "1.20.1", [], 1, 1, 0, []));
+        }
 
         /// <summary>执行测试设定的导入行为，成功时才标记实例已提交。</summary>
         public async Task<InstanceImportResult> ImportAsync(string archivePath, string instanceName,
             IProgress<InstanceImportProgress>? progress = null, CancellationToken cancellationToken = default)
         {
+            ImportedPaths.Add(archivePath);
             var imported = await Import(cancellationToken);
             Committed = true;
             return imported;
+        }
+    }
+
+    /// <summary>记录下载请求、取消令牌和已准备缓存，替身不创建或删除任何磁盘文件。</summary>
+    private sealed class FakeArchives(PreparedInstanceArchive archive) : IInstanceArchiveService
+    {
+        public Func<CancellationToken, Task<PreparedInstanceArchive>> Prepare { get; set; } = _ => Task.FromResult(archive);
+        public List<(InstanceCatalogProvider Provider, string ProjectId, string ReleaseId)> Requests { get; } = [];
+        public List<PreparedInstanceArchive> CachedArchives { get; } = [];
+        public IProgress<FileDownloadProgress>? Progress { get; private set; }
+        public CancellationToken Token { get; private set; }
+
+        /// <summary>仅在成功准备后记录缓存，允许测试在网络阶段挂起或失败。</summary>
+        public async Task<PreparedInstanceArchive> PrepareAsync(InstanceCatalogProvider provider, string projectId, string releaseId,
+            IProgress<FileDownloadProgress>? progress = null, CancellationToken cancellationToken = default)
+        {
+            Requests.Add((provider, projectId, releaseId));
+            Progress = progress;
+            Token = cancellationToken;
+            var prepared = await Prepare(cancellationToken);
+            CachedArchives.Add(prepared);
+            return prepared;
         }
     }
 
@@ -338,10 +735,16 @@ public sealed class InstancesViewModelImportTests
     /// <summary>自动确认导入对话框，不创建 WPF 窗口。</summary>
     private sealed class FakeDialogs : IInstanceDialogs
     {
+        public Func<InstanceImportPreview, string?> Confirm { get; set; } = preview => preview.SuggestedName;
+        public int Confirmations { get; private set; }
         /// <summary>返回虚拟压缩包路径。</summary>
         public string? ChooseImportPath() => "test-pack.zip";
         /// <summary>采用测试预览的建议名称。</summary>
-        public string? ConfirmImport(InstanceImportPreview preview) => preview.SuggestedName;
+        public string? ConfirmImport(InstanceImportPreview preview)
+        {
+            Confirmations++;
+            return Confirm(preview);
+        }
         /// <summary>本组测试不允许删除实例。</summary>
         public bool ConfirmDelete(MinecraftInstance instance) => throw new NotSupportedException();
         /// <summary>本组测试不允许导出实例。</summary>

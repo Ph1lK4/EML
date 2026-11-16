@@ -7,6 +7,8 @@ public sealed record CurseForgeFile
     public int GameId { get; init; }
     public long ModId { get; init; }
     public bool IsAvailable { get; init; }
+    /// <summary>官方声明的服务端包标志；客户端整合包目录不会将此文件安装为客户端。</summary>
+    public bool IsServerPack { get; init; }
     public string DisplayName { get; init; } = "";
     public string FileName { get; init; } = "";
     public long FileLength { get; init; }
@@ -47,11 +49,27 @@ public sealed record CurseForgeMod
     public bool IsAvailable { get; init; }
     public CurseForgeModLinks Links { get; init; } = new();
     public CurseForgeModAsset? Logo { get; init; }
+    public IReadOnlyList<CurseForgeAuthor> Authors { get; init; } = [];
     public IReadOnlyList<CurseForgeCategory> Categories { get; init; } = [];
     public IReadOnlyList<CurseForgeFile> LatestFiles { get; init; } = [];
     public long MainFileId { get; init; }
     public double DownloadCount { get; init; }
     public DateTimeOffset DateModified { get; init; }
+}
+
+/// <summary>项目作者显示名称与主页，不包含任何登录凭据。</summary>
+public sealed record CurseForgeAuthor
+{
+    public long Id { get; init; }
+    public string Name { get; init; } = "";
+    public string? Url { get; init; }
+}
+
+/// <summary>完整文件列表的单页结果，与项目 latestFiles 摘要区分。</summary>
+public sealed record CurseForgeFilePage
+{
+    public IReadOnlyList<CurseForgeFile> Data { get; init; } = [];
+    public CurseForgePagination Pagination { get; init; } = new();
 }
 
 /// <summary>作者项目网页及帮助链接，供无法自动获取文件时指向合法来源。</summary>

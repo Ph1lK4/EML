@@ -2,7 +2,10 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Migration;
+using EML.Core.Minecraft.Mods;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Mods;
+using EML.Infrastructure.Minecraft.Gtnh;
 
 namespace EML.Infrastructure.Minecraft.Migration;
 
@@ -66,6 +69,12 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
             "文件迁移不代表存档兼容；GTNH 大跨度更新请逐个大版本进入存档、退出后再继续。" };
         var sourceManifest = InstanceManifestStore.Read(Path.Combine(source.InstancePath, InstanceImportManifest.FileName));
         var targetManifest = InstanceManifestStore.Read(Path.Combine(target.InstancePath, InstanceImportManifest.FileName));
+        var sourceContent = AddedContentStore.Read(source.InstancePath, sourceManifest);
+        var targetContent = AddedContentStore.Read(target.InstancePath, targetManifest);
+        var sourceRequirements = includesMods ? InstanceEffectiveRequirements.Build(source.InstancePath, sourceManifest).Requirements : [];
+        var sourceModState = ModManagementStore.Read(source.InstancePath, sourceManifest);
+        var sourceMigratedMods = includesMods ? MigrationDataStore.Read(source.InstancePath, sourceManifest).Files
+            .Where(file => file.Rule == GtnhExtraModPolicy.Rule).ToArray() : [];
         var targetMods = includesMods ? await GtnhExtraModCatalog.SnapshotAsync(target.GameDirectory, token) : [];
         var selectedMods = new List<GtnhExtraModCatalog.Mod>();
         var declaredMods = includesMods ? GtnhExtraModCatalog.DeclaredPaths(target.InstancePath, targetManifest) : [];
@@ -80,13 +89,37 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
                 if (files.Count >= MigrationIO.MaximumFiles) throw new IOException("迁移文件数量过多。");
                 var path = group[GtnhExtraModPolicy.GroupPrefix.Length..];
                 var mod = await GtnhExtraModCatalog.ReadAsync(source.GameDirectory, path, token);
+                // 已管理内容不能通过迁移重新获得信任；只接受原基线或此前明确确认的替换。
+                var sourcePrefix = sourceManifest.GameDirectory == "." ? "" : sourceManifest.GameDirectory + "/";
+                var sourceIdentity = LocalModPathPolicy.EnabledPath(sourcePrefix + path);
+                var managed = sourceModState.Files.SingleOrDefault(file => LocalModPathPolicy.EnabledPath(file.Baseline.Path!)
+                    .Equals(sourceIdentity, StringComparison.OrdinalIgnoreCase));
+                var reservedPath = managed is null ? sourceMigratedMods.SingleOrDefault(file => LocalModPathPolicy.EnabledPath(file.Path)
+                    .Equals(sourceIdentity, StringComparison.OrdinalIgnoreCase))?.Path : ModManagementStore.CurrentPath(managed);
+                if (managed?.State == LocalModState.Removed || reservedPath is not null &&
+                    !reservedPath.Equals(sourcePrefix + path, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("该文件是已管理模组的未登记副本，不能通过迁移接受其内容：" + path);
+                var trusted = sourceRequirements.SingleOrDefault(file =>
+                    string.Equals(file.Path, sourcePrefix + path, StringComparison.OrdinalIgnoreCase));
+                if (trusted?.Origin == InstanceFileOrigin.UserLocalImport &&
+                    (trusted.Size != mod.Size || !trusted.Hashes.TryGetValue("sha256", out var trustedHash) ||
+                     !trustedHash.Equals(mod.Sha256, StringComparison.OrdinalIgnoreCase)))
+                    throw new IOException("额外模组与已确认内容不一致，请先处理本地修改：" + path);
+                var trackedOnline = managed is not null || sourceMigratedMods.Any(file => file.OnlineModBaseline is not null &&
+                    file.Path.Equals(sourcePrefix + path, StringComparison.OrdinalIgnoreCase));
+                var online = trackedOnline && trusted?.Origin is InstanceFileOrigin.CurseForgeDownload or InstanceFileOrigin.ModrinthDownload or InstanceFileOrigin.GithubReleaseDownload
+                    ? trusted : null;
+                if (online is not null && !await Runtime.InstanceRuntimeInstaller.ExistingFileMatchesAsync(
+                    MigrationIO.SafePath(source.GameDirectory, path), online, token).ConfigureAwait(false))
+                    throw new IOException("在线模组与官方内容不一致，不能通过迁移接受修改：" + path);
                 var previous = await MigrationIO.SnapshotAsync(MigrationIO.SafePath(target.GameDirectory, path), token);
                 var collision = GtnhExtraModCatalog.Collision(mod, targetMods.Concat(selectedMods), declaredMods);
                 var action = collision is null ? MigrationFileAction.Copy : MigrationFileAction.Skip;
                 if (!destinations.Add(path)) throw new InvalidDataException("迁移目标重复。");
                 files.Add(new(group, path, path, mod.Size, mod.Sha256, mod.Size, mod.Sha256,
                     previous?.Size, previous?.Hash, action)
-                { Detail = collision ?? (mod.Ids.Count == 0 ? "未提供可读 modid，请自行确认没有不同文件名的重复模组。" : "需自行确认版本兼容性；只复制所选文件。") });
+                { OnlineModBaseline = online,
+                    Detail = collision ?? (mod.Ids.Count == 0 ? "未提供可读 modid，请自行确认没有不同文件名的重复模组。" : "需自行确认版本兼容性；只复制所选文件。") });
                 if (action == MigrationFileAction.Copy) selectedMods.Add(mod);
                 continue;
             }
@@ -117,8 +150,21 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
                     var destination = worldTarget is null ? sourcePath : worldTarget + sourcePath[prefix.Length..];
                     if (!destinations.Add(destination)) throw new InvalidDataException("迁移目标重复。");
                     var from = MigrationIO.SafePath(source.GameDirectory, sourcePath);
-                    var to = MigrationIO.SafePath(target.GameDirectory, destination);
                     var original = await MigrationIO.SnapshotAsync(from, token) ?? throw new IOException("源文件已消失。");
+                    // 官方资源仍保留平台基线，不借玩家数据迁移把当前字节重新认可为可变内容。
+                    // 在读取目标前排除受保护文件和父子路径冲突，避免把新版 ZIP 当成目录继续访问。
+                    var protectedTarget = ContentOwnsPath(targetContent, targetManifest, destination);
+                    var protectedSource = ContentOwnsPath(sourceContent, sourceManifest, sourcePath);
+                    if (protectedTarget || protectedSource)
+                    {
+                        var reason = protectedTarget ? "新版此路径已登记官方资源，保留现有来源；覆盖冲突开关不会替换它。" :
+                            "旧版此文件是已登记的官方资源，请在新实例重新选择适配版本下载；不转为玩家数据或重新建立摘要。";
+                        files.Add(new(group, sourcePath, destination, original.Size, original.Hash,
+                            original.Size, original.Hash, null, null, MigrationFileAction.Skip) { Detail = reason });
+                        notes.Add(sourcePath + "：" + reason);
+                        continue;
+                    }
+                    var to = MigrationIO.SafePath(target.GameDirectory, destination);
                     var previous = await MigrationIO.SnapshotAsync(to, token);
                     var expected = original;
                     if (group == "language")
@@ -139,14 +185,31 @@ internal sealed class GtnhMigrationPlanner(string launcherRoot)
         {
             request, source, target, files, TargetMods = targetMods, DeclaredMods = declaredMods, Source = EmbeddedFileBaseline.ManifestFingerprint(sourceManifest),
             Target = EmbeddedFileBaseline.ManifestFingerprint(targetManifest), Data = MigrationDataStore.Read(target.InstancePath, targetManifest),
+            SourceModState = sourceModState,
+            TargetModState = ModManagementStore.Read(target.InstancePath, targetManifest),
+            SourceAddedContent = sourceContent, TargetAddedContent = targetContent,
             Replacement = InstanceLocalReplacementService.ApplyWithSnapshot(target.InstancePath, targetManifest, targetManifest.Files).ReplacementFingerprint
         })));
         return new(request, source, target, files, notes, fingerprint);
     }
 
+    /// <summary>把游戏相对位置映射到来源清单，保护官方资源及其父子路径，不按文件名猜测来源。</summary>
+    private static bool ContentOwnsPath(AddedContentStore.Snapshot snapshot, InstanceImportManifest manifest, string gamePath)
+    {
+        var relative = (manifest.GameDirectory == "." ? "" : manifest.GameDirectory + "/") + gamePath;
+        return snapshot.Files.Any(record => record.Baseline.Path is { } path &&
+            (path.Equals(relative, StringComparison.OrdinalIgnoreCase) || path.StartsWith(relative + "/", StringComparison.OrdinalIgnoreCase) ||
+             relative.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)));
+    }
+
     /// <summary>未识别实例不得凭名称进入 GTNH 文件迁移管线。</summary>
-    private GtnhInstanceInfo Require(string path) => GtnhIdentity.Read(launcherRoot, path) ??
-        throw new InvalidOperationException("未确认此实例为受支持的 GTNH：需要 1.7.10、GTNH 包内版本标识及配置特征。");
+    private GtnhInstanceInfo Require(string path)
+    {
+        var root = EmbeddedFileBaseline.ValidateInstance(launcherRoot, path);
+        ModOperationJournal.EnsureSettled(root);
+        return GtnhIdentity.Read(launcherRoot, root) ??
+            throw new InvalidOperationException("未确认此实例为受支持的 GTNH：需要 1.7.10、GTNH 包内版本标识及配置特征。");
+    }
     /// <summary>只检查明确路径，链接或异常父目录仍拒绝。</summary>
     private static bool Exists(string game, string relative) { var path = MigrationIO.SafePath(game, relative); return File.Exists(path) || Directory.Exists(path); }
 }

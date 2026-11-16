@@ -3,6 +3,7 @@ using System.Text.Json;
 using EML.Core.Minecraft;
 using EML.Core.Minecraft.Migration;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Mods;
 
 namespace EML.Infrastructure.Minecraft.Migration;
 
@@ -38,6 +39,7 @@ public sealed class GtnhInstanceMigrationService(string launcherRoot) : IMinecra
         var target = EmbeddedFileBaseline.ValidateInstance(_root, proposed.Request.TargetInstance);
         using var lease = InstanceOperationLease.Acquire(source, target);
         MigrationJournalStore.EnsureSettled(source); MigrationJournalStore.EnsureSettled(target);
+        ModOperationJournal.EnsureSettled(source); ModOperationJournal.EnsureSettled(target);
         progress?.Report(new("重新确认迁移预览", "", 0, proposed.Files.Count));
         var plan = await _planner.BuildAsync(proposed.Request, token);
         if (plan.Fingerprint != proposed.Fingerprint) throw new IOException("源或目标文件在预览后发生变化，请重新预览。");
@@ -56,6 +58,7 @@ public sealed class GtnhInstanceMigrationService(string launcherRoot) : IMinecra
         {
             Id = Guid.NewGuid().ToString("N"), GameDirectory = manifest.GameDirectory,
             LocalReplacementFingerprint = previousReplacements.ReplacementFingerprint,
+            ModManagementFingerprint = ModManagementStore.Read(target, manifest).LocalFingerprint,
             ManifestFingerprint = EmbeddedFileBaseline.ManifestFingerprint(manifest), SourceName = plan.Source.Name
         };
         var directory = MigrationJournalStore.DirectoryPath(target, journal.Id);
@@ -92,6 +95,7 @@ public sealed class GtnhInstanceMigrationService(string launcherRoot) : IMinecra
                 migrated[relative] = new(relative, file.Size, file.Sha256, journal.Id,
                     extraMod ? GtnhExtraModPolicy.Rule : "gtnh-player-v1")
                 {
+                    OnlineModBaseline = file.OnlineModBaseline is { } online ? online with { Path = relative } : null,
                     SupersededLocalSha256 = priorSelections.TryGetValue(relative, out var selected) &&
                         selected.Origin == InstanceFileOrigin.UserLocalImport && selected.Hashes.TryGetValue("sha256", out var selectedHash)
                         ? selectedHash : null
@@ -159,6 +163,7 @@ public sealed class GtnhInstanceMigrationService(string launcherRoot) : IMinecra
     {
         var target = EmbeddedFileBaseline.ValidateInstance(_root, instancePath);
         using var lease = InstanceOperationLease.Acquire(target);
+        ModOperationJournal.EnsureSettled(target);
         var latest = await GetRecoveryAsync(target, token);
         if (latest?.Id != migrationId) throw new InvalidOperationException("只能依次恢复最近一次迁移。");
         return await RestoreCoreAsync(target, MigrationJournalStore.Read(target, migrationId), progress, token);
@@ -175,6 +180,8 @@ public sealed class GtnhInstanceMigrationService(string launcherRoot) : IMinecra
         {
             if (!Directory.Exists(target)) throw new DirectoryNotFoundException("实例目录已移动，不能在旧路径重建恢复数据。");
             var manifest = InstanceManifestStore.Read(Path.Combine(target, InstanceImportManifest.FileName));
+            if (ModManagementStore.Read(target, manifest).LocalFingerprint != journal.ModManagementFingerprint)
+                throw new IOException("迁移后模组管理选择已变化，停止恢复以保留新的选择。");
             if (InstanceLocalReplacementService.ApplyWithSnapshot(target, manifest, manifest.Files).ReplacementFingerprint != journal.LocalReplacementFingerprint)
                 throw new IOException("迁移后用户文件替换记录已变化，停止恢复以保留新的选择。");
             var expected = journal.Files.Select(entry => entry.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
