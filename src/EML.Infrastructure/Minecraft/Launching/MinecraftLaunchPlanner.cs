@@ -162,7 +162,7 @@ public sealed partial class MinecraftLaunchPlanner
         CheckCriticalFiles(root, runtime, state, sourceSnapshot.Requirements, profile, classPaths, token);
         progress?.Report(new(MinecraftLaunchStage.Preparing, $"启动准备完成；Java {javaMajor}，玩家 {playerName}（{(session is null ? "离线" : "正版")}），最大内存 {settings.MaxMemoryMb} MB。"));
         return new(root, game, java.ExecutablePath, javaMajor, arguments.ToArray())
-        { NativesDirectory = natives, SensitiveValues = session is null ? [] : [accessToken] };
+        { NativesDirectory = natives, SensitiveValues = session is null ? [] : [accessToken], LogEncoding = settings.LogEncoding };
     }
 
     /// <summary>缺少组件元数据或加载器尚不支持时明确失败，不降级到其他启动入口。</summary>

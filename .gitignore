@@ -380,3 +380,6 @@ cache/
 
 # Managed Java runtimes downloaded by EML; never commit binaries.
 /runtimes/
+
+# Portable launcher preferences are user data, not release assets.
+/settings/

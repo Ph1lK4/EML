@@ -9,7 +9,7 @@ namespace EML.Infrastructure.Minecraft.Importing;
 internal static class InstanceManifestStore
 {
     // EML 记录包内全部文件（包括存档和地图），不能沿用平台组件清单的 8 MiB 上限。
-    internal const int MaximumBytes = 64 * 1024 * 1024;
+    internal const int MaximumBytes = InstanceArchiveLimits.MaximumInstanceManifestBytes;
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -89,7 +89,7 @@ internal static class InstanceManifestStore
     {
         if (manifest.SchemaVersion != 1 || string.IsNullOrWhiteSpace(manifest.SourceFormat) || manifest.Name is null ||
             manifest.Files is null || manifest.Components is null || manifest.Notes is null ||
-            manifest.Files.Count > SafeInstanceArchive.MaxEntries || manifest.Components.Count > 1024)
+            manifest.Files.Count > InstanceArchiveLimits.MaximumFileRequirements || manifest.Components.Count > 1024)
             throw new InvalidDataException("不支持或损坏的 EML 实例清单。");
         if (manifest.GameDirectory != ".") InstanceImportPaths.Relative(manifest.GameDirectory);
         if (manifest.MigratedPlayerFiles is not null) MigrationDataStore.Validate(manifest, manifest.MigratedPlayerFiles);

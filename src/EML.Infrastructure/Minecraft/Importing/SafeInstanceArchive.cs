@@ -12,16 +12,17 @@ internal sealed record SafeArchiveEntry(ZipArchiveEntry Entry, string Path, bool
 /// <summary>统一保护所有包格式，不因识别为某平台而跳过 ZIP 路径检查。</summary>
 internal static class SafeInstanceArchive
 {
-    internal const int MaxEntries = 100_000;
-    internal const long MaxUncompressedBytes = 50L * 1024 * 1024 * 1024;
+    internal const int MaxEntries = InstanceArchiveLimits.DefaultMaximumEntries;
+    internal const long MaxUncompressedBytes = InstanceArchiveLimits.DefaultMaximumUncompressedBytes;
     // 平台原始元数据的限制；EML 全文件清单在读取入口显式传入自己的上限。
-    internal const int MaxManifestBytes = 8 * 1024 * 1024;
+    internal const int MaxManifestBytes = InstanceArchiveLimits.MaximumPlatformManifestBytes;
 
     /// <summary>检查条目数量、总大小、链接和路径冲突，返回可供解析的条目列表。</summary>
-    internal static IReadOnlyList<SafeArchiveEntry> ReadEntries(ZipArchive archive, CancellationToken token)
+    internal static IReadOnlyList<SafeArchiveEntry> ReadEntries(ZipArchive archive, CancellationToken token,
+        InstanceArchiveLimits? limits = null)
     {
-        if (archive.Entries.Count == 0 || archive.Entries.Count > MaxEntries)
-            throw new InvalidDataException("压缩包为空或条目数量超过 100000。");
+        limits ??= InstanceArchiveLimits.Default;
+        limits.ValidateEntryCount(archive.Entries.Count);
         long total = 0;
         var entries = new List<SafeArchiveEntry>();
         foreach (var entry in archive.Entries)
@@ -33,9 +34,7 @@ internal static class SafeInstanceArchive
                 throw new InvalidDataException("不支持压缩包中的符号链接或特殊文件：" + entry.FullName);
             var directory = entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\') || type == 0x4000;
             var path = InstanceImportPaths.Relative(directory ? entry.FullName.TrimEnd('/', '\\') : entry.FullName);
-            if (entry.Length < 0 || entry.Length > MaxUncompressedBytes - total || (directory && entry.Length != 0))
-                throw new InvalidDataException("解压后的文件总量超过 50 GiB，或条目长度无效。");
-            total += entry.Length;
+            total = limits.AddLength(total, entry.Length, directory, path);
             entries.Add(new(entry, path, directory));
         }
         InstanceImportPaths.ValidateLayout(entries.Select(e => (e.Path, e.Directory)));

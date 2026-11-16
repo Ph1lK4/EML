@@ -1,8 +1,10 @@
 <UserControl x:Class="EML.App.Views.InstanceWorkspaceView" Style="{StaticResource {x:Type UserControl}}"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:EML.App.Views">
   <!-- 索引沿用既有业务命令；功能入口在实例右键菜单中，不再显示内层标签栏。 -->
-  <TabControl SelectedIndex="{Binding SelectedDetailTab}" BorderThickness="0" Background="Transparent"
+  <local:WorkspaceTabControl SelectedIndex="{Binding SelectedDetailTab}" BorderThickness="0" Background="Transparent"
+              AutomationProperties.AutomationId="InstanceWorkspaceSections"
               HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
     <TabControl.Template>
       <ControlTemplate TargetType="TabControl">
@@ -201,5 +203,5 @@
         </StackPanel>
       </ScrollViewer>
     </TabItem>
-  </TabControl>
+  </local:WorkspaceTabControl>
 </UserControl>

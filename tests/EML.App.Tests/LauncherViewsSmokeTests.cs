@@ -58,11 +58,12 @@ public sealed class LauncherViewsSmokeTests
                 Source = new Uri("/EML.App;component/Themes/LauncherTheme.xaml", UriKind.Relative)
             });
             NavyThemeChecks.Run();
+            WorkspaceAccessibilityChecks.Run();
             var host = new Border { Width = 720, Height = 520 };
             var selection = new WorkspaceSelection();
             var workspace = new InstanceWorkspaceView { DataContext = selection, Visibility = Visibility.Collapsed };
             host.Child = workspace;
-            var sections = Assert.IsType<TabControl>(workspace.Content);
+            var sections = Assert.IsAssignableFrom<TabControl>(workspace.Content);
             Assert.Equal(8, sections.Items.Count);
             VerifyInitiallyClosedWorkspace(host, workspace, sections, selection);
             for (var index = 0; index < sections.Items.Count; index++)
@@ -367,6 +368,15 @@ public sealed class LauncherViewsSmokeTests
         arguments.Text = "-XX:+UseG1GC\n-Dexample=true";
         Assert.Equal(arguments.Text, model.AdditionalJvmArguments);
         Assert.True(arguments.LineCount >= 2);
+        var logEncoding = Assert.IsType<ComboBox>(page.FindName("LogEncodingSelector"));
+        Assert.Equal(3, logEncoding.Items.Count);
+        Assert.Equal(model.SelectedLogEncodingMode, logEncoding.SelectedItem);
+        logEncoding.SelectedItem = "系统编码（旧版 Java）";
+        Assert.Equal("系统编码（旧版 Java）", model.SelectedLogEncodingMode);
+        Layout(host);
+        var encodingBounds = logEncoding.TransformToAncestor(page).TransformBounds(new Rect(logEncoding.RenderSize));
+        Assert.True(encodingBounds.Top >= 0 && encodingBounds.Bottom <= page.ActualHeight);
+        Assert.True(encodingBounds.Left >= 0 && encodingBounds.Right <= page.ActualWidth);
         var save = Assert.Single(VisualDescendants(page).OfType<Button>(), item => Equals(item.Content, "保存设置"));
         var buttonBounds = save.TransformToAncestor(page).TransformBounds(new Rect(save.RenderSize));
         Assert.True(buttonBounds.Top >= 0 && buttonBounds.Bottom <= page.ActualHeight);
@@ -377,6 +387,7 @@ public sealed class LauncherViewsSmokeTests
         Assert.False(player.IsEnabled);
         Assert.False(java.IsEnabled);
         Assert.False(arguments.IsEnabled);
+        Assert.False(logEncoding.IsEnabled);
     }
 
     /// <summary>两个入口绑定同一个模型；更换账号、切换模式和离线名称编辑立即同步，忙碌时均锁定。</summary>
@@ -484,6 +495,8 @@ public sealed class LauncherViewsSmokeTests
         public string MinMemoryMbText { get; set; } = "1024";
         public string MaxMemoryMbText { get; set; } = "8192";
         public string AdditionalJvmArguments { get; set; } = "";
+        public IReadOnlyList<string> LogEncodingModes { get; } = ["自动（UTF-8 优先，兼容系统编码）", "UTF-8", "系统编码（旧版 Java）"];
+        public string SelectedLogEncodingMode { get; set; } = "自动（UTF-8 优先，兼容系统编码）";
         public string LaunchSettingsStatus => "设置按实例分别保存，修改后请点击保存。";
         public string LaunchStatus => "尚未启动游戏。";
         public object Java { get; } = new { Installations = Array.Empty<object>() };

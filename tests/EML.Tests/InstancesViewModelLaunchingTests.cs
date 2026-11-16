@@ -23,6 +23,8 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal("1024", fixture.ViewModel.MinMemoryMbText);
         Assert.Equal("8192", fixture.ViewModel.MaxMemoryMbText);
         Assert.Equal("", fixture.ViewModel.SelectedJavaPath);
+        Assert.Equal(MinecraftLogEncoding.Auto, fixture.ViewModel.LogEncoding);
+        Assert.Equal("自动（UTF-8 优先，兼容系统编码）", fixture.ViewModel.SelectedLogEncodingMode);
         Assert.True(fixture.ViewModel.CanEditLaunchSettings);
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.SaveLaunchSettingsCommand.CanExecute(null));
@@ -92,6 +94,90 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.True(fixture.ViewModel.UseMicrosoftAccount);
     }
 
+    /// <summary>日志编码使用每实例设置加载、保存与启动，不改写附加 JVM 参数。</summary>
+    [Theory]
+    [InlineData(MinecraftLogEncoding.Auto, "自动（UTF-8 优先，兼容系统编码）")]
+    [InlineData(MinecraftLogEncoding.Utf8, "UTF-8")]
+    [InlineData(MinecraftLogEncoding.SystemDefault, "系统编码（旧版 Java）")]
+    public async Task LogEncodingSelectionLoadsSavesAndLaunches(MinecraftLogEncoding encoding, string label)
+    {
+        var fixture = new Fixture();
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+            { LogEncoding = encoding, AdditionalJvmArguments = "-Dfile.encoding=GBK" });
+        await fixture.SelectAsync();
+        Assert.Equal(label, fixture.ViewModel.SelectedLogEncodingMode);
+        Assert.Equal(3, fixture.ViewModel.LogEncodingModes.Count);
+        fixture.ViewModel.SelectedLogEncodingMode = "UTF-8";
+        fixture.ViewModel.SelectedLogEncodingMode = label;
+
+        await fixture.ViewModel.SaveLaunchSettingsCommand.ExecuteAsync(null);
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(encoding, Assert.Single(fixture.Store.Saved).Settings.LogEncoding);
+        var launched = Assert.Single(fixture.Launcher.Calls).Settings;
+        Assert.Equal(encoding, launched.LogEncoding);
+        Assert.Equal("-Dfile.encoding=GBK", launched.AdditionalJvmArguments);
+    }
+
+    /// <summary>空白或未知下拉值不覆盖已经选择的日志编码。</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("未知")]
+    public async Task UnknownLogEncodingSelectionKeepsCurrentValue(string? selection)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.SelectedLogEncodingMode = "系统编码（旧版 Java）";
+
+        fixture.ViewModel.SelectedLogEncodingMode = selection!;
+
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, fixture.ViewModel.LogEncoding);
+    }
+
+    /// <summary>切换实例保留各自的未保存编码草稿，重新读取才丢弃当前实例草稿。</summary>
+    [Fact]
+    public async Task LogEncodingDraftsAreIsolatedAndExplicitReloadDiscardsThem()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.SystemDefault;
+        var other = fixture.Instance with { Name = "Other", InstancePath = fixture.Instance.InstancePath + "2" };
+        fixture.ViewModel.SelectedInstance = other;
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.Equal(MinecraftLogEncoding.Auto, fixture.ViewModel.LogEncoding);
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.Utf8;
+
+        await fixture.SelectAsync();
+
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, fixture.ViewModel.LogEncoding);
+        await StartLaunch(fixture.ViewModel);
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, Assert.Single(fixture.Launcher.Calls).Settings.LogEncoding);
+        await fixture.ViewModel.ReloadLaunchSettingsCommand.ExecuteAsync(null);
+        Assert.Equal(MinecraftLogEncoding.Auto, fixture.ViewModel.LogEncoding);
+        fixture.ViewModel.SelectedInstance = other;
+        await fixture.ViewModel.LaunchSettingsLoadTask;
+        Assert.Equal(MinecraftLogEncoding.Utf8, fixture.ViewModel.LogEncoding);
+    }
+
+    /// <summary>开始启动前冻结日志偏好，忙碌状态造成的界面变更不能影响本次解码。</summary>
+    [Fact]
+    public async Task LaunchCapturesLogEncodingBeforeBusyNotifications()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.SystemDefault;
+        fixture.ViewModel.PropertyChanged += (_, change) =>
+        {
+            if (change.PropertyName == nameof(InstancesViewModel.IsBusy) && fixture.ViewModel.IsBusy)
+                fixture.ViewModel.LogEncoding = MinecraftLogEncoding.Utf8;
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, Assert.Single(fixture.Launcher.Calls).Settings.LogEncoding);
+    }
+
     /// <summary>确认下载后只替换 Java 路径，重试仍使用点击启动时的身份、内存和 JVM 参数。</summary>
     [Fact]
     public async Task MissingJavaDownloadsAfterConsentAndRetriesFrozenSettings()
@@ -105,6 +191,7 @@ public sealed class InstancesViewModelLaunchingTests
         fixture.ViewModel.UseMicrosoftAccount = true;
         fixture.ViewModel.MaxMemoryMbText = "6144";
         fixture.ViewModel.AdditionalJvmArguments = "-Dtest=value";
+        fixture.ViewModel.LogEncoding = MinecraftLogEncoding.SystemDefault;
         fixture.Launcher.Run = (_, _) => fixture.Launcher.Calls.Count == 1
             ? Task.FromException<MinecraftLaunchResult>(MissingJava())
             : Task.FromResult(new MinecraftLaunchResult(true, 0, false, null));
@@ -112,6 +199,7 @@ public sealed class InstancesViewModelLaunchingTests
         {
             fixture.ViewModel.PlayerName = "ChangedLater";
             fixture.ViewModel.UseMicrosoftAccount = false;
+            fixture.ViewModel.LogEncoding = MinecraftLogEncoding.Utf8;
         };
 
         await StartLaunch(fixture.ViewModel);
@@ -125,6 +213,7 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal(fixture.Launcher.Calls[0].Settings with { JavaPath = runtimes.Installation.ExecutablePath }, second.Settings);
         Assert.True(second.Settings.UseMicrosoftAccount);
         Assert.Equal("OriginalName", second.Settings.PlayerName);
+        Assert.Equal(MinecraftLogEncoding.SystemDefault, second.Settings.LogEncoding);
         Assert.Equal(runtimes.Installation.ExecutablePath, fixture.ViewModel.SelectedJavaPath);
         Assert.Equal(runtimes.Installation, Assert.Single(java.Installations));
         Assert.Empty(fixture.Store.Saved);
@@ -736,9 +825,8 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
         progress.Report(new(MinecraftLaunchStage.Running, "重复阶段事件", LogPath: "current.log"));
         Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
-        var runningNotice = Assert.Single(fixture.Notifications.Notices);
-        Assert.Equal(OperationNoticeKind.Success, runningNotice.Kind);
-        Assert.Contains("请在游戏窗口确认加载结果", runningNotice.Message);
+        Assert.Empty(fixture.Notifications.Notices);
+        Assert.Contains("请在游戏窗口确认加载结果", fixture.ViewModel.LaunchStatus);
         Assert.True(fixture.ViewModel.IsGameRunning);
         Assert.False(fixture.ViewModel.IsPreparingLaunch);
         Assert.True(fixture.ViewModel.StopGameCommand.CanExecute(null));
@@ -759,8 +847,7 @@ public sealed class InstancesViewModelLaunchingTests
         Assert.Equal("current.log", fixture.ViewModel.LaunchLogPath);
         Assert.True(fixture.ViewModel.RenameCommand.CanExecute(null));
         Assert.True(fixture.ViewModel.LaunchGameCommand.CanExecute(null));
-        Assert.Equal(2, fixture.Notifications.Notices.Count);
-        Assert.Equal(OperationNoticeKind.Cancelled, fixture.Notifications.Notices[^1].Kind);
+        Assert.Equal(OperationNoticeKind.Cancelled, Assert.Single(fixture.Notifications.Notices).Kind);
     }
 
     /// <summary>准备阶段取消会传递到共享检查流程，最终不会保留运行状态。</summary>
@@ -825,6 +912,131 @@ public sealed class InstancesViewModelLaunchingTests
         var notice = Assert.Single(fixture.Notifications.Notices);
         Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
         Assert.Contains("failure.log", notice.Paths);
+    }
+
+    /// <summary>即使进程返回零，启动服务提供的明确致命证据也必须显示为失败并保留实际退出码。</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public async Task FatalEvidenceReportsFailureRegardlessOfExitCode(int exitCode)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        var failure = new MinecraftLaunchFailure("SdlInitializationFailed", "游戏图形初始化失败。", "SDL_Init failed: test error");
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            progress!.Report(new(MinecraftLaunchStage.Running, "Java 已创建", LogPath: "fatal.log"));
+            return Task.FromResult(new MinecraftLaunchResult(true, exitCode, false, "fatal.log") { Failure = failure });
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains(failure.Summary, notice.Message);
+        Assert.Contains(failure.Evidence, notice.Message);
+        Assert.Contains($"退出码：{exitCode}", notice.Message);
+        Assert.Contains(fixture.Instance.InstancePath, notice.Paths);
+        Assert.Contains("fatal.log", notice.Paths);
+        Assert.Contains(failure.Summary, fixture.ViewModel.LaunchStatus);
+        Assert.Contains(failure.Evidence, fixture.ViewModel.LaunchStatus);
+        Assert.Equal(exitCode, fixture.ViewModel.LastExitCode);
+        Assert.False(fixture.ViewModel.IsGameRunning);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>零退出码且无明确错误只表示进程退出，不能显示为游戏加载或游玩成功。</summary>
+    [Fact]
+    public async Task ZeroExitWithoutFatalEvidenceReportsNeutralWarning()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            progress!.Report(new(MinecraftLaunchStage.Running, "Java 已创建", LogPath: "neutral.log"));
+            return Task.FromResult(new MinecraftLaunchResult(true, 0, false, "neutral.log"));
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.Equal("游戏进程已退出", notice.Title);
+        Assert.Contains("退出码：0", notice.Message);
+        Assert.Contains("不能证明游戏已成功加载", notice.Message);
+        Assert.DoesNotContain("正常退出", notice.Message);
+        Assert.Contains("neutral.log", notice.Paths);
+    }
+
+    /// <summary>用户停止或取消的结果优先于附带诊断，不能把取消误报为失败。</summary>
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(true, 143)]
+    [InlineData(false, null)]
+    public async Task CancellationTakesPrecedenceOverFatalEvidence(bool started, int? exitCode)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(started, exitCode, true, "canceled.log")
+        {
+            Failure = new("SdlInitializationFailed", "游戏图形初始化失败。", "SDL_Init failed: canceled")
+        });
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Cancelled, notice.Kind);
+        Assert.Contains(started ? "已停止" : "取消启动准备", fixture.ViewModel.LaunchStatus);
+        Assert.DoesNotContain("SDL_Init", notice.Message);
+        Assert.Equal(exitCode, fixture.ViewModel.LastExitCode);
+        Assert.Contains("canceled.log", notice.Paths);
+    }
+
+    /// <summary>未创建进程或无法取得退出码时不能依赖缺省值报告成功。</summary>
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(false, 0)]
+    [InlineData(true, null)]
+    public async Task MissingProcessOrUnknownExitCodeReportsFailure(bool started, int? exitCode)
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(started, exitCode, false, "unknown.log"));
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Failure, notice.Kind);
+        Assert.Contains(started ? "启动或运行失败" : "未创建游戏进程", notice.Message);
+        Assert.Contains(exitCode is null ? "退出码：未知" : "退出码：0", notice.Message);
+        Assert.Contains("unknown.log", notice.Paths);
+        Assert.False(fixture.ViewModel.IsBusy);
+    }
+
+    /// <summary>下一次启动只使用新的结果，不能继承上一次的错误摘要、日志或退出状态。</summary>
+    [Fact]
+    public async Task SubsequentLaunchDoesNotReusePreviousFailure()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(true, 0, false, "first-failure.log")
+        {
+            Failure = new("SdlInitializationFailed", "游戏图形初始化失败。", "SDL_Init failed: first run")
+        });
+        await StartLaunch(fixture.ViewModel);
+        Assert.Equal(OperationNoticeKind.Failure, Assert.Single(fixture.Notifications.Notices).Kind);
+        fixture.Notifications.Notices.Clear();
+        fixture.Launcher.Run = (_, _) => Task.FromResult(new MinecraftLaunchResult(true, 0, false, "second.log"));
+
+        await StartLaunch(fixture.ViewModel);
+
+        var notice = Assert.Single(fixture.Notifications.Notices);
+        Assert.Equal(OperationNoticeKind.Warning, notice.Kind);
+        Assert.DoesNotContain("初始化失败", fixture.ViewModel.LaunchStatus);
+        Assert.DoesNotContain(fixture.ViewModel.LaunchLogLines, line => line.Contains("SDL_Init", StringComparison.Ordinal));
+        Assert.Equal("second.log", fixture.ViewModel.LaunchLogPath);
+        Assert.Contains("second.log", notice.Paths);
+        Assert.DoesNotContain("first-failure.log", notice.Paths);
     }
 
     /// <summary>大量输出只留下最近一千行，任务结束后的排队事件也不能改变状态。</summary>

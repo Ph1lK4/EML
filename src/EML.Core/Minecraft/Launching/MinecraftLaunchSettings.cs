@@ -2,6 +2,9 @@ using System.Text.Json.Serialization;
 
 namespace EML.Core.Minecraft.Launching;
 
+/// <summary>只控制进程日志读取；自动优先严格 UTF-8，不能解码时回退到系统代码页。</summary>
+public enum MinecraftLogEncoding { Auto, Utf8, SystemDefault }
+
 /// <summary>每个实例独立保存的本机启动设置；不改变导入清单及官方完整性依据。</summary>
 public sealed record MinecraftLaunchSettings
 {
@@ -13,6 +16,8 @@ public sealed record MinecraftLaunchSettings
     public int MinMemoryMb { get; init; } = 1024;
     public int MaxMemoryMb { get; init; } = 8192;
     public string AdditionalJvmArguments { get; init; } = "";
+    /// <summary>每个实例可单独覆盖日志编码，不改变 Java 文件编码或整合包文件。</summary>
+    public MinecraftLogEncoding LogEncoding { get; init; } = MinecraftLogEncoding.Auto;
 }
 
 /// <summary>验证后的启动参数列表；参数作为数据直接传给 Java，不经过命令行解释器。</summary>
@@ -23,6 +28,8 @@ public sealed record MinecraftLaunchPlan(string InstancePath, string GameDirecto
     public required string NativesDirectory { get; init; }
     /// <summary>只在执行层用于脱敏和参数隔离，禁止序列化到实例或日志。</summary>
     [JsonIgnore] public IReadOnlyList<string> SensitiveValues { get; init; } = [];
+    /// <summary>与本次启动设置一致的输出解码方式；标准输出和错误输出分别维护解码状态。</summary>
+    public MinecraftLogEncoding LogEncoding { get; init; } = MinecraftLogEncoding.Auto;
     public override string ToString() => $"Minecraft launch: Java {JavaMajorVersion}, {InstancePath}";
 }
 
@@ -32,8 +39,22 @@ public enum MinecraftLaunchStage { Preparing, Running, Output }
 public sealed record MinecraftLaunchProgress(MinecraftLaunchStage Stage, string Message,
     bool StandardError = false, string? LogPath = null);
 
-/// <summary>进程退出结果；成功创建进程不代表已经进入游戏。</summary>
-public sealed record MinecraftLaunchResult(bool Started, int? ExitCode, bool IsCanceled, string? LogPath);
+/// <summary>区分进程结束、明确失败和用户取消；不根据退出码推断游戏已成功加载。</summary>
+public enum MinecraftLaunchOutcome { ProcessExited, Failed, Canceled }
+
+/// <summary>本次输出中的明确致命错误；证据由执行层先脱敏并限制长度，不推测底层故障原因。</summary>
+public sealed record MinecraftLaunchFailure(string Code, string Summary, string Evidence);
+
+/// <summary>进程退出结果；保留原构造参数兼容调用方，零退出码不能覆盖明确的失败证据。</summary>
+public sealed record MinecraftLaunchResult(bool Started, int? ExitCode, bool IsCanceled, string? LogPath)
+{
+    public MinecraftLaunchFailure? Failure { get; init; }
+
+    /// <summary>主动取消优先；无进程、未知/非零退出码或明确致命日志均不作为正常完成。</summary>
+    public MinecraftLaunchOutcome Outcome => IsCanceled ? MinecraftLaunchOutcome.Canceled
+        : !Started || ExitCode != 0 || Failure is not null ? MinecraftLaunchOutcome.Failed
+        : MinecraftLaunchOutcome.ProcessExited;
+}
 
 /// <summary>统一启动已补全实例；调用方通过取消令牌停止本次检查或自己启动的游戏进程。</summary>
 public interface IMinecraftGameLauncher

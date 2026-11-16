@@ -361,7 +361,35 @@
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
     <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+    <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
     <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+    <!-- 使用自身底色，避免系统模板在禁用实例列表时绘制白底；操作锁仍由 IsEnabled 控制。 -->
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="ListBox">
+          <Border x:Name="ListSurface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                  BorderThickness="{TemplateBinding BorderThickness}" SnapsToDevicePixels="True">
+            <ScrollViewer x:Name="PART_ScrollViewer" Focusable="False" Padding="{TemplateBinding Padding}"
+                          HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                          VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                          CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}">
+              <ItemsPresenter SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"
+                              KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Contained"/>
+            </ScrollViewer>
+          </Border>
+          <ControlTemplate.Triggers>
+            <!-- 非虚拟化分组保留像素滚动；普通实例列表继续使用默认面板和逻辑滚动。 -->
+            <MultiTrigger>
+              <MultiTrigger.Conditions>
+                <Condition Property="IsGrouping" Value="True"/>
+                <Condition Property="VirtualizingPanel.IsVirtualizingWhenGrouping" Value="False"/>
+              </MultiTrigger.Conditions>
+              <Setter TargetName="PART_ScrollViewer" Property="CanContentScroll" Value="False"/>
+            </MultiTrigger>
+          </ControlTemplate.Triggers>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
   </Style>
   <Style TargetType="ListBoxItem">
     <Setter Property="Padding" Value="12"/>

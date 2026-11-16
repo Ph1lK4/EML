@@ -15,6 +15,23 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "EML-launch-plan-" + Guid.NewGuid().ToString("N"));
 
+    /// <summary>日志读取选择随本次计划传递，不能为了显示日志重写游戏的文件或标准流编码参数。</summary>
+    [Theory]
+    [InlineData(MinecraftLogEncoding.Auto)]
+    [InlineData(MinecraftLogEncoding.Utf8)]
+    [InlineData(MinecraftLogEncoding.SystemDefault)]
+    public async Task LogEncodingFlowsToPlanWithoutMutatingJvmArguments(MinecraftLogEncoding mode)
+    {
+        var fixture = await CreateAsync();
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance, new()
+        { LogEncoding = mode, AdditionalJvmArguments = "-Dfile.encoding=GBK -Dsun.stdout.encoding=UTF-8" });
+        Assert.Equal(mode, plan.LogEncoding);
+        Assert.Single(plan.Arguments, value => value == "-Dfile.encoding=GBK");
+        Assert.Single(plan.Arguments, value => value == "-Dsun.stdout.encoding=UTF-8");
+        Assert.DoesNotContain(plan.Arguments, value => value.StartsWith("-Dstdout.encoding=", StringComparison.Ordinal));
+        Assert.DoesNotContain(plan.Arguments, value => value.StartsWith("-Dstderr.encoding=", StringComparison.Ordinal));
+    }
+
     /// <summary>各来源复用同一配置，保留加载器参数并正确填入玩家、内存和中文路径。</summary>
     [Theory]
     [InlineData("Prism", ".minecraft", "25", "x64（64 位）")]

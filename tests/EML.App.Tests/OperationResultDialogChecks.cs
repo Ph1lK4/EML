@@ -17,6 +17,33 @@ internal static class OperationResultDialogChecks
         VerifyClipboardFailure();
         VerifyLargePathList();
         VerifyNotificationQueue();
+        VerifyInitializationNotifications();
+    }
+
+    /// <summary>初始化结果不进入真实 WPF 队列；窗口重新可用时只展示手动操作的结果。</summary>
+    private static void VerifyInitializationNotifications()
+    {
+        var owner = new Window();
+        var mayShow = false;
+        var shown = new List<string>();
+        using var queue = new WpfOperationNotifications(owner, () => mayShow, notice => shown.Add(notice.Title));
+        var notifications = new ScopedOperationNotifications(queue);
+        try
+        {
+            Task.Run(() => notifications.RunInitializationAsync(async () =>
+            {
+                await Task.Yield();
+                foreach (var kind in Enum.GetValues<OperationNoticeKind>())
+                    notifications.Report(new(kind, "初始化结果", "页面仍显示状态", []));
+            })).GetAwaiter().GetResult();
+            notifications.Success("手动刷新完成", "完成");
+            DrainNotifications();
+            Assert.Empty(shown);
+            mayShow = true; owner.IsEnabled = false; owner.IsEnabled = true;
+            DrainNotifications();
+            Assert.Equal(new[] { "手动刷新完成" }, shown);
+        }
+        finally { owner.Close(); }
     }
 
     /// <summary>大量失败路径保留完整复制内容，避免一次创建成千上万个路径控件。</summary>

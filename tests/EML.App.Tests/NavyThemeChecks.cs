@@ -52,7 +52,72 @@ internal static class NavyThemeChecks
             if (width == 1000 && height == 600 && scale == 1) WritePreview(shell, "navy-library-empty.png", scale);
             shell.Content = null;
         }
-        foreach (var scale in new[] { 1d, 2d }) VerifyControlStates(scale);
+        foreach (var scale in new[] { 1d, 2d })
+        {
+            VerifyControlStates(scale);
+            VerifyDisabledInstanceList(scale);
+        }
+    }
+
+    /// <summary>模拟运行前、运行中和退出游戏，检查列表底色、操作锁和选中项，不启动真实游戏。</summary>
+    private static void VerifyDisabledInstanceList(double scale)
+    {
+        var model = new ShellModel();
+        while (model.Instances.Instances.Count > 1) model.Instances.Instances.RemoveAt(1);
+        var shell = LoadShell(model, 1280, 820, scale);
+        var list = Assert.IsType<ListBox>(shell.FindName("InstanceList"));
+        var navigation = Assert.IsType<ListBox>(shell.FindName("NavigationList"));
+        var selected = model.Instances.SelectedInstance;
+        foreach (var (busy, state) in new[] { (false, "ready"), (true, "running"), (false, "restored") })
+        {
+            model.Instances.IsBusy = busy;
+            Layout(shell);
+            Assert.Equal(!busy, list.IsEnabled);
+            Assert.True(navigation.IsEnabled);
+            Assert.Same(selected, list.SelectedItem);
+            var item = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(0));
+            Assert.Equal(!busy, item.IsEnabled);
+            Assert.True(item.IsSelected);
+            Assert.NotNull(item.ContextMenu);
+            var surface = Assert.IsType<Border>(item.Template.FindName("ItemSurface", item));
+            Assert.Equal(busy ? 0.5 : 1, surface.Opacity);
+            WritePreview(shell, $"navy-instance-{state}-{(int)(96 * scale)}dpi.png", scale);
+            // 采样实例行下方的空白区域，捕捉系统禁用模板盖上的浅色背景。
+            var point = list.TransformToAncestor(shell).Transform(new Point(list.ActualWidth / 2, list.ActualHeight - 8));
+            var pixel = new byte[4];
+            Snapshot(shell, scale).CopyPixels(new Int32Rect((int)(point.X * scale), (int)(point.Y * scale), 1, 1), pixel, 4, 0);
+            Assert.Equal(Brush("WindowBackgroundBrush").Color, Color.FromArgb(pixel[3], pixel[2], pixel[1], pixel[0]));
+        }
+
+        // 使用大量内存实例验证新模板仍启用回收虚拟化，且退出游戏后可滚动到列表末尾。
+        for (var index = 1; index < 100; index++)
+            model.Instances.Instances.Add(new MinecraftInstance($"测试实例 {index}", $@"C:\Preview\{index}", $@"C:\Preview\{index}\.minecraft", ["1.7.10"]));
+        Layout(shell);
+        Assert.True(VirtualizingPanel.GetIsVirtualizing(list));
+        Assert.Equal(VirtualizationMode.Recycling, VirtualizingPanel.GetVirtualizationMode(list));
+        var scroll = Assert.Single(Descendants(list).OfType<ScrollViewer>());
+        Assert.True(scroll.CanContentScroll);
+        Assert.Equal(ScrollBarVisibility.Auto, scroll.VerticalScrollBarVisibility);
+        Assert.Equal(ScrollBarVisibility.Disabled, scroll.HorizontalScrollBarVisibility);
+        Assert.Contains(Descendants(list), child => child is VirtualizingStackPanel);
+        Assert.True(Descendants(list).OfType<ListBoxItem>().Count() < model.Instances.Instances.Count);
+        scroll.ScrollToBottom();
+        Layout(shell);
+        Assert.True(scroll.VerticalOffset > 0, $"列表未滚动：Extent={scroll.ExtentHeight}, Viewport={scroll.ViewportHeight}, Items={list.Items.Count}。");
+        var last = Assert.IsType<ListBoxItem>(list.ItemContainerGenerator.ContainerFromIndex(99));
+        AssertInside(last, list, "滚动后的最后一个实例");
+        Assert.Same(selected, list.SelectedItem);
+        // 运行日志等列表会覆盖共享滚动设置，模板必须透传而不能硬编码。
+        ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Auto);
+        ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Hidden);
+        ScrollViewer.SetCanContentScroll(list, false);
+        list.Padding = new Thickness(9);
+        Layout(shell);
+        Assert.Equal(ScrollBarVisibility.Auto, scroll.HorizontalScrollBarVisibility);
+        Assert.Equal(ScrollBarVisibility.Hidden, scroll.VerticalScrollBarVisibility);
+        Assert.False(scroll.CanContentScroll);
+        Assert.Equal(list.Padding, scroll.Padding);
+        shell.Content = null;
     }
 
     /// <summary>验证深色输入、下拉和菜单真实模板；Popup 始终关闭，只渲染其已测量的子树。</summary>
@@ -343,6 +408,7 @@ internal static class NavyThemeChecks
     {
         private MinecraftInstance? _selected;
         private bool _microsoft;
+        private bool _isBusy;
         private string _playerName = "Steve";
         public event PropertyChangedEventHandler? PropertyChanged;
         public ObservableCollection<MinecraftInstance> Instances { get; } =
@@ -352,24 +418,28 @@ internal static class NavyThemeChecks
             Instance("Prominence II: Hasturian Era v4.1.5hf", "1.20.1", "Fabric", "CurseForge"),
             Instance("Cobblemon Official Modpack", "1.21.1", "NeoForge", "Modrinth")
         ];
-        public InstanceModel() => _selected = Instances[0];
+        public InstanceModel()
+        {
+            _selected = Instances[0];
+            LaunchGameCommand = new AsyncRelayCommand(() => Task.CompletedTask, () => CanInteract);
+        }
         public MinecraftInstance? SelectedInstance { get => _selected; set { _selected = value; Changed(); } }
         public string InstancesRoot => @"C:\Games\EML\instances";
-        public bool CanInteract => true;
-        public bool IsBusy => false;
-        public bool CanEditLaunchSettings => SelectedInstance is not null;
+        public bool CanInteract => !IsBusy;
+        public bool IsBusy { get => _isBusy; set { _isBusy = value; Changed(); LaunchGameCommand.NotifyCanExecuteChanged(); } }
+        public bool CanEditLaunchSettings => CanInteract && SelectedInstance is not null;
         public bool CanEditOfflinePlayerName => !UseMicrosoftAccount && CanEditLaunchSettings;
         public string[] LaunchModes { get; } = ["离线模式", "正版模式"];
         public string SelectedLaunchMode { get => UseMicrosoftAccount ? "正版模式" : "离线模式"; set => UseMicrosoftAccount = value == "正版模式"; }
         public bool UseMicrosoftAccount { get => _microsoft; set { _microsoft = value; Changed(); } }
         public string PlayerName { get => _playerName; set { _playerName = value; Changed(); } }
         public object Accounts { get; } = new { AccountName = "K4ssia" };
-        public bool IsGameRunning => false;
+        public bool IsGameRunning => IsBusy;
         public int TransferPercent { get; set; }
         public string TransferStatus => "";
-        public string StatusText => $"已找到 {Instances.Count} 个本地实例。";
+        public string StatusText => IsGameRunning ? "游戏正在运行，退出游戏后可继续管理实例。" : $"已找到 {Instances.Count} 个本地实例。";
         public int SelectedDetailTab { get; set; } = -1;
-        public IAsyncRelayCommand LaunchGameCommand { get; } = new AsyncRelayCommand(() => Task.CompletedTask);
+        public IAsyncRelayCommand LaunchGameCommand { get; }
         public IAsyncRelayCommand ImportCommand { get; } = new AsyncRelayCommand(() => Task.CompletedTask);
         public IAsyncRelayCommand ExportCommand { get; } = new AsyncRelayCommand(() => Task.CompletedTask);
         public IRelayCommand RefreshCommand { get; } = new RelayCommand(() => { });

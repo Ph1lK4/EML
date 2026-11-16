@@ -1,9 +1,11 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
 using Microsoft.VisualBasic.FileIO;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Minecraft.Importing;
+using EML.Infrastructure.Minecraft.Exporting;
 using EML.Infrastructure.Minecraft.Migration;
 
 namespace EML.Infrastructure.Minecraft;
@@ -16,6 +18,7 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
 {
     private readonly string _instancesRoot;
     private readonly Action<string> _recycleDirectory;
+    private readonly InstanceArchiveLimits _archiveLimits;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
 
     /// <summary>接收与扫描器相同的启动器根目录；默认使用 EXE 所在目录。</summary>
@@ -24,9 +27,14 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
 
     /// <summary>测试注入回收操作，避免自动测试实际操作用户回收站。</summary>
     internal MinecraftInstanceManager(string launcherRoot, Action<string> recycleDirectory)
+        : this(launcherRoot, recycleDirectory, InstanceArchiveLimits.Default) { }
+
+    /// <summary>仅内部测试注入小额度；公开操作始终使用导入、导出共同的生产限制。</summary>
+    internal MinecraftInstanceManager(string launcherRoot, Action<string> recycleDirectory, InstanceArchiveLimits limits)
     {
         _instancesRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.Combine(launcherRoot, "instances")));
         _recycleDirectory = recycleDirectory;
+        _archiveLimits = limits;
     }
 
     /// <summary>校验实例及内部链接后请求系统回收，同一服务的写入操作依次执行。</summary>
@@ -263,10 +271,14 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
         var manifestPath = Path.Combine(source, InstanceImportManifest.FileName);
         var backup = File.Exists(manifestPath)
             ? InstanceBackupManifest.Create(source, InstanceManifestStore.Read(manifestPath)) : null;
-        // 本机位置、用户选择状态和可再生缓存不直接传播；可信来源与选择已转入备份清单。
-        var entries = EnumerateContents(source, token)
-            .Where(entry => !InstanceFileChangePolicy.IsDerivedStatePath(Path.GetRelativePath(source, entry.Path).Replace('\\', '/'))).ToList();
-        var total = entries.Sum(entry => entry.Length);
+        // 只统计真正进入归档的内容，重新生成的清单使用最终字节数，目录也计入条目额度。
+        InstanceExportPlan plan;
+        try { plan = InstanceExportPlan.Create(source, backup, _archiveLimits, token); }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidDataException(ex.Message + "\n本次未生成备份，原实例未修改。", ex);
+        }
+        var total = plan.TotalBytes;
         long copied = 0;
         var temporary = Path.Combine(parent, ".eml-export-" + Guid.NewGuid().ToString("N") + ".tmp");
         try
@@ -278,40 +290,66 @@ public sealed class MinecraftInstanceManager : IMinecraftInstanceManager
                 token.ThrowIfCancellationRequested();
                 var buffer = new byte[128 * 1024];
                 var reportClock = Stopwatch.StartNew();
-                foreach (var entry in entries)
+                foreach (var entry in plan.Entries)
                 {
                     token.ThrowIfCancellationRequested();
-                    EnsureNoLinkedAncestors(entry.Path);
-                    var relative = Path.GetRelativePath(source, entry.Path).Replace('\\', '/');
-                    if (entry.IsDirectory) { zip.CreateEntry(relative + "/"); continue; }
+                    EnsureNoLinkedAncestors(entry.SourcePath);
+                    var relative = entry.RelativePath;
+                    if (entry.Directory) { zip.CreateEntry(relative + "/"); continue; }
                     var archived = zip.CreateEntry(relative, CompressionLevel.Fastest);
-                    if (backup is not null && relative.Equals(InstanceImportManifest.FileName, StringComparison.OrdinalIgnoreCase))
+                    if (entry.GeneratedContent is { } manifestBytes)
                     {
                         using var manifestOutput = archived.Open();
-                        await manifestOutput.WriteAsync(InstanceManifestStore.Serialize(backup.Manifest), token);
-                        copied += entry.Length;
+                        copied = _archiveLimits.AddLength(copied, manifestBytes.LongLength, false, relative);
+                        await manifestOutput.WriteAsync(manifestBytes, token);
                         continue;
                     }
-                    using var input = new FileStream(entry.Path, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, useAsync: true);
-                    if (input.Length != entry.Length) throw new IOException("文件在导出期间发生变化，请关闭游戏后重试：" + relative);
+                    using var input = new FileStream(entry.SourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, buffer.Length, useAsync: true);
+                    if (input.Length != entry.SourceLength || File.GetLastWriteTimeUtc(entry.SourcePath) != entry.LastWriteTimeUtc)
+                        throw new IOException("文件在导出期间发生变化，请关闭游戏后重试：" + relative);
                     using var target = archived.Open();
+                    long fileCopied = 0;
                     int read;
                     while ((read = await input.ReadAsync(buffer, token)) != 0)
                     {
+                        if (read > entry.SourceLength - fileCopied)
+                            throw new IOException("文件在导出期间增长，未发布备份：" + relative);
+                        copied = _archiveLimits.AddLength(copied, read, false, relative);
                         await target.WriteAsync(buffer.AsMemory(0, read), token);
-                        copied += read;
+                        fileCopied += read;
                         if (reportClock.ElapsedMilliseconds >= 100)
                         {
                             progress?.Report(new(relative, copied, total));
                             reportClock.Restart();
                         }
                     }
+                    if (fileCopied != entry.SourceLength)
+                        throw new IOException("文件在导出期间缩短，未发布备份：" + relative);
                 }
             }
             token.ThrowIfCancellationRequested();
+            progress?.Report(new("检查备份恢复兼容性", copied, total));
+            token.ThrowIfCancellationRequested();
+            // 共用真实导入的无副作用解析和布局检查；不解压游戏文件，不下载，不重建官方摘要。
+            try
+            {
+                using var input = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var archive = new ZipArchive(input, ZipArchiveMode.Read);
+                var importPlan = InstanceImportPlanValidator.Prepare(
+                    InstanceArchiveReader.Read(archive, Path.GetFileName(destination), token, _archiveLimits));
+                InstanceImportPlanValidator.ValidateRestoreMetadata(importPlan, token: token);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or JsonException)
+            {
+                throw new InvalidDataException("备份未通过恢复兼容性检查，本次未生成正式备份，原实例未修改。\n原因：" + ex.Message, ex);
+            }
+            plan.EnsureUnchanged(source, token);
             if (backup is not null) InstanceBackupManifest.EnsureUnchanged(source, backup);
+            token.ThrowIfCancellationRequested();
             File.Move(temporary, destination); // 不覆盖旧文件；竞争创建的同名文件同样会保留。
-            progress?.Report(new("完成", copied, total));
+            // 文件已提交，外部 UI 回调失败不能再把成功导出报告成失败。
+            try { progress?.Report(new("完成", copied, total)); }
+            catch (Exception) { Trace.TraceWarning("备份已成功发布，但完成进度通知失败。"); }
         }
         finally { TryDeleteTemporary(temporary); }
     }

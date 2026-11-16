@@ -45,6 +45,7 @@
     <Compile Include="..\..\src\EML.App\Services\IJavaDownloadDialogs.cs" Link="App\IJavaDownloadDialogs.cs" />
     <Compile Include="..\..\src\EML.App\Services\BoundedLaunchProgress.cs" Link="App\BoundedLaunchProgress.cs" />
     <Compile Include="..\..\src\EML.App\Services\IOperationNotifications.cs" Link="App\IOperationNotifications.cs" />
+    <Compile Include="..\..\src\EML.App\Services\ScopedOperationNotifications.cs" Link="App\ScopedOperationNotifications.cs" />
   </ItemGroup>
 
   <ItemGroup>

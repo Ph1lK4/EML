@@ -26,7 +26,7 @@ public partial class InstancesViewModel
 
     /// <summary>只在当前窗口保留每实例的编辑文本；不存账号令牌，也不将未完成输入强制解析为设置。</summary>
     private sealed record LaunchSettingsDraft(string PlayerName, bool UseMicrosoftAccount, string JavaPath,
-        string MinMemoryMb, string MaxMemoryMb, string JvmArguments);
+        string MinMemoryMb, string MaxMemoryMb, string JvmArguments, MinecraftLogEncoding LogEncoding);
 
     /// <summary>复用 Java 页面已检测的结果，空路径仍由启动服务自动匹配版本。</summary>
     public JavaSettingsViewModel? Java { get; }
@@ -57,6 +57,27 @@ public partial class InstancesViewModel
     [ObservableProperty] private string minMemoryMbText = "1024";
     [ObservableProperty] private string maxMemoryMbText = "8192";
     [ObservableProperty] private string additionalJvmArguments = "";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedLogEncodingMode))]
+    private MinecraftLogEncoding logEncoding;
+    /// <summary>日志读取偏好仅作用于本实例，不改变 JVM 参数或游戏文件的编码。</summary>
+    public IReadOnlyList<string> LogEncodingModes { get; } = ["自动（UTF-8 优先，兼容系统编码）", "UTF-8", "系统编码（旧版 Java）"];
+    /// <summary>将中文选项映射到持久化枚举；绑定暂时清空时保留用户已经选择的模式。</summary>
+    public string SelectedLogEncodingMode
+    {
+        get => LogEncoding switch
+        {
+            MinecraftLogEncoding.Utf8 => "UTF-8",
+            MinecraftLogEncoding.SystemDefault => "系统编码（旧版 Java）",
+            _ => "自动（UTF-8 优先，兼容系统编码）"
+        };
+        set
+        {
+            if (value == "自动（UTF-8 优先，兼容系统编码）") LogEncoding = MinecraftLogEncoding.Auto;
+            else if (value == "UTF-8") LogEncoding = MinecraftLogEncoding.Utf8;
+            else if (value == "系统编码（旧版 Java）") LogEncoding = MinecraftLogEncoding.SystemDefault;
+        }
+    }
     [ObservableProperty] private string launchSettingsStatus = "请选择实例后设置启动参数。";
     [ObservableProperty] private string launchStatus = "尚未启动游戏。";
     [ObservableProperty] private string launchLogPath = "";
@@ -107,6 +128,7 @@ public partial class InstancesViewModel
             MinMemoryMbText = draft.MinMemoryMb;
             MaxMemoryMbText = draft.MaxMemoryMb;
             AdditionalJvmArguments = draft.JvmArguments;
+            LogEncoding = draft.LogEncoding;
             _loadedSettingsPath = instance.InstancePath;
             IsLaunchSettingsLoaded = true;
             LaunchSettingsStatus = "已恢复本次编辑；两处启动模式同步，以最后选择为准。重启 EML 后保留偏好需点击“保存设置”。";
@@ -164,11 +186,12 @@ public partial class InstancesViewModel
         MinMemoryMbText = settings.MinMemoryMb.ToString(CultureInfo.InvariantCulture);
         MaxMemoryMbText = settings.MaxMemoryMb.ToString(CultureInfo.InvariantCulture);
         AdditionalJvmArguments = settings.AdditionalJvmArguments;
+        LogEncoding = settings.LogEncoding;
     }
 
     /// <summary>在发送界面状态通知前冻结原始输入，保留尚未填完的文本和当前身份。</summary>
     private LaunchSettingsDraft CaptureLaunchSettingsDraft() => new(PlayerName, UseMicrosoftAccount, SelectedJavaPath,
-        MinMemoryMbText, MaxMemoryMbText, AdditionalJvmArguments);
+        MinMemoryMbText, MaxMemoryMbText, AdditionalJvmArguments, LogEncoding);
 
     /// <summary>实例删除或消失后同时作废读取与草稿，防止同名新实例继承旧身份。</summary>
     private void ForgetLaunchSettingsDraft(string instancePath)
@@ -213,7 +236,8 @@ public partial class InstancesViewModel
             JavaPath = string.IsNullOrWhiteSpace(input.JavaPath) ? null : input.JavaPath.Trim(),
             MinMemoryMb = minimum,
             MaxMemoryMb = maximum,
-            AdditionalJvmArguments = input.JvmArguments
+            AdditionalJvmArguments = input.JvmArguments,
+            LogEncoding = input.LogEncoding
         };
         MinecraftLaunchValidation.Validate(settings);
         return settings;
@@ -252,7 +276,7 @@ public partial class InstancesViewModel
             IsBusy = true;
             await _launchSettingsStore!.SaveAsync(instancePath, settings);
             if (revision == _settingsRevision) LaunchSettingsStatus = "已保存此实例的启动设置。";
-            _notifications.Success("启动设置已保存", "已保存此实例的玩家、内存、Java 和 JVM 设置。", instancePath);
+            _notifications.Success("启动设置已保存", "已保存此实例的玩家、内存、Java、JVM 和日志编码设置。", instancePath);
         }
         catch (Exception ex)
         {
@@ -293,17 +317,22 @@ public partial class InstancesViewModel
             finally { progress.Complete(); }
             LastExitCode = result.ExitCode;
             LaunchLogPath = result.LogPath ?? LaunchLogPath;
-            LaunchStatus = result.IsCanceled
-                ? result.Started ? "游戏进程已停止。" : "已取消启动准备。"
-                : result.Started ? $"游戏进程已退出，退出码：{result.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "未知"}。"
-                : "未创建游戏进程，请查看日志中的原因。";
+            LaunchStatus = DescribeLaunchResult(result);
             AppendLaunchLog(LaunchStatus);
             StatusText = LaunchStatus;
-            if (result.IsCanceled) _notifications.Cancelled(result.Started ? "游戏已停止" : "启动已取消", LaunchStatus, instance.InstancePath, LaunchLogPath);
-            else if (result.Started && result.ExitCode == 0)
-                _notifications.Success("游戏已正常退出", LaunchStatus, instance.InstancePath, LaunchLogPath);
-            else _notifications.Failure(result.Started ? "游戏异常退出" : "游戏启动失败",
-                LaunchStatus + "\n请查看本次运行日志中的错误信息。", instance.InstancePath, LaunchLogPath);
+            switch (result.Outcome)
+            {
+                case MinecraftLaunchOutcome.Canceled:
+                    _notifications.Cancelled(result.Started ? "游戏已停止" : "启动已取消", LaunchStatus, instance.InstancePath, LaunchLogPath);
+                    break;
+                case MinecraftLaunchOutcome.ProcessExited:
+                    _notifications.Warning("游戏进程已退出", LaunchStatus, instance.InstancePath, LaunchLogPath);
+                    break;
+                default:
+                    _notifications.Failure(result.Started ? "游戏启动或运行失败" : "游戏启动失败",
+                        LaunchStatus, instance.InstancePath, LaunchLogPath);
+                    break;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -329,6 +358,20 @@ public partial class InstancesViewModel
             CancelLaunchPreparationCommand.NotifyCanExecuteChanged();
             StopGameCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    /// <summary>只根据本次退出结果描述状态；明确致命证据优先于零退出码，不推断游戏已加载成功。</summary>
+    private static string DescribeLaunchResult(MinecraftLaunchResult result)
+    {
+        var exitCode = $"退出码：{result.ExitCode?.ToString(CultureInfo.InvariantCulture) ?? "未知"}。";
+        return result.Outcome switch
+        {
+            MinecraftLaunchOutcome.Canceled => result.Started ? "游戏进程已停止。" : "已取消启动准备。",
+            MinecraftLaunchOutcome.ProcessExited => $"游戏进程已退出，{exitCode}\n退出码为 0 不能证明游戏已成功加载，请结合游戏窗口和运行日志确认。",
+            _ => (result.Started ? "游戏启动或运行失败。" : "未创建游戏进程。") +
+                (result.Failure is { } failure ? $"\n{failure.Summary}\n错误信息：{failure.Evidence}" : "") +
+                $"\n请查看本次运行日志中的错误信息。\n{exitCode}"
+        };
     }
 
     /// <summary>仅在启动前明确缺少兼容 Java 时询问；安装后使用原身份和参数重试一次，其他错误不触发下载。</summary>
@@ -411,12 +454,10 @@ public partial class InstancesViewModel
         if (progress.LogPath is { } path) LaunchLogPath = path;
         if (progress.Stage == MinecraftLaunchStage.Running)
         {
-            var firstRunning = !IsGameRunning;
             IsPreparingLaunch = false;
             IsGameRunning = true;
             LaunchStatus = "游戏进程已启动，正在接收输出；请在游戏窗口确认加载结果。";
             StatusText = LaunchStatus;
-            if (firstRunning) _notifications.Success("游戏进程已启动", LaunchStatus, SelectedInstance?.InstancePath, LaunchLogPath);
         }
         else if (progress.Stage == MinecraftLaunchStage.Preparing)
         {

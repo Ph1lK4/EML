@@ -7,6 +7,20 @@ namespace EML.Tests;
 
 public sealed class DownloadCenterViewModelTests
 {
+    /// <summary>首次读取队列失败只保留行内原因，用户主动保存设置仍收到结果提示。</summary>
+    [Fact]
+    public void InitializationSnapshotFailureIsSilentButManualActionsStillNotify()
+    {
+        var notices = new Notices();
+        var notifications = new ScopedOperationNotifications(notices);
+        var center = new Center { SnapshotError = new IOException("队列暂不可用") };
+        using var model = notifications.RunInitialization(() => new DownloadCenterViewModel(center, new UiQueue(), notifications));
+        Assert.Contains("队列暂不可用", model.ActionStatus);
+        Assert.Empty(notices.Items);
+        model.SaveSettingsCommand.Execute(null);
+        Assert.Equal(OperationNoticeKind.Success, Assert.Single(notices.Items).Kind);
+    }
+
     /// <summary>单个文件控制操作带上固定目标路径，状态竞争和异常不会误报成功。</summary>
     [Fact]
     public void FileOperationsNotifySuccessWarningAndFailureWithTargetPath()

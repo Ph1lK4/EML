@@ -26,9 +26,10 @@ internal static class InstanceArchiveReader
     };
 
     /// <summary>验证 ZIP 条目并识别唯一包格式，调用对应解析器生成导入计划。</summary>
-    internal static InstanceArchivePlan Read(ZipArchive archive, string archiveFileName, CancellationToken token)
+    internal static InstanceArchivePlan Read(ZipArchive archive, string archiveFileName, CancellationToken token,
+        InstanceArchiveLimits? limits = null)
     {
-        var entries = SafeInstanceArchive.ReadEntries(archive, token);
+        var entries = SafeInstanceArchive.ReadEntries(archive, token, limits);
         var markers = new List<PackageMarker>();
         var emlRoots = entries.Where(item => !item.Directory && !IsPayloadPath(item.Path) &&
                 LastPart(item.Path).Equals(InstanceImportManifest.FileName, StringComparison.OrdinalIgnoreCase))

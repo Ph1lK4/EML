@@ -60,6 +60,12 @@
             <TextBox Text="{Binding AdditionalJvmArguments, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEditLaunchSettings}"
                      AcceptsReturn="True" TextWrapping="Wrap" MinHeight="100" MaxHeight="200" VerticalScrollBarVisibility="Auto"
                      AutomationProperties.Name="附加 JVM 参数" ToolTip="支持带引号的参数；保存和启动前会校验"/>
+            <TextBlock Text="运行日志编码" Margin="0,18,0,7"/>
+            <ComboBox x:Name="LogEncodingSelector" ItemsSource="{Binding LogEncodingModes}"
+                      SelectedItem="{Binding SelectedLogEncodingMode}" IsEnabled="{Binding CanEditLaunchSettings}"
+                      AutomationProperties.Name="运行日志编码" ToolTip="保存到当前实例；自动模式仍有乱码时可手动指定"/>
+            <TextBlock Text="仅影响 EML 读取游戏输出，不修改 Java 的文件编码。默认自动；仍有乱码时可手动选择。"
+                       TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,8,0,0"/>
           </StackPanel>
         </Border>
       </StackPanel>

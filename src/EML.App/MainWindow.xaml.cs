@@ -7,6 +7,7 @@ using System.Windows.Input;
 using CommunityToolkit.Mvvm.Input;
 using EML.App.ViewModels;
 using EML.App.Services;
+using EML.Core;
 using EML.Core.Minecraft;
 using EML.Infrastructure.Java;
 using EML.Infrastructure.Minecraft;
@@ -37,13 +38,16 @@ public partial class MainWindow : Window
     private readonly GtnhMirrorPackService _gtnhPacks;
     private readonly InstanceCatalog _instanceCatalog;
     private readonly WpfOperationNotifications _notifications;
+    private readonly ScopedOperationNotifications _operationNotifications;
     private bool _waitingForCleanup;
     private bool _closingAfterCleanup;
     /// <summary>创建页面依赖、设置绑定对象，并注册首次显示事件。</summary>
     public MainWindow()
     {
         InitializeComponent();
+        Title = ReleaseIdentity.WindowTitle;
         _notifications = new WpfOperationNotifications(this);
+        _operationNotifications = new ScopedOperationNotifications(_notifications);
         var launcherRoot = GetLauncherRoot();
         var bandwidth = new DownloadBandwidthLimiter();
         _fileDownloader = new HttpFileDownloader(new FileDownloadOptions
@@ -56,7 +60,7 @@ public partial class MainWindow : Window
         var checker = new MinecraftInstanceChecker(launcherRoot);
         _javaRuntimes = new TemurinJavaRuntimeService(launcherRoot, _downloadCenter);
         var javaLocator = new WindowsJavaLocator([_javaRuntimes.InstallationRoot]);
-        var java = new JavaSettingsViewModel(javaLocator, notifications: _notifications, runtimes: _javaRuntimes);
+        var java = new JavaSettingsViewModel(javaLocator, notifications: _operationNotifications, runtimes: _javaRuntimes);
         var localMods = new LocalModManager(launcherRoot);
         var onlineCatalog = new OnlineModCatalog(_modrinth, _curseForge);
         _gtnhAddons = new GtnhAddonService(launcherRoot, _downloadCenter, localMods, onlineCatalog: onlineCatalog,
@@ -66,7 +70,7 @@ public partial class MainWindow : Window
         _modIcons = new ModIconCache(launcherRoot, WpfModIconDecoder.Decode);
         var accounts = new MinecraftAccountViewModel(_accountService, uri =>
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
-            notifications: _notifications);
+            notifications: _operationNotifications);
         var instances = new InstancesViewModel(locator, new MinecraftInstanceManager(launcherRoot),
                 new MinecraftInstanceImporter(launcherRoot), new InstanceDialogs(this), locator.InstancesRoot,
                 checker, new MinecraftInstanceDownloader(launcherRoot, checker, _downloadCenter),
@@ -75,7 +79,7 @@ public partial class MainWindow : Window
                 new GtnhInstanceMigrationService(launcherRoot), new InstanceMigrationDialogs(this),
                 localMods, new ModManagementDialogs(this), onlineCatalog, onlineInstaller, _modIcons,
                 uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
-                ChineseModCatalog.Default, _gtnhAddons, notifications: _notifications, accounts: accounts, gtnhPacks: _gtnhPacks,
+                ChineseModCatalog.Default, _gtnhAddons, notifications: _operationNotifications, accounts: accounts, gtnhPacks: _gtnhPacks,
                 javaRuntimes: _javaRuntimes, javaDownloadDialogs: new WpfJavaDownloadDialogs(this));
         _instanceCatalog = new InstanceCatalog(_modrinth, _curseForge);
         var archives = new InstanceArchiveService(launcherRoot, _instanceCatalog, _downloadCenter);
@@ -83,10 +87,10 @@ public partial class MainWindow : Window
             (release, progress, token) => instances.DownloadInstanceAsync(archives, release.Provider, release.ProjectId, release.Id, progress, token),
             () => !instances.IsBusy, _modIcons,
             uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
-            notifications: _notifications);
-        var transferCenter = new DownloadCenterViewModel(_downloadCenter,
-            new System.Windows.Threading.DispatcherSynchronizationContext(Dispatcher), notifications: _notifications,
-            settingsPath: Path.Combine(launcherRoot, "settings", "downloads.json"));
+            notifications: _operationNotifications);
+        var transferCenter = _operationNotifications.RunInitialization(() => new DownloadCenterViewModel(_downloadCenter,
+            new System.Windows.Threading.DispatcherSynchronizationContext(Dispatcher), notifications: _operationNotifications,
+            settingsPath: Path.Combine(launcherRoot, "settings", "downloads.json")));
         DataContext = new MainViewModel(java, instances, accounts, downloads, transferCenter);
         ContentRendered += OnFirstContentRendered;
         Closing += OnWindowClosing;
@@ -226,7 +230,7 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>首次显示时并行检测 Java 和实例；已有检测任务则等待它完成。</summary>
+    /// <summary>首次显示时静默读取 Java、实例和账号；已有手动任务仍保留自己的结果提示。</summary>
     private async void OnFirstContentRendered(object? sender, EventArgs e)
     {
         // 先显示窗口，再自动检测；取消订阅确保切换标签、重新显示窗口不会重复触发。
@@ -235,15 +239,16 @@ public partial class MainWindow : Window
 
         // 复用现有命令，保留状态提示、异常处理和执行期间禁用按钮的行为。
         // 若用户已手动触发检测，等待现有任务，避免重复扫描。
+        // 只静默本次新建的初始化调用链，含扫描后派生的设置读取；不使用全局禁用开关。
         var javaTask = viewModel.Java.DetectJavaCommand.IsRunning
             ? viewModel.Java.DetectJavaCommand.ExecutionTask ?? Task.CompletedTask
-            : viewModel.Java.DetectJavaCommand.ExecuteAsync(null);
+            : _operationNotifications.RunInitializationAsync(() => viewModel.Java.DetectJavaCommand.ExecuteAsync(null));
         var instancesTask = viewModel.Instances.RefreshCommand.IsRunning
             ? viewModel.Instances.RefreshCommand.ExecutionTask ?? Task.CompletedTask
-            : viewModel.Instances.RefreshCommand.ExecuteAsync(null);
+            : _operationNotifications.RunInitializationAsync(() => viewModel.Instances.RefreshCommand.ExecuteAsync(null));
         var accountTask = viewModel.Accounts is { } accounts
             ? accounts.IsBusy ? accounts.LoadCommand.ExecutionTask ?? accounts.LoginCommand.ExecutionTask ?? accounts.LogoutCommand.ExecutionTask ?? Task.CompletedTask
-                : accounts.LoadCommand.ExecuteAsync(null)
+                : _operationNotifications.RunInitializationAsync(() => accounts.LoadCommand.ExecuteAsync(null))
             : Task.CompletedTask;
         await Task.WhenAll(javaTask, instancesTask, accountTask);
     }
