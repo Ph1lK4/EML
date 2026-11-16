@@ -2,6 +2,12 @@
 
 `1.0-RC1` 是候选测试版，不是已经完成所有环境验收的正式版。
 
+## Code signing policy
+
+本次 RC1 未签名，SignPath 支持尚未启用。负责人、当前准备状态及拟采用的审批流程见[代码签名政策](code-signing.md)。本页更新不会改变已经生成的 ZIP 或其 SHA-256。
+
+维护者：K4ssia。联系及安全漏洞私报邮箱：[477619464@qq.com](mailto:477619464@qq.com)。使用前可阅读[隐私说明](../PRIVACY.md)、[卸载与数据保留说明](uninstall.md)及[安全报告说明](../SECURITY.md)。向 GitHub 发布 Release 时也应提供这些链接，并如实标记该发行文件的签名状态。
+
 ## 发布约定
 
 | 项目 | 约定 |
