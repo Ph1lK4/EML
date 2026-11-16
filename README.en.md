@@ -8,6 +8,26 @@ A GTNH playthrough can last through several pack updates. EML brings pack instal
 
 **Current version: 1.0-RC1, a release candidate.** Compatibility testing is ongoing. See the [release guide](docs/release-rc1.md) for package details and testing instructions.
 
+## Screenshots
+
+Screenshots show the Chinese interface. Personal details have been redacted.
+
+![EML local instances and launch modes](docs/images/main.png)
+
+<details>
+<summary>GTNH hub: recommended mods</summary>
+
+![Recommended mod catalog in the GTNH hub](docs/images/gtnh.png)
+
+</details>
+
+<details>
+<summary>GTNH player-data migration guide</summary>
+
+![GTNH player-data migration guide screen](docs/images/migration.png)
+
+</details>
+
 ## What you can do
 
 ### Install and play
