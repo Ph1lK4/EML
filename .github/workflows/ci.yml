@@ -1,0 +1,54 @@
+name: EML Windows CI
+
+on:
+  push:
+    branches: [master, 'feature/**', 'codex/**']
+  pull_request:
+  workflow_dispatch:
+
+# 普通 CI 只有读取源码的权限，不使用发布密钥或签名凭证。
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-ci:
+    name: Build, test and publish smoke check
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: 'true'
+      EML_EMBED_CURSEFORGE_KEY: '0'
+      EML_CURSEFORGE_API_KEY: ''
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the SDK from global.json
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Build, test and check self-contained publish
+        run: ./tools/Test-CI.ps1
+
+      # 即使测试失败也保留已有报告，不上传源码、发布目录或本机数据。
+      - name: Upload test and publish-check reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: eml-ci-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/ci/test-results/**/*.trx
+            artifacts/ci/publish-check.json
+          if-no-files-found: warn
+          retention-days: 7
