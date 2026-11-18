@@ -36,8 +36,10 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 
 - 从 Modrinth、CurseForge 下载整合包，或安装 Mojang 提供的 Minecraft Java 版原版。
 - 导入 Prism ZIP、Modrinth `.mrpack`、CurseForge ZIP 和支持的通用游戏目录 ZIP，导入后自动补全模组及受支持的运行依赖。
+- 从 Prism、Modrinth App 等启动器的受支持实例目录直接复制导入，无需先压缩；保留原实例，不搬运原启动器的账号凭证。
 - 检测本机 Java，也可在启动器内下载安装。启动前缺少兼容 Java 时，先询问是否下载，不擅自更改系统环境。
-- 支持微软账号登录与正版、离线模式切换；按实例设置 Java、内存和 JVM 参数，并查看运行日志。正版使用账号中的玩家身份，离线模式可填写玩家名；认证失败不会自动切换为离线。
+- 管理多个微软正版账号，在本地实例和启动设置中选择账号或离线模式。游戏进程启动后，按实例记住本次账号、玩家名和模式；换默认账号不会覆盖实例已有选择，认证失败不会自动换号或转为离线。
+- 按实例设置 Java、内存和 JVM 参数，并查看运行日志。离线模式仍直接输入玩家名；Java 和 JVM 等参数需手动保存。
 
 ### GTNH 专区
 
@@ -61,7 +63,7 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 
 换用新版 GTNH 时，先保留两个实例：**带有游玩数据的旧实例**，以及**已补全并试运行成功的新实例**。
 
-1. 旧实例还在其他启动器中时，导出包含本地数据的完整实例包，再通过 GTNH 专区的“导入旧实例（含本地数据）”导入。重新下载整合包安装包不会带回你的游玩记录。
+1. 旧实例还在其他启动器中时，可先通过“从其他启动器导入”复制受支持的实例目录；也可导出包含本地数据的完整实例包，再通过 GTNH 专区的“导入旧实例（含本地数据）”导入。重新下载整合包安装包不会带回你的游玩记录。
 2. 关闭两个实例的游戏，选择新版作为接收方，再选择旧实例和需要迁移的内容。
 3. 核对文件预览与冲突提示后迁移。可选内容包括存档、NEI 记录、JourneyMap 地图、矿脉与节点数据、部分个人设置、服务器列表和语言偏好；也有面向服务器玩家的客户端数据预设。
 
@@ -98,6 +100,7 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 - [在线模组](docs/online-mod-management.md) · [本地模组管理](docs/local-mod-management.md)
 - [Java 下载](docs/java-downloads.md) · [启动设置与日志](docs/launching.md) · [微软账号](docs/microsoft-login.md)
 - [文件完整性与游玩后的变化](docs/gameplay-file-policy.md) · [实例备份与恢复边界](docs/instance-backups.md)
+- [从其他启动器复制导入](docs/folder-import.md)
 - [RC1 发布与升级](docs/release-rc1.md) · [验证记录](docs/release-rc1-verification.md)
 
 ## 联系、隐私与安全
@@ -110,10 +113,10 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 
 ## 许可证
 
-EML 采用 **GNU General Public License v3.0 或任何后续版本（`GPL-3.0-or-later`）** 发布，全文见 [LICENSE（master）](https://github.com/Ph1lK4/EML/blob/master/LICENSE)。Minecraft、整合包、模组、资源包、Java 和其他第三方组件仍适用各自的许可与使用条款。
+EML 采用 **GNU General Public License v3.0 或任何后续版本（`GPL-3.0-or-later`）** 发布，全文见 [LICENSE](LICENSE)。Minecraft、整合包、模组、资源包、Java 和其他第三方组件仍适用各自的许可与使用条款。
 
 ## Code signing policy
 
-当前 `1.0-RC1` 包**未签名**。SignPath Foundation 支持仍处于申请准备阶段，尚未获批或接入。
+当前 `1.0-RC1` 包**未签名**。本次 SignPath Foundation 申请未获批准，尚未接入签名服务。已有 GitHub Actions 构建与测试流程，但它不提供代码签名。
 
 代码审核与签名批准负责人为 **K4ssia**。账号安全配置和拟采用的审批流程见[代码签名政策](docs/code-signing.md)；本文不代表已经通过签名或安全认证。

@@ -11,6 +11,9 @@ public sealed class MinecraftAccountServiceTests
     private static readonly MicrosoftLoginOptions Options = new() { ClientId = ClientId };
     private static StoredMinecraftAccount Stored(string refresh = "old-refresh") => new()
     { ClientId = ClientId, Account = new(PlayerId, "OnlineAlex"), RefreshToken = refresh };
+    /// <summary>让既有单账号用例经由新的凭证集合测试同样的事务边界。</summary>
+    private static StoredMinecraftAccounts Collection(StoredMinecraftAccount account) => new()
+    { Accounts = [account], ActiveAccountId = account.Account.Id };
 
     /// <summary>启动读取不调用网络；同一有效会话复用，临近过期时才刷新。</summary>
     [Fact]
@@ -146,11 +149,11 @@ public sealed class MinecraftAccountServiceTests
             var store = new WindowsMinecraftAccountStore(path);
             Assert.Null(await store.LoadAsync(default));
             var secret = "test-refresh-" + Guid.NewGuid();
-            await store.SaveAsync(Stored(secret), default);
+            await store.SaveAsync(Collection(Stored(secret)), default);
             var bytes = await File.ReadAllBytesAsync(path);
             Assert.DoesNotContain(secret, Encoding.UTF8.GetString(bytes));
-            Assert.Equal(secret, (await store.LoadAsync(default))!.RefreshToken);
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.SaveAsync(Stored("replacement"), new(true)));
+            Assert.Equal(secret, Assert.Single((await store.LoadAsync(default))!.Accounts).RefreshToken);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.SaveAsync(Collection(Stored("replacement")), new(true)));
             Assert.Equal(bytes, await File.ReadAllBytesAsync(path));
             Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
             await store.DeleteAsync(default);
@@ -178,13 +181,18 @@ public sealed class MinecraftAccountServiceTests
 
     private sealed class FakeStore : IMinecraftAccountStore
     {
-        internal StoredMinecraftAccount? Value;
+        private StoredMinecraftAccounts? _value;
+        internal StoredMinecraftAccount? Value
+        {
+            get => _value?.Accounts.SingleOrDefault();
+            set => _value = value is null ? null : Collection(value);
+        }
         internal bool FailSave;
         internal int Deletes;
-        public Task<StoredMinecraftAccount?> LoadAsync(CancellationToken token) => Task.FromResult(Value);
-        public Task SaveAsync(StoredMinecraftAccount account, CancellationToken token)
-        { token.ThrowIfCancellationRequested(); if (FailSave) throw new IOException("test disk failure"); Value = account; return Task.CompletedTask; }
-        public Task DeleteAsync(CancellationToken token) { Deletes++; Value = null; return Task.CompletedTask; }
+        public Task<StoredMinecraftAccounts?> LoadAsync(CancellationToken token) => Task.FromResult(_value);
+        public Task SaveAsync(StoredMinecraftAccounts accounts, CancellationToken token)
+        { token.ThrowIfCancellationRequested(); if (FailSave) throw new IOException("test disk failure"); _value = accounts; return Task.CompletedTask; }
+        public Task DeleteAsync(CancellationToken token) { Deletes++; _value = null; return Task.CompletedTask; }
     }
     private sealed class FakeClient(TestClock clock) : IMicrosoftMinecraftAuthClient
     {

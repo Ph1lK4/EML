@@ -1,6 +1,6 @@
 # 卸载 EML 与保留玩家数据
 
-更新日期：2026-11-16。以下面向便携 ZIP 发布版；源码调试版本的实例可能位于解决方案根目录，操作前先核对实际路径。
+更新日期：2026-11-18。以下面向便携 ZIP 发布版；源码调试版本的实例可能位于解决方案根目录，操作前先核对实际路径。
 
 **EML 文件夹不只是程序，也可能包含你的存档、地图和备份。删除整个文件夹会一并删除其中的数据。** 升级不需要先卸载，升级请使用[发布与升级说明](release-rc1.md)。
 
@@ -27,10 +27,10 @@
 %LOCALAPPDATA%\EML\accounts\microsoft.dpapi
 ```
 
-- 如需移除该 Windows 用户的 EML 登录记录，在删除程序前打开 EML 的“微软账号”页面，选择退出账号，确认成功后关闭 EML。
-- 如果 EML 已无法运行，先关闭游戏及所有 EML 进程，再通过资源管理器核对并仅删除上述 `microsoft.dpapi` 文件。不要删除整个 `%LOCALAPPDATA%` 或其他启动器的数据目录。
-- 同一 Windows 用户下的其他 EML 副本也使用这个账号位置；清除后，它们需要重新登录。
-- 退出 EML 账号只清除 EML 的本机凭证，不会退出浏览器中的微软账号、撤销微软侧的应用授权，或让已经运行的游戏会话立即失效。需要撤销授权时，请在微软账号的官方管理页面处理。
+- 如需移除一个账号，在删除程序前打开 EML 的“微软账号”页面，选中该账号并确认“移除所选账号”。这只清除该账号，不清除其他已保存账号。需要全部清除时逐个移除，确认列表为空后关闭 EML。
+- 如果 EML 已无法运行，先关闭游戏及所有 EML 进程，再通过资源管理器核对并仅删除上述 `microsoft.dpapi` 文件。它保存整个账号集合，删除会清除所有已保存账号；不要删除整个 `%LOCALAPPDATA%` 或其他启动器的数据目录。
+- 同一 Windows 用户下的其他 EML 副本也使用这个账号位置；删除整份文件后，它们都需要重新登录。实例内保存的公开玩家名、UUID 和上次启动记录仍随实例保留，不包含登录令牌。
+- 移除 EML 账号只清除 EML 的本机凭证，不会退出浏览器中的微软账号、撤销微软侧的应用授权，或让已经运行的游戏会话立即失效。需要撤销授权时，请在微软账号的官方管理页面处理。
 
 不要把凭证文件作为普通跨电脑迁移资料发送给他人。它使用当前 Windows 用户的 DPAPI 保护，不能保证在另一台电脑或另一个用户下可用。
 
@@ -49,6 +49,6 @@
 
 The portable EML folder may contain worlds, maps and migration backups, not just application files. Exit Minecraft and EML, then make and verify a full backup outside that folder, including hidden `.eml-runtime` directories, before deleting anything. An exported instance ZIP is not a substitute for the full backup.
 
-To remove the shared account for the current Windows user, sign out in EML before removing the program. If EML cannot run, close all EML/game processes and remove only `%LOCALAPPDATA%\EML\accounts\microsoft.dpapi` after verifying the path. This does not revoke browser sessions or Microsoft-side authorization.
+To remove one account, select it on EML's Microsoft account page and confirm removal; other accounts remain. Repeat for every account if you want to clear the list. If EML cannot run, close all EML/game processes and remove only `%LOCALAPPDATA%\EML\accounts\microsoft.dpapi` after verifying the path. Deleting this file clears the entire account collection shared by all EML copies under that Windows user. Public names, UUIDs and launch history remain in instance settings, without tokens. Removing credentials does not revoke browser sessions or Microsoft-side authorization.
 
 Remove the portable folder only after deciding what data to keep. Do not uninstall unrelated Java/.NET installations. See the [upgrade guide](release-rc1.md) if you are updating rather than uninstalling.

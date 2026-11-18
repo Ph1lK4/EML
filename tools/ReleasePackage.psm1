@@ -21,6 +21,7 @@ function Test-EmlReleasePath {
         }
     }
     if ($Directory) {
+        if ($path -ceq 'docs') { return }
         if ($parts.Count -ne 1 -or $parts[0] -cnotmatch '^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$') {
             throw "Unexpected release directory: $path"
         }
@@ -32,6 +33,7 @@ function Test-EmlReleasePath {
         throw "Private or development file is forbidden in a release: $path"
     }
     if ($parts.Count -eq 2) {
+        if ($path -cin @('docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md')) { return }
         if ($parts[0] -cnotmatch '^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$' -or
             $name -cnotmatch '^(?:System\..+|Microsoft\..+|Presentation.+|WindowsBase|WindowsFormsIntegration|ReachFramework|UIAutomation.+|Accessibility)\.resources\.dll$') {
             throw "Only runtime satellite assemblies are allowed below the release root: $path"
@@ -44,6 +46,7 @@ function Test-EmlReleasePath {
         'CommunityToolkit.Mvvm.dll', 'EML.App.deps.json', 'EML.App.runtimeconfig.json',
         'microsoft-login.json', 'release-manifest.json', 'START-HERE.txt', 'UPGRADE.txt',
         'THIRD-PARTY-NOTICES.txt', 'LICENSE-DOTNET.txt', 'LICENSE-MVVM.txt',
+        'LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md',
         'createdump.exe', 'System.dll', 'mscorlib.dll', 'netstandard.dll'
     )
     if ($name -cin $fixedFiles) { return }
@@ -128,7 +131,8 @@ function Test-EmlReleaseLayout {
         'CommunityToolkit.Mvvm.dll', 'EML.App.deps.json', 'EML.App.runtimeconfig.json',
         'microsoft-login.json', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll',
         'PresentationFramework.dll', 'PresentationCore.dll', 'WindowsBase.dll',
-        'START-HERE.txt', 'UPGRADE.txt', 'LICENSE-DOTNET.txt', 'LICENSE-MVVM.txt', 'THIRD-PARTY-NOTICES.txt'
+        'START-HERE.txt', 'UPGRADE.txt', 'LICENSE-DOTNET.txt', 'LICENSE-MVVM.txt', 'THIRD-PARTY-NOTICES.txt',
+        'LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md', 'docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md'
     )
     foreach ($name in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $root $name) -PathType Leaf)) {
@@ -173,6 +177,15 @@ function Test-EmlReleaseLayout {
             $manifest.displayVersion -ne $DisplayVersion -or $manifest.runtimeIdentifier -ne 'win-x64' -or
             $manifest.selfContained -ne $true -or $manifest.runtimeVersion -ne $RuntimeVersion) {
             throw 'Release manifest identity is inconsistent.'
+        }
+        if ($manifest.sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or $manifest.sourceRepository -cne 'https://github.com/Ph1lK4/EML') {
+            throw 'Release manifest requires the exact public source revision.'
+        }
+        $sourceNotice = [IO.File]::ReadAllText((Join-Path $root 'SOURCE.txt'))
+        if (-not $sourceNotice.Contains("Source commit: $($manifest.sourceCommit)") -or
+            -not $sourceNotice.Contains("$($manifest.sourceRepository)/archive/$($manifest.sourceCommit).zip") -or
+            -not $sourceNotice.Contains('GPL-3.0-or-later')) {
+            throw 'Source notice does not match the release manifest.'
         }
         $payloadFiles = @{}
         foreach ($file in $files) {

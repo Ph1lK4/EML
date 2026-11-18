@@ -21,7 +21,7 @@ public static class InstanceFileChangePolicy
             IsDerivedStatePath(file.Path) ? InstanceFileRole.DerivedState :
             IsPrismMetadata(file, sourceFormat) ? InstanceFileRole.LauncherMetadata :
             IsMarkerPath(file.Path, gameDirectory) ? InstanceFileRole.ConsumableMarker :
-            IsKnownUserData(file.Path, gameDirectory) ? InstanceFileRole.UserData :
+            IsKnownUserData(file.Path, gameDirectory) || IsFolderPlayerData(file, gameDirectory) ? InstanceFileRole.UserData :
             IsKnownConfiguration(file.Path, gameDirectory) ? InstanceFileRole.UserConfiguration : InstanceFileRole.Content;
         if (file.Role is not { } declared) return inferred;
         // 明确 Content 可收紧配置策略，但声明不能扩大缓存或可变元数据的路径范围。
@@ -37,7 +37,8 @@ public static class InstanceFileChangePolicy
     /// <summary>仅放行可读取的普通包内设置和 Prism 元数据；明确覆盖、用户替换和平台文件始终严格。</summary>
     public static bool IsMutableConfiguration(InstanceFileRequirement file, string gameDirectory, string? sourceFormat = null)
     {
-        if (file.Source != InstanceFileSource.Embedded || file.Path is null || file.Origin is not null) return false;
+        if (file.Source != InstanceFileSource.Embedded || file.Path is null ||
+            file.Origin is not (null or InstanceFileOrigin.LocalFolderImport)) return false;
         return GetRole(file, gameDirectory, sourceFormat) switch
         {
             InstanceFileRole.LauncherMetadata => IsPrismMetadata(file, sourceFormat),
@@ -50,8 +51,19 @@ public static class InstanceFileChangePolicy
     public static bool IsMutableFile(InstanceFileRequirement file, string gameDirectory, string? sourceFormat = null) =>
         Migration.GtnhPlayerDataPolicy.IsMigrated(file, gameDirectory) ||
         IsMutableConfiguration(file, gameDirectory, sourceFormat) ||
-        file.Source == InstanceFileSource.Embedded && file.Origin is null &&
-        GetRole(file, gameDirectory, sourceFormat) == InstanceFileRole.UserData && IsKnownUserData(file.Path, gameDirectory);
+        file.Source == InstanceFileSource.Embedded && file.Origin is (null or InstanceFileOrigin.LocalFolderImport) &&
+        GetRole(file, gameDirectory, sourceFormat) == InstanceFileRole.UserData &&
+        (IsKnownUserData(file.Path, gameDirectory) || IsFolderPlayerData(file, gameDirectory));
+
+    /// <summary>目录复制的地图、截图和世界状态只是玩家数据；仍排除可执行内容、数据包与压缩档。</summary>
+    private static bool IsFolderPlayerData(InstanceFileRequirement file, string gameDirectory)
+    {
+        if (file.Origin != InstanceFileOrigin.LocalFolderImport || GameRelative(file.Path, gameDirectory) is not { } relative ||
+            IsProtectedContent(relative)) return false;
+        var top = relative.Split('/')[0];
+        return new[] { "saves", "journeymap", "visualprospecting", "TCNodeTracker", "screenshots", "XaeroWaypoints", "XaeroWorldMap" }
+            .Contains(top, StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>仅允许有原包空内容依据的一次性更新标记被游戏消耗，不能放行其他配置缺失。</summary>
     public static bool AllowsMissing(InstanceFileRequirement file, string gameDirectory, string? sourceFormat = null) =>
@@ -60,8 +72,9 @@ public static class InstanceFileChangePolicy
 
     /// <summary>DefaultKeys 会删除这个空标记；必须同时匹配普通包内来源、原条目和唯一空内容摘要。</summary>
     private static bool IsConsumableMarker(InstanceFileRequirement file, string gameDirectory) =>
-        file.Source == InstanceFileSource.Embedded && file.Origin is null && file.Size == 0 &&
-        !string.IsNullOrWhiteSpace(file.ArchiveEntry) && file.Downloads.Count == 0 && file.Hashes.Count == 1 &&
+        file.Source == InstanceFileSource.Embedded && file.Origin is (null or InstanceFileOrigin.LocalFolderImport) && file.Size == 0 &&
+        (file.Origin == InstanceFileOrigin.LocalFolderImport || !string.IsNullOrWhiteSpace(file.ArchiveEntry)) &&
+        file.Downloads.Count == 0 && file.Hashes.Count == 1 &&
         file.Hashes.TryGetValue("sha256", out var hash) && hash.Equals(EmptySha256, StringComparison.OrdinalIgnoreCase) &&
         IsMarkerPath(file.Path, gameDirectory);
 

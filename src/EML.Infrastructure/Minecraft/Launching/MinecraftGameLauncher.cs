@@ -18,13 +18,15 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
     private const int OutputFragmentLength = 8192;
     private readonly string _launcherRoot;
     private readonly MinecraftLaunchPlanner _planner;
+    private readonly IMinecraftLaunchIdentityStore _identityStore;
 
     /// <summary>复用 Java 检测；保留 checker 参数兼容旧调用方，启动不进行完整检查。</summary>
     public MinecraftGameLauncher(string launcherRoot, IMinecraftInstanceChecker? checker = null, IJavaLocator? javaLocator = null,
-        IMinecraftAccountService? accounts = null)
+        IMinecraftAccountService? accounts = null, IMinecraftLaunchIdentityStore? identityStore = null)
     {
         _launcherRoot = Path.GetFullPath(launcherRoot);
         _planner = new MinecraftLaunchPlanner(_launcherRoot, checker, javaLocator, accounts);
+        _identityStore = identityStore ?? new MinecraftLaunchSettingsStore(_launcherRoot);
     }
 
     /// <summary>只读验证启动前提，不创建进程、日志或临时文件。</summary>
@@ -120,13 +122,17 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
                 token.ThrowIfCancellationRequested();
                 started = process.Start();
                 if (!started) throw new IOException("未能创建 Java 进程。");
+                var identity = plan.Identity is { } planned ? planned with { StartedAtUtc = DateTimeOffset.UtcNow } : null;
                 // 两条管道同时读取，不串行 ReadToEnd；长行分段，避免无换行输出无限增长。
                 // 不让 Process 默认 StreamReader 先按宿主代码页错误解码，直接读取各自的字节管道。
                 readers = Task.WhenAll(ReadOutputAsync(process.StandardOutput.BaseStream, false, channel.Writer, readCancellation.Token,
                     plan.SensitiveValues, failures, plan.LogEncoding, systemOutputEncoding),
                     ReadOutputAsync(process.StandardError.BaseStream, true, channel.Writer, readCancellation.Token,
                     plan.SensitiveValues, failures, plan.LogEncoding, systemOutputEncoding));
-                Report(progress, new(MinecraftLaunchStage.Running, "Java 已启动，正在等待游戏初始化。", LogPath: logPath));
+                // 先消费游戏输出再写小型本机记录；写入失败不能让已创建进程失去管理或被误杀。
+                var identityWarning = identity is null ? null : await RememberIdentityAsync(root, identity).ConfigureAwait(false);
+                Report(progress, new(MinecraftLaunchStage.Running, "Java 已启动，正在等待游戏初始化。", LogPath: logPath)
+                { Identity = identity, IdentityPersistenceWarning = identityWarning });
                 try { await process.WaitForExitAsync(token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
@@ -167,6 +173,22 @@ public sealed class MinecraftGameLauncher : IMinecraftGameLauncher
         finally
         {
             if (argumentFile is not null) DeleteOwnedArgumentFile(argumentFile);
+        }
+    }
+
+    /// <summary>记录实际身份而非界面猜测；已启动后独立于停止令牌完成写入，失败仅返回安全的非致命说明。</summary>
+    private async Task<string?> RememberIdentityAsync(string instancePath, MinecraftLaunchIdentity identity)
+    {
+        try
+        {
+            await _identityStore.RememberAsync(instancePath, identity, CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+        catch
+        {
+            // 不附带任意存储异常正文，避免自定义提供者把凭证或其他私有数据带入启动日志。
+            return "游戏进程已启动，但无法记住本次账号和模式。请检查磁盘空间、启动设置内容和目录写入权限。设置位置：" +
+                Path.Combine(instancePath, MinecraftLaunchSettingsStore.RelativePath.Replace('/', Path.DirectorySeparatorChar));
         }
     }
 

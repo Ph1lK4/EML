@@ -7,10 +7,10 @@ public static class InstanceFileStatePolicy
     public static bool IsBlocking(InstanceFileCheckResult file) => file.Requirement.Required &&
         file.State is not (InstanceFileState.Verified or InstanceFileState.PresentUnverified) &&
         !(file.State == InstanceFileState.ChangedSinceImport && file.IsAllowedConfigurationChange && !file.IsRuntimeFile &&
-            file.Requirement.Source == InstanceFileSource.Embedded && file.Requirement.Origin is null &&
+            file.Requirement.Source == InstanceFileSource.Embedded && file.Requirement.Origin is (null or InstanceFileOrigin.LocalFolderImport) &&
             file.Requirement.Role != InstanceFileRole.Content) &&
         !(file.State == InstanceFileState.Consumed && file.IsAllowedMissing && !file.IsRuntimeFile &&
-            file.Requirement.Source == InstanceFileSource.Embedded && file.Requirement.Origin is null &&
+            file.Requirement.Source == InstanceFileSource.Embedded && file.Requirement.Origin is (null or InstanceFileOrigin.LocalFolderImport) &&
             file.Requirement.Role is InstanceFileRole.ConsumableMarker or InstanceFileRole.UserConfiguration);
 
     /// <summary>识别未取得或校验失败的必要下载文件，不把来源无哈希等同下载失败。</summary>

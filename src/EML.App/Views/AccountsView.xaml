@@ -4,7 +4,7 @@
   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel Margin="0,0,12,0">
       <TextBlock Text="微软账号" Style="{StaticResource PageTitle}"/>
-      <TextBlock Text="管理 Minecraft Java 版的登录与授权。"
+      <TextBlock Text="添加和管理多个正版账号，各实例可使用不同身份。"
                  Style="{StaticResource PageSubtitle}" Margin="0,6,0,24"/>
       <Border Style="{StaticResource CardBorder}" Padding="24" Margin="0,0,0,18">
         <Grid>
@@ -14,18 +14,33 @@
                        Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <StackPanel Grid.Column="1">
-            <TextBlock Text="当前玩家" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,4"/>
+            <TextBlock Text="默认正版账号" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,4"/>
             <TextBlock Text="{Binding AccountName}" FontSize="25" FontWeight="SemiBold" TextWrapping="Wrap"/>
             <TextBox Text="{Binding AccountId, Mode=OneWay, StringFormat=UUID：{0}}" IsReadOnly="True"
                      BorderThickness="0" Background="Transparent" Padding="0,6" TextWrapping="Wrap"
                      Foreground="{DynamicResource MutedTextBrush}" MinHeight="0"/>
             <WrapPanel Margin="0,16,0,0">
-              <Button Content="登录 / 更换微软账号" Command="{Binding LoginCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,8"/>
+              <Button Content="添加 / 重新登录账号" Command="{Binding LoginCommand}" Style="{StaticResource PrimaryButton}" Margin="0,0,10,8"/>
               <Button Content="重新读取账号" Command="{Binding LoadCommand}" Margin="0,0,10,8"/>
-              <Button Content="退出本机账号" Command="{Binding LogoutCommand}" Style="{StaticResource QuietButton}" Margin="0,0,0,8"/>
             </WrapPanel>
           </StackPanel>
         </Grid>
+      </Border>
+      <Border Style="{StaticResource CardBorder}" Padding="24" Margin="0,0,0,18">
+        <StackPanel>
+          <TextBlock Text="已保存的正版账号" FontSize="18" FontWeight="SemiBold"/>
+          <TextBlock Text="{Binding AccountListStatus}" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,6,0,14"/>
+          <ListBox x:Name="SavedAccountList" ItemsSource="{Binding SavedAccounts}" SelectedItem="{Binding SelectedAccount, Mode=TwoWay}"
+                   DisplayMemberPath="Name" IsSynchronizedWithCurrentItem="False" MaxHeight="200" AutomationProperties.Name="已保存的正版账号"/>
+          <TextBox Text="{Binding SelectedAccount.Id, Mode=OneWay, StringFormat=所选 UUID：{0}}" IsReadOnly="True" Background="Transparent"
+                   BorderThickness="0" Padding="0,8" MinHeight="0" Foreground="{DynamicResource MutedTextBrush}"/>
+          <WrapPanel Margin="0,10,0,0">
+            <Button Content="设为默认账号" Command="{Binding SelectAccountCommand}" Margin="0,0,10,0"/>
+            <Button Content="移除所选账号" Command="{Binding RemoveAccountCommand}" Style="{StaticResource QuietButton}"/>
+          </WrapPanel>
+          <TextBlock Text="移除只清理 EML 的本机登录记录，不删除微软账号或游戏存档。已经记住账号的实例不会自动换号。"
+                     Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,12,0,0"/>
+        </StackPanel>
       </Border>
       <Border Style="{StaticResource CardBorder}" Padding="24" Margin="0,0,0,18">
         <StackPanel>

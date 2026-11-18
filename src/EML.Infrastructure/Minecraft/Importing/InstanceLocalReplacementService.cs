@@ -87,7 +87,7 @@ public sealed class InstanceLocalReplacementService(string? launcherRoot = null)
         var byPath = state.Files.ToDictionary(item => item.Path, StringComparer.OrdinalIgnoreCase);
         var applied = requirements.Select(requirement => requirement.Path is not null &&
             requirement.Source == InstanceFileSource.Embedded &&
-            (requirement.Origin is null or InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport) &&
+            (requirement.Origin is null or InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport or InstanceFileOrigin.LocalFolderImport) &&
             byPath.TryGetValue(requirement.Path, out var replacement)
                 ? UseReplacement(requirement, replacement) : requirement).ToArray();
         return new(applied, state.Fingerprint);

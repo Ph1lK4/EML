@@ -19,7 +19,7 @@ public static class InstanceFileIntegrity
                 file.Downloads.Count != 1 || !string.Equals(file.Downloads[0], GithubDownloadUrl(github), StringComparison.Ordinal))
                 throw new InvalidDataException("GitHub 发行文件必须保留固定资产身份、官方大小和 SHA-256，且下载地址必须与来源一致。");
         }
-        if (file.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport or InstanceFileOrigin.MigratedPlayerData)
+        if (file.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport or InstanceFileOrigin.MigratedPlayerData or InstanceFileOrigin.LocalFolderImport)
         {
             if (file.Source != InstanceFileSource.Embedded || file.Size is null or < 0 ||
                 file.Hashes.Count != 1 || !file.Hashes.TryGetValue("sha256", out var hash) || !ValidHash(hash, 64) ||

@@ -11,7 +11,7 @@ internal static class InstanceBackupManifest
         InstanceEffectiveRequirements.Snapshot Requirements);
 
     /// <summary>只从原始声明、已验证平台映射和明确用户记录构建备份，不把磁盘字节当成新授权。</summary>
-    internal static Snapshot Create(string root, InstanceImportManifest manifest)
+    internal static Snapshot Create(string root, InstanceImportManifest manifest, bool rebaseArchiveEntries = true)
     {
         var resolution = manifest.SourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase)
             ? CurseForgeFileStateStore.Read(root, manifest) : null;
@@ -36,8 +36,10 @@ internal static class InstanceBackupManifest
             else if (original.Path is { } path && byPath.TryGetValue(path, out var selected) &&
                 selected.Origin != InstanceFileOrigin.MigratedPlayerData)
                 requirement = selected;
-            if (requirement.Source == InstanceFileSource.Embedded &&
-                requirement.Origin != InstanceFileOrigin.UserLocalImport && requirement.ArchiveEntry is not null)
+            // ZIP 备份把恢复条目指向新归档；目录复制没有新归档，必须保留原始条目。
+            if (rebaseArchiveEntries && requirement.Source == InstanceFileSource.Embedded &&
+                requirement.Origin != InstanceFileOrigin.UserLocalImport &&
+                (requirement.ArchiveEntry is not null || requirement.Origin == InstanceFileOrigin.LocalFolderImport))
                 requirement = requirement with { ArchiveEntry = requirement.Path };
             files.Add(requirement);
         }

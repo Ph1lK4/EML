@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using EML.Core.Minecraft.Accounts;
 
 namespace EML.Core.Minecraft.Launching;
 
@@ -10,6 +11,8 @@ public static partial class MinecraftLaunchValidation
     public static void Validate(MinecraftLaunchSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        if (settings.PreferredMicrosoftAccount is { } account) ValidateAccount(account);
+        if (settings.LastLaunchIdentity is { } identity) ValidateIdentity(identity);
         if (!Enum.IsDefined(settings.LogEncoding)) throw new ArgumentException("日志编码选项无效，请重新选择。");
         if (!settings.UseMicrosoftAccount && (settings.PlayerName is null || !PlayerNamePattern().IsMatch(settings.PlayerName)))
             throw new ArgumentException("离线玩家名须为 1–16 位英文字母、数字或下划线。");
@@ -43,6 +46,35 @@ public static partial class MinecraftLaunchValidation
                 argument is "-version" or "--version" or "-help" or "--help" or "-?" || argument.StartsWith("-Xbootclasspath", StringComparison.Ordinal))
                 throw new ArgumentException("附加 JVM 参数不能更改启动入口、类路径、原生库、日志配置或内存；请使用对应设置。参数：" + argument);
         }
+    }
+
+    /// <summary>公开账号仍须是 Minecraft 玩家名与 UUID，拒绝把任意文本混入身份记录和提示。</summary>
+    public static void ValidateAccount(MinecraftAccount account)
+    {
+        ArgumentNullException.ThrowIfNull(account);
+        if (account.Name is null || !PlayerNamePattern().IsMatch(account.Name) || !TryPlayerId(account.Id, out _))
+            throw new ArgumentException("记住的正版玩家名或 UUID 无效，请重新选择账号。");
+    }
+
+    /// <summary>只有实际启动时间和合法公开身份才能作为历史保存，准备阶段的空时间不算游玩记录。</summary>
+    public static void ValidateIdentity(MinecraftLaunchIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        if (identity.PlayerName is null || !PlayerNamePattern().IsMatch(identity.PlayerName) ||
+            !TryPlayerId(identity.PlayerId, out _) || identity.StartedAtUtc == default)
+            throw new ArgumentException("上次启动身份记录无效，请检查此实例的启动设置。");
+    }
+
+    /// <summary>比较 UUID 本身，兼容带连字符或不带连字符的格式，允许同一正版账号修改玩家名。</summary>
+    public static bool SamePlayerId(string? first, string? second) =>
+        TryPlayerId(first, out var left) && TryPlayerId(second, out var right) && left == right;
+
+    /// <summary>只接受 Minecraft 常见的 N/D 格式且非空 UUID，不接受带括号或额外空白的文本。</summary>
+    private static bool TryPlayerId(string? text, out Guid id)
+    {
+        id = default;
+        return text is not null && (text.Length == 32 && Guid.TryParseExact(text, "N", out id) ||
+            text.Length == 36 && Guid.TryParseExact(text, "D", out id)) && id != Guid.Empty;
     }
 
     /// <summary>按空白分隔参数并支持单双引号；普通 Windows 反斜杠保持原值，不进行 shell 展开。</summary>

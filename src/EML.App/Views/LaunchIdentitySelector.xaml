@@ -3,12 +3,13 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
   <!-- 本地实例与启动设置共用同一个模型；本控件只展示公开玩家名，不读取认证令牌。 -->
   <Grid IsEnabled="{Binding CanEditLaunchSettings}">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <StackPanel>
       <TextBlock Text="启动模式" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
       <ComboBox x:Name="ModeSelector" ItemsSource="{Binding LaunchModes}"
                 SelectedItem="{Binding SelectedLaunchMode, Mode=TwoWay}"
-                AutomationProperties.Name="启动模式" ToolTip="同一实例的两处选择即时同步，以最后选择为准；正版模式使用已登录账号"/>
+                AutomationProperties.Name="启动模式" ToolTip="两个入口即时同步；实际启动后自动记住本实例的账号与模式"/>
     </StackPanel>
     <Grid Grid.Column="2" MaxWidth="360" HorizontalAlignment="Left" MinWidth="200">
       <StackPanel>
@@ -30,11 +31,26 @@
             <Style.Triggers><DataTrigger Binding="{Binding UseMicrosoftAccount}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
           </Style>
         </StackPanel.Style>
-        <TextBlock Text="正版玩家名" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
-        <TextBox x:Name="MicrosoftPlayerName" IsReadOnly="True"
-                 Text="{Binding Accounts.AccountName, Mode=OneWay, TargetNullValue=尚未登录, FallbackValue=尚未登录}"
-                 AutomationProperties.Name="正版玩家名" ToolTip="自动使用已登录的 Minecraft 玩家名；尚未登录时请前往“微软账号”页面"/>
+        <TextBlock Text="正版账号" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,0,0,7"/>
+        <DockPanel LastChildFill="True">
+          <Button x:Name="UseCurrentAccountButton" DockPanel.Dock="Right" Margin="8,0,0,0" Padding="8,4"
+                  Content="改用默认" Command="{Binding UseCurrentMicrosoftAccountCommand}"
+                  ToolTip="明确改用默认正版账号；不同 UUID 可能对应不同背包和进度。">
+            <Button.Style>
+              <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <Setter Property="Visibility" Value="Collapsed"/>
+                <Style.Triggers><DataTrigger Binding="{Binding CanUseCurrentMicrosoftAccount}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+              </Style>
+            </Button.Style>
+          </Button>
+          <ComboBox x:Name="MicrosoftAccountSelector" ItemsSource="{Binding AvailableMicrosoftAccounts}" DisplayMemberPath="Name"
+                  SelectedItem="{Binding SelectedMicrosoftAccount, Mode=TwoWay}" IsSynchronizedWithCurrentItem="False"
+                  AutomationProperties.Name="正版账号" ToolTip="为此实例选择已登录的账号；添加和移除账号请前往“微软账号”页面"/>
+        </DockPanel>
       </StackPanel>
     </Grid>
+    <TextBlock x:Name="IdentityHint" Grid.Row="1" Grid.ColumnSpan="3" Text="{Binding LaunchIdentityHint}"
+               TextTrimming="CharacterEllipsis" ToolTip="{Binding LaunchIdentityHint}"
+               Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,9,0,0"/>
   </Grid>
 </UserControl>

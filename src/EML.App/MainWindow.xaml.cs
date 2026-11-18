@@ -70,7 +70,10 @@ public partial class MainWindow : Window
         _modIcons = new ModIconCache(launcherRoot, WpfModIconDecoder.Decode);
         var accounts = new MinecraftAccountViewModel(_accountService, uri =>
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
-            notifications: _operationNotifications);
+            notifications: _operationNotifications,
+            confirmRemove: account => DialogPrompt.Confirm(this, "移除正版账号",
+                $"确定移除 {account.Name} 的 EML 本机登录记录吗？\n不会删除微软账号、游戏存档或其他账号。\n使用这个账号的实例需要重新登录或明确选择另一个账号。",
+                "移除账号", DialogTone.Warning));
         var instances = new InstancesViewModel(locator, new MinecraftInstanceManager(launcherRoot),
                 new MinecraftInstanceImporter(launcherRoot), new InstanceDialogs(this), locator.InstancesRoot,
                 checker, new MinecraftInstanceDownloader(launcherRoot, checker, _downloadCenter),
@@ -80,7 +83,10 @@ public partial class MainWindow : Window
                 localMods, new ModManagementDialogs(this), onlineCatalog, onlineInstaller, _modIcons,
                 uri => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }),
                 ChineseModCatalog.Default, _gtnhAddons, notifications: _operationNotifications, accounts: accounts, gtnhPacks: _gtnhPacks,
-                javaRuntimes: _javaRuntimes, javaDownloadDialogs: new WpfJavaDownloadDialogs(this));
+                javaRuntimes: _javaRuntimes, javaDownloadDialogs: new WpfJavaDownloadDialogs(this),
+                externalDiscovery: new EML.Infrastructure.Minecraft.External.ExternalInstanceDiscovery(),
+                folderImporter: new EML.Infrastructure.Minecraft.External.MinecraftFolderImporter(launcherRoot),
+                externalDialogs: new ExternalInstanceDialogs(this));
         _instanceCatalog = new InstanceCatalog(_modrinth, _curseForge);
         var archives = new InstanceArchiveService(launcherRoot, _instanceCatalog, _downloadCenter);
         var downloads = new InstanceDownloadsViewModel(_instanceCatalog,
@@ -115,7 +121,7 @@ public partial class MainWindow : Window
         IAsyncRelayCommand[] operations =
         [
             viewModel.Instances.QuickCheckCommand, viewModel.Instances.FullCheckCommand,
-            viewModel.Instances.DownloadMissingCommand, viewModel.Instances.ImportCommand,
+            viewModel.Instances.DownloadMissingCommand, viewModel.Instances.ImportCommand, viewModel.Instances.ImportFolderCommand,
             viewModel.Instances.ExportCommand, viewModel.Instances.RenameCommand, viewModel.Instances.DeleteCommand,
             viewModel.Instances.LaunchGameCommand, viewModel.Instances.SaveLaunchSettingsCommand,
             viewModel.Instances.MigratePlayerDataCommand, viewModel.Instances.RestoreMigrationCommand,
@@ -125,7 +131,8 @@ public partial class MainWindow : Window
             viewModel.Instances.RecoverModOperationsCommand
         ];
         if (viewModel.Accounts is { } accounts)
-            operations = [.. operations, accounts.LoginCommand, accounts.LoadCommand, accounts.LogoutCommand];
+            operations = [.. operations, accounts.LoginCommand, accounts.LoadCommand, accounts.LogoutCommand,
+                accounts.SelectAccountCommand, accounts.RemoveAccountCommand];
         // 自动读取可能仍在排队，因此除了命令还要停止并等待页面自己的任务。
         var modListCleanup = viewModel.Instances.StopModListLoadingAsync();
         var onlineCleanup = viewModel.Instances.OnlineMods?.StopAsync() ?? Task.CompletedTask;
@@ -247,7 +254,9 @@ public partial class MainWindow : Window
             ? viewModel.Instances.RefreshCommand.ExecutionTask ?? Task.CompletedTask
             : _operationNotifications.RunInitializationAsync(() => viewModel.Instances.RefreshCommand.ExecuteAsync(null));
         var accountTask = viewModel.Accounts is { } accounts
-            ? accounts.IsBusy ? accounts.LoadCommand.ExecutionTask ?? accounts.LoginCommand.ExecutionTask ?? accounts.LogoutCommand.ExecutionTask ?? Task.CompletedTask
+            ? accounts.IsBusy ? Task.WhenAll(new[] { accounts.LoadCommand, accounts.LoginCommand, accounts.LogoutCommand,
+                    accounts.SelectAccountCommand, accounts.RemoveAccountCommand }
+                    .Where(command => command.IsRunning).Select(command => command.ExecutionTask).OfType<Task>())
                 : _operationNotifications.RunInitializationAsync(() => accounts.LoadCommand.ExecuteAsync(null))
             : Task.CompletedTask;
         await Task.WhenAll(javaTask, instancesTask, accountTask);

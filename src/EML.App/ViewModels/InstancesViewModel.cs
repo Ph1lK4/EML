@@ -48,11 +48,11 @@ public partial class InstancesViewModel : ObservableObject
     [ObservableProperty] private string transferStatus = "";
     [ObservableProperty] private bool isExporting;
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanEditLaunchSettings), nameof(CanEditOfflinePlayerName))]
-    [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand),
+    [NotifyPropertyChangedFor(nameof(CanInteract), nameof(CanEditLaunchSettings), nameof(CanEditOfflinePlayerName), nameof(CanUseCurrentMicrosoftAccount))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshCommand), nameof(RenameCommand), nameof(DeleteCommand), nameof(ExportCommand), nameof(ImportCommand), nameof(ImportFolderCommand),
         nameof(QuickCheckCommand), nameof(FullCheckCommand), nameof(DownloadMissingCommand),
         nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(ReloadLaunchSettingsCommand),
-        nameof(MigratePlayerDataCommand), nameof(RestoreMigrationCommand))]
+        nameof(MigratePlayerDataCommand), nameof(RestoreMigrationCommand), nameof(UseCurrentMicrosoftAccountCommand))]
     private bool isBusy;
     /// <summary>没有实例操作正在执行时，允许修改输入和列表选择。</summary>
     public bool CanInteract => !IsBusy;
@@ -70,12 +70,16 @@ public partial class InstancesViewModel : ObservableObject
         IOnlineModLocalization? modLocalization = null, IGtnhAddonService? gtnhAddons = null,
         IOperationNotifications? notifications = null, MinecraftAccountViewModel? accounts = null,
         IGtnhPackService? gtnhPacks = null, IJavaRuntimeService? javaRuntimes = null,
-        IJavaDownloadDialogs? javaDownloadDialogs = null)
+        IJavaDownloadDialogs? javaDownloadDialogs = null, IExternalInstanceDiscovery? externalDiscovery = null,
+        IMinecraftFolderImporter? folderImporter = null, IExternalInstanceDialogs? externalDialogs = null)
     {
         _locator = locator;
         _manager = manager;
         _importer = importer;
         _dialogs = dialogs;
+        _externalDiscovery = externalDiscovery;
+        _folderImporter = folderImporter;
+        _externalDialogs = externalDialogs;
         _notifications = notifications ?? NullOperationNotifications.Instance;
         InstancesRoot = instancesRoot;
         _checker = checker;
@@ -86,6 +90,11 @@ public partial class InstancesViewModel : ObservableObject
         _javaDownloadDialogs = javaDownloadDialogs;
         Java = java;
         Accounts = accounts;
+        if (Accounts is not null)
+        {
+            Accounts.PropertyChanged += OnLaunchAccountChanged;
+            Accounts.AccountsChanged += OnAvailableLaunchAccountsChanged;
+        }
         _migration = migration; _migrationDialogs = migrationDialogs;
         _localMods = localMods; _modDialogs = modDialogs;
         if (onlineCatalog is not null && onlineInstaller is not null)
@@ -296,31 +305,7 @@ public partial class InstancesViewModel : ObservableObject
                 TransferStatus = $"{p.Percent:F1}%  {p.FileName}";
             });
             imported = await _importer.ImportAsync(archive, name, progress, token);
-            ++_transferRevision;
-            TransferPercent = 100;
-            TransferStatus = "导入完成";
-            var refreshed = await ReloadAfterChangeAsync(imported.InstancePath, "实例文件已导入。");
-            var refreshMessage = refreshed ? null : StatusText;
-            SelectImportedInstance(imported);
-            SelectedDetailTab = 2;
-            var sourceFormat = imported.Manifest.SourceFormat;
-            if (sourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
-                 sourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase) ||
-                 sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase) ||
-                 sourceFormat.Equals("Zip", StringComparison.OrdinalIgnoreCase))
-            {
-                // 补全始终使用导入结果中的路径，不依赖扫描成功，也不在两阶段之间释放忙碌状态。
-                var notice = await RunDownloadAsync(imported.InstancePath, token, afterImport: true);
-                if (refreshMessage is not null)
-                    notice = notice with { Kind = notice.Kind == OperationNoticeKind.Success ? OperationNoticeKind.Warning : notice.Kind,
-                        Message = notice.Message + "\n" + refreshMessage };
-                _notifications.Report(notice with { Paths = notice.Paths.Append(archive).ToArray() });
-            }
-            else
-            {
-                StatusText += " 当前格式已保存包内文件；可点击“补全实例依赖”继续检查。";
-                _notifications.Warning("实例已导入，运行依赖尚未检查", StatusText, archive, imported.InstancePath);
-            }
+            await CompleteImportedInstanceAsync(imported, archive, token);
         }
         catch (OperationCanceledException)
         {
@@ -337,6 +322,35 @@ public partial class InstancesViewModel : ObservableObject
         }
         finally { ++_transferRevision; }
         return imported is not null;
+    }
+
+    /// <summary>归档与文件夹导入共用提交后的刷新和补全，始终使用新实例路径并只发布一次结果通知。</summary>
+    private async Task CompleteImportedInstanceAsync(InstanceImportResult imported, string sourcePath, CancellationToken token)
+    {
+        ++_transferRevision;
+        TransferPercent = 100;
+        TransferStatus = "导入完成";
+        var refreshed = await ReloadAfterChangeAsync(imported.InstancePath, "实例文件已导入。");
+        var refreshMessage = refreshed ? null : StatusText;
+        SelectImportedInstance(imported);
+        SelectedDetailTab = 2;
+        var sourceFormat = imported.Manifest.SourceFormat;
+        if (sourceFormat.Equals("Prism", StringComparison.OrdinalIgnoreCase) ||
+            sourceFormat.Equals("Modrinth", StringComparison.OrdinalIgnoreCase) ||
+            sourceFormat.Equals("CurseForge", StringComparison.OrdinalIgnoreCase) ||
+            sourceFormat.Equals("Zip", StringComparison.OrdinalIgnoreCase))
+        {
+            var notice = await RunDownloadAsync(imported.InstancePath, token, afterImport: true);
+            if (refreshMessage is not null)
+                notice = notice with { Kind = notice.Kind == OperationNoticeKind.Success ? OperationNoticeKind.Warning : notice.Kind,
+                    Message = notice.Message + "\n" + refreshMessage };
+            _notifications.Report(notice with { Paths = notice.Paths.Append(sourcePath).ToArray() });
+        }
+        else
+        {
+            StatusText += " 当前格式已保存本地文件；可点击“补全实例依赖”继续检查。";
+            _notifications.Warning("实例已导入，运行依赖尚未检查", StatusText, sourcePath, imported.InstancePath);
+        }
     }
 
     /// <summary>刷新失败或扫描暂未发现时仍展示已提交实例，保证自动补全结果属于正确条目。</summary>

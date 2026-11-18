@@ -335,6 +335,7 @@ public sealed class LocalModManager : ILocalModManager, IOnlineModRegistrar
     /// <summary>显示实际来源，备用下载同时说明原 CurseForge 文件身份。</summary>
     private static string SourceDescription(InstanceFileRequirement file) => file.Origin switch
     {
+        InstanceFileOrigin.LocalFolderImport => "其他启动器 · 本地文件夹副本",
         InstanceFileOrigin.CurseForgeDownload => $"CurseForge 下载 · {file.ProjectId}/{file.FileId}",
         InstanceFileOrigin.GithubReleaseDownload => $"GitHub 发行版 · {file.GithubReleaseOrigin?.Repository} / {file.GithubReleaseOrigin?.Tag}",
         InstanceFileOrigin.ModrinthDownload => "Modrinth 下载" +

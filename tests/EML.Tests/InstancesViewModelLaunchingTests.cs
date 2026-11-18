@@ -10,6 +10,192 @@ namespace EML.Tests;
 /// <summary>通过生产启动命令验证设置隔离和进程生命周期，所有依赖使用内存替身。</summary>
 public sealed class InstancesViewModelLaunchingTests
 {
+    private const string RememberedId = "11111111222233334444555555555555";
+    private const string OtherAccountId = "aaaaaaaa222233334444555555555555";
+
+    /// <summary>新窗口按磁盘中的默认身份恢复模式与名称，同时保留上次实际启动提示。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FreshModelRestoresRememberedIdentityWithoutSavingOrLoggingIn(bool online)
+    {
+        var identity = new MinecraftLaunchIdentity(online, "Remembered", RememberedId, DateTimeOffset.UtcNow);
+        var fixture = new Fixture();
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+        {
+            UseMicrosoftAccount = online,
+            PlayerName = online ? "OfflineDraft" : "Remembered",
+            PreferredMicrosoftAccount = online ? new(RememberedId, "Remembered") : null,
+            LastLaunchIdentity = identity
+        });
+
+        await fixture.SelectAsync();
+
+        Assert.Equal(online, fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal(online ? "OfflineDraft" : "Remembered", fixture.ViewModel.PlayerName);
+        Assert.Equal(identity, fixture.ViewModel.LastLaunchIdentity);
+        Assert.Contains("上次启动：Remembered", fixture.ViewModel.LaunchIdentityHint);
+        if (online) Assert.Equal("Remembered", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.Empty(fixture.Store.Saved);
+        Assert.Empty(fixture.Launcher.Calls);
+        Assert.Empty(fixture.Notifications.Notices);
+    }
+
+    /// <summary>另一个已登录账号不能顶替记住的身份，明确换号后两个入口使用同一新 UUID。</summary>
+    [Fact]
+    public async Task DifferentCurrentAccountRequiresExplicitSelection()
+    {
+        var service = new AccountDisplayService { Id = OtherAccountId, NextName = "CurrentPlayer" };
+        var accounts = new MinecraftAccountViewModel(service);
+        await accounts.LoginCommand.ExecuteAsync(null);
+        var fixture = new Fixture(accounts);
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+        { UseMicrosoftAccount = true, PreferredMicrosoftAccount = new(RememberedId, "OldPlayer") });
+        await fixture.SelectAsync();
+
+        Assert.Equal("OldPlayer", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.Contains("与所选账号不同", fixture.ViewModel.LaunchIdentityHint);
+        Assert.True(fixture.ViewModel.UseCurrentMicrosoftAccountCommand.CanExecute(null));
+        await StartLaunch(fixture.ViewModel);
+        Assert.Equal(RememberedId, fixture.Launcher.Calls[0].Settings.PreferredMicrosoftAccount!.Id);
+
+        fixture.ViewModel.UseCurrentMicrosoftAccountCommand.Execute(null);
+        Assert.Equal("CurrentPlayer", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.False(fixture.ViewModel.UseCurrentMicrosoftAccountCommand.CanExecute(null));
+        Assert.Empty(fixture.Store.Saved);
+        await StartLaunch(fixture.ViewModel);
+        Assert.Equal(OtherAccountId, fixture.Launcher.Calls[1].Settings.PreferredMicrosoftAccount!.Id);
+    }
+
+    /// <summary>同一 UUID 改名刷新显示，退出账号后仍保留选择但提示重新登录。</summary>
+    [Fact]
+    public async Task RenamedOrSignedOutAccountDoesNotLoseRememberedChoice()
+    {
+        var service = new AccountDisplayService { Id = RememberedId, NextName = "Renamed" };
+        var accounts = new MinecraftAccountViewModel(service);
+        var fixture = new Fixture(accounts);
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+        { UseMicrosoftAccount = true, PreferredMicrosoftAccount = new(RememberedId, "OldName") });
+        await fixture.SelectAsync();
+        await accounts.LoginCommand.ExecuteAsync(null);
+        Assert.Equal("Renamed", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.False(fixture.ViewModel.CanUseCurrentMicrosoftAccount);
+
+        await accounts.LogoutCommand.ExecuteAsync(null);
+
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("OldName", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.Contains("请先登录", fixture.ViewModel.LaunchIdentityHint);
+        Assert.False(fixture.ViewModel.CanUseCurrentMicrosoftAccount);
+    }
+
+    /// <summary>显式保存新账号后即固定该选择，账号页后来换号不能绕开已保存的 UUID。</summary>
+    [Fact]
+    public async Task ExplicitSavePinsCurrentAccountInOpenModel()
+    {
+        var service = new AccountDisplayService { Id = RememberedId };
+        var accounts = new MinecraftAccountViewModel(service);
+        await accounts.LoginCommand.ExecuteAsync(null);
+        var fixture = new Fixture(accounts);
+        await fixture.SelectAsync();
+        fixture.ViewModel.UseMicrosoftAccount = true;
+        await fixture.ViewModel.SaveLaunchSettingsCommand.ExecuteAsync(null);
+        service.Id = OtherAccountId;
+        service.NextName = "AnotherPlayer";
+        await accounts.LoginCommand.ExecuteAsync(null);
+
+        Assert.Equal(RememberedId, fixture.ViewModel.PreferredMicrosoftAccount!.Id);
+        Assert.Equal("OnlineAlex", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.True(fixture.ViewModel.CanUseCurrentMicrosoftAccount);
+    }
+
+    /// <summary>只接受 Running 阶段的真实记录，不从当前账号页面或表单猜测上次身份。</summary>
+    [Fact]
+    public async Task RunningIdentityUpdatesHistoryWithoutSavingJvmDraft()
+    {
+        var fixture = new Fixture();
+        await fixture.SelectAsync();
+        fixture.ViewModel.MaxMemoryMbText = "4096";
+        fixture.ViewModel.AdditionalJvmArguments = "-Dexample=draft";
+        var identity = new MinecraftLaunchIdentity(true, "ActualSession", RememberedId, DateTimeOffset.UtcNow);
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            progress!.Report(new(MinecraftLaunchStage.Running, "started") { Identity = identity });
+            return Task.FromResult(new MinecraftLaunchResult(true, 0, false, null));
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(identity, fixture.ViewModel.LastLaunchIdentity);
+        Assert.Equal("ActualSession", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        Assert.True(fixture.ViewModel.UseMicrosoftAccount);
+        Assert.Equal("4096", fixture.ViewModel.MaxMemoryMbText);
+        Assert.Equal("-Dexample=draft", fixture.ViewModel.AdditionalJvmArguments);
+        Assert.Empty(fixture.Store.Saved);
+    }
+
+    /// <summary>启动会话刷新得到的新名字同步到公开列表和启动草稿，UUID 与默认选择保持不变。</summary>
+    [Fact]
+    public async Task RunningIdentityRefreshesKnownAccountNameWithoutResurrectingRemovedAccount()
+    {
+        var service = new AccountDisplayService { Id = RememberedId, NextName = "BeforeRename" };
+        var accounts = new MinecraftAccountViewModel(service);
+        await accounts.LoginCommand.ExecuteAsync(null);
+        var fixture = new Fixture(accounts);
+        await fixture.SelectAsync();
+        fixture.ViewModel.UseMicrosoftAccount = true;
+        var identity = new MinecraftLaunchIdentity(true, "AfterRename", RememberedId, DateTimeOffset.UtcNow);
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            progress!.Report(new(MinecraftLaunchStage.Running, "started") { Identity = identity });
+            return Task.FromResult(new MinecraftLaunchResult(true, 0, false, null));
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal("AfterRename", accounts.AccountName);
+        Assert.Equal(RememberedId, accounts.AccountId);
+        Assert.Equal("AfterRename", Assert.Single(accounts.SavedAccounts).Name);
+        Assert.Equal("AfterRename", fixture.ViewModel.SelectedMicrosoftPlayerName);
+        await fixture.ViewModel.SaveLaunchSettingsCommand.ExecuteAsync(null);
+        Assert.Equal("AfterRename", Assert.Single(fixture.Store.Saved).Settings.PreferredMicrosoftAccount!.Name);
+
+        await accounts.LogoutCommand.ExecuteAsync(null);
+        await StartLaunch(fixture.ViewModel);
+        Assert.Empty(accounts.SavedAccounts);
+        Assert.Equal("", accounts.AccountId);
+        Assert.Equal(RememberedId, fixture.ViewModel.PreferredMicrosoftAccount!.Id);
+    }
+
+    /// <summary>记录失败单独提醒一次，不声称已记住，也不把游戏结果改为失败。</summary>
+    [Fact]
+    public async Task IdentityWriteFailureKeepsPreviousHistoryAndWarnsOnce()
+    {
+        var previous = new MinecraftLaunchIdentity(false, "Previous", RememberedId, DateTimeOffset.UtcNow);
+        var fixture = new Fixture();
+        fixture.Store.Load = (_, _) => Task.FromResult(new MinecraftLaunchSettings { LastLaunchIdentity = previous });
+        await fixture.SelectAsync();
+        fixture.Launcher.Run = (progress, _) =>
+        {
+            var running = new MinecraftLaunchProgress(MinecraftLaunchStage.Running, "started")
+            {
+                Identity = previous with { PlayerName = "NotSaved" },
+                IdentityPersistenceWarning = "无法记住本次身份，游戏仍继续运行。"
+            };
+            progress!.Report(running);
+            Assert.IsType<BoundedLaunchProgress>(progress).FlushPending();
+            progress.Report(running);
+            return Task.FromResult(new MinecraftLaunchResult(true, 0, false, null));
+        };
+
+        await StartLaunch(fixture.ViewModel);
+
+        Assert.Equal(previous, fixture.ViewModel.LastLaunchIdentity);
+        Assert.Single(fixture.Notifications.Notices, notice => notice.Title == "启动身份未能保存");
+        Assert.DoesNotContain(fixture.Notifications.Notices, notice => notice.Kind == OperationNoticeKind.Failure);
+        Assert.Equal(0, fixture.ViewModel.LastExitCode);
+    }
+
     /// <summary>选中实例后显示默认离线名称、内存和自动 Java，不选实例时不能启动。</summary>
     [Fact]
     public async Task SelectionLoadsDefaultsAndEnablesLaunch()
@@ -1161,10 +1347,11 @@ public sealed class InstancesViewModelLaunchingTests
     private sealed class AccountDisplayService : IMinecraftAccountService
     {
         public bool IsConfigured => true;
+        public string Id { get; set; } = RememberedId;
         public string NextName { get; set; } = "OnlineAlex";
         public Task<MinecraftAccount?> LoadAccountAsync(CancellationToken cancellationToken = default) => Task.FromResult<MinecraftAccount?>(null);
         public Task<MinecraftAccount> SignInAsync(IProgress<MinecraftLoginPrompt>? progress = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new MinecraftAccount("test-profile", NextName));
+            Task.FromResult(new MinecraftAccount(Id, NextName));
         public Task SignOutAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<MinecraftAccountSession> GetSessionAsync(CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("显示玩家名不能读取登录令牌。");

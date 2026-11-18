@@ -33,8 +33,10 @@ Screenshots show the Chinese interface. Personal details have been redacted.
 ### Install and play
 
 - Download modpacks from Modrinth or CurseForge, or install vanilla Minecraft from Mojang's version catalog. Import Prism ZIPs, Modrinth `.mrpack` files, CurseForge ZIPs and supported game-directory ZIPs; dependency downloads start after import.
+- Copy supported instance folders from launchers such as Prism and the Modrinth App without making a ZIP first. The original instance stays in place, and launcher account credentials are not imported.
 - Detect installed Java runtimes or download a suitable one from the Java page. If an instance has no compatible Java, EML asks before downloading and installing it. Existing Java installations and system environment variables are left alone.
-- Sign in with Microsoft or choose an offline name. Save Java, memory and JVM settings per instance, and view game logs. Online mode uses the signed-in Minecraft profile and a valid session; authentication failure does not silently switch you to offline mode.
+- Add and manage multiple Microsoft accounts, then choose an account or offline mode for each instance. Once the game process starts, EML remembers that instance's account, name and mode. Changing the default account does not overwrite an instance's existing choice; authentication failure never silently switches accounts or falls back to offline mode.
+- Set Java, memory and JVM options per instance and view game logs. Offline mode still takes a player name directly; Java and JVM settings require an explicit save.
 
 ### GTNH hub
 
@@ -58,7 +60,7 @@ Screenshots show the Chinese interface. Personal details have been redacted.
 
 Keep two instances: **the old one containing your player data**, and **a separate new version whose dependencies are complete and which starts successfully**. Close both games before migration.
 
-If the old instance is still in another launcher, use “Import old instance (with local data)” in the GTNH hub. Its archive must actually contain your saves and maps; downloading the original pack again will not recover your play history.
+If the old instance is still in another launcher, copy a supported folder with “Import from another launcher,” or export it and use “Import old instance (with local data)” in the GTNH hub. The folder or archive must actually contain your saves and maps; downloading the original pack again will not recover your play history.
 
 Choose the new instance as the destination, select the old instance and review what will be copied:
 
@@ -97,6 +99,7 @@ Feature guides are currently in Chinese:
 - [Online mods](docs/online-mod-management.md) · [Local mod management](docs/local-mod-management.md)
 - [Java downloads](docs/java-downloads.md) · [Launch settings](docs/launching.md) · [Microsoft sign-in](docs/microsoft-login.md)
 - [File integrity](docs/gameplay-file-policy.md) · [Instance backups](docs/instance-backups.md)
+- [Importing folders from other launchers](docs/folder-import.md)
 - [RC1 release and upgrades](docs/release-rc1.md) · [Verification record](docs/release-rc1-verification.md)
 
 ## Contact, privacy and security
@@ -109,10 +112,10 @@ Instances, settings and account credentials are stored locally. Sign-in, search,
 
 ## License
 
-EML is licensed under the **GNU General Public License, version 3 or any later version (`GPL-3.0-or-later`)**. See [LICENSE on master](https://github.com/Ph1lK4/EML/blob/master/LICENSE).
+EML is licensed under the **GNU General Public License, version 3 or any later version (`GPL-3.0-or-later`)**. See [LICENSE](LICENSE).
 
 Minecraft, modpacks, mods, resource packs, Java and other third-party components retain their own licenses and terms.
 
 ## Code signing policy
 
-The current `1.0-RC1` package is **unsigned**. SignPath Foundation support is planned, not approved or active. **K4ssia** is responsible for code review and signing approval; the [code signing policy](docs/code-signing.md) describes the remaining security setup and planned process.
+The current `1.0-RC1` package is **unsigned**. The SignPath Foundation application was not approved, and no signing service is active. GitHub Actions runs build and test checks, not code signing. **K4ssia** is responsible for code review and signing approval; see the [code signing policy](docs/code-signing.md) for the current status and planned controls.

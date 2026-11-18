@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using EML.Core.Minecraft.Accounts;
 
 namespace EML.Core.Minecraft.Launching;
 
@@ -11,6 +12,10 @@ public sealed record MinecraftLaunchSettings
     public string PlayerName { get; init; } = "Steve";
     /// <summary>仅保存身份选择，不保存账号令牌；旧设置默认仍使用离线身份。</summary>
     public bool UseMicrosoftAccount { get; init; }
+    /// <summary>此实例明确选择的正版公开身份；空值兼容旧设置，令牌仍由独立账号服务管理。</summary>
+    public MinecraftAccount? PreferredMicrosoftAccount { get; init; }
+    /// <summary>最近一次实际创建游戏进程使用的公开身份；手动保存参数不伪造游玩记录。</summary>
+    public MinecraftLaunchIdentity? LastLaunchIdentity { get; init; }
     /// <summary>空值自动选择符合实例要求的 Java，非空表示用户指定的 java.exe。</summary>
     public string? JavaPath { get; init; }
     public int MinMemoryMb { get; init; } = 1024;
@@ -19,6 +24,10 @@ public sealed record MinecraftLaunchSettings
     /// <summary>每个实例可单独覆盖日志编码，不改变 Java 文件编码或整合包文件。</summary>
     public MinecraftLogEncoding LogEncoding { get; init; } = MinecraftLogEncoding.Auto;
 }
+
+/// <summary>仅记录模式、玩家名、UUID 与进程启动时间；不包含凭证，也不证明游戏已完成加载。</summary>
+public sealed record MinecraftLaunchIdentity(bool UseMicrosoftAccount, string PlayerName, string PlayerId,
+    DateTimeOffset StartedAtUtc);
 
 /// <summary>验证后的启动参数列表；参数作为数据直接传给 Java，不经过命令行解释器。</summary>
 public sealed record MinecraftLaunchPlan(string InstancePath, string GameDirectory, string JavaPath,
@@ -30,6 +39,8 @@ public sealed record MinecraftLaunchPlan(string InstancePath, string GameDirecto
     [JsonIgnore] public IReadOnlyList<string> SensitiveValues { get; init; } = [];
     /// <summary>与本次启动设置一致的输出解码方式；标准输出和错误输出分别维护解码状态。</summary>
     public MinecraftLogEncoding LogEncoding { get; init; } = MinecraftLogEncoding.Auto;
+    /// <summary>参数实际使用的公开身份；准备阶段时间为空，执行层在进程创建后填写真实时间。</summary>
+    public MinecraftLaunchIdentity? Identity { get; init; }
     public override string ToString() => $"Minecraft launch: Java {JavaMajorVersion}, {InstancePath}";
 }
 
@@ -37,7 +48,13 @@ public enum MinecraftLaunchStage { Preparing, Running, Output }
 
 /// <summary>启动阶段、进程输出及日志位置，界面只保留有限数量的日志行。</summary>
 public sealed record MinecraftLaunchProgress(MinecraftLaunchStage Stage, string Message,
-    bool StandardError = false, string? LogPath = null);
+    bool StandardError = false, string? LogPath = null)
+{
+    /// <summary>仅 Running 阶段提供实际启动身份，防止把准备成功误记为已使用。</summary>
+    public MinecraftLaunchIdentity? Identity { get; init; }
+    /// <summary>身份记录写入失败不终止游戏，由界面单独显示非致命提示。</summary>
+    public string? IdentityPersistenceWarning { get; init; }
+}
 
 /// <summary>区分进程结束、明确失败和用户取消；不根据退出码推断游戏已成功加载。</summary>
 public enum MinecraftLaunchOutcome { ProcessExited, Failed, Canceled }
@@ -73,4 +90,10 @@ public interface IMinecraftLaunchSettingsStore
 {
     Task<MinecraftLaunchSettings> LoadAsync(string instancePath, CancellationToken cancellationToken = default);
     Task SaveAsync(string instancePath, MinecraftLaunchSettings settings, CancellationToken cancellationToken = default);
+}
+
+/// <summary>执行层仅在进程创建后更新身份偏好，不自动保存未确认的 Java、内存或 JVM 草稿。</summary>
+public interface IMinecraftLaunchIdentityStore
+{
+    Task RememberAsync(string instancePath, MinecraftLaunchIdentity identity, CancellationToken cancellationToken = default);
 }

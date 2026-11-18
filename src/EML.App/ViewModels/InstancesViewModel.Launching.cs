@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.Input;
 using EML.App.Services;
 using EML.Core.Java;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft.Launching;
 
 namespace EML.App.ViewModels;
@@ -21,12 +22,14 @@ public partial class InstancesViewModel
     private CancellationTokenSource? _launchCancellation;
     private int _settingsRevision;
     private int _launchRevision;
+    private int _identityWarningRevision = -1;
     private string? _loadedSettingsPath;
     private readonly Dictionary<string, LaunchSettingsDraft> _launchSettingsDrafts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>只在当前窗口保留每实例的编辑文本；不存账号令牌，也不将未完成输入强制解析为设置。</summary>
     private sealed record LaunchSettingsDraft(string PlayerName, bool UseMicrosoftAccount, string JavaPath,
-        string MinMemoryMb, string MaxMemoryMb, string JvmArguments, MinecraftLogEncoding LogEncoding);
+        string MinMemoryMb, string MaxMemoryMb, string JvmArguments, MinecraftLogEncoding LogEncoding,
+        MinecraftAccount? PreferredMicrosoftAccount, MinecraftLaunchIdentity? LastLaunchIdentity);
 
     /// <summary>复用 Java 页面已检测的结果，空路径仍由启动服务自动匹配版本。</summary>
     public JavaSettingsViewModel? Java { get; }
@@ -37,8 +40,109 @@ public partial class InstancesViewModel
 
     [ObservableProperty] private string playerName = "Steve";
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName), nameof(SelectedLaunchMode))]
+    [NotifyPropertyChangedFor(nameof(CanEditOfflinePlayerName), nameof(SelectedLaunchMode), nameof(LaunchIdentityHint), nameof(CanUseCurrentMicrosoftAccount))]
+    [NotifyCanExecuteChangedFor(nameof(UseCurrentMicrosoftAccountCommand))]
     private bool useMicrosoftAccount;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedMicrosoftPlayerName), nameof(AvailableMicrosoftAccounts), nameof(SelectedMicrosoftAccount), nameof(LaunchIdentityHint), nameof(CanUseCurrentMicrosoftAccount))]
+    [NotifyCanExecuteChangedFor(nameof(UseCurrentMicrosoftAccountCommand))]
+    private MinecraftAccount? preferredMicrosoftAccount;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LaunchIdentityHint))]
+    private MinecraftLaunchIdentity? lastLaunchIdentity;
+
+    /// <summary>列出已保存的正版账号；已移除的历史选择仍展示，不能被列表首项静默替换。</summary>
+    public IReadOnlyList<MinecraftAccount> AvailableMicrosoftAccounts
+    {
+        get
+        {
+            var values = Accounts?.SavedAccounts.ToList() ?? [];
+            if (PreferredMicrosoftAccount is { } selected && !values.Any(account => SameAccount(account, selected))) values.Add(selected);
+            return values;
+        }
+    }
+
+    /// <summary>实例单独选择账号，不改变账号页默认值；列表刷新产生的空选择不清除历史身份。</summary>
+    public MinecraftAccount? SelectedMicrosoftAccount
+    {
+        get
+        {
+            var selected = PreferredMicrosoftAccount ?? CurrentMicrosoftAccount();
+            return selected is null ? null : Accounts?.SavedAccounts.FirstOrDefault(account => SameAccount(account, selected)) ?? selected;
+        }
+        set
+        {
+            if (value is null || !UseMicrosoftAccount || !CanEditLaunchSettings) return;
+            var available = Accounts?.SavedAccounts.FirstOrDefault(account => SameAccount(account, value));
+            if (available is not null) PreferredMicrosoftAccount = available;
+        }
+    }
+
+    /// <summary>保留已选择的正版身份；同一 UUID 改名时显示账号列表中的新名字。</summary>
+    public string SelectedMicrosoftPlayerName => SelectedMicrosoftAccount?.Name ?? Accounts?.AccountName ?? "尚未登录";
+
+    /// <summary>同时说明上次启动事实与当前选择，换号或退出后不偷偷改用其他 UUID。</summary>
+    public string LaunchIdentityHint
+    {
+        get
+        {
+            var history = LastLaunchIdentity is { } last
+                ? $"上次启动：{last.PlayerName} · {(last.UseMicrosoftAccount ? "正版模式" : "离线模式")}。" : "";
+            if (!UseMicrosoftAccount) return history + "启动后自动记住本实例的玩家名与模式。";
+            var selectedAccount = SelectedMicrosoftAccount;
+            if (selectedAccount is not null && Accounts?.SavedAccounts.Any(account => SameAccount(account, selectedAccount)) == true)
+                return history + "将使用所选正版账号启动；不受账号页默认账号切换影响。";
+            var current = CurrentMicrosoftAccount();
+            if (current is null) return history + "请先登录所选正版账号；不会自动切换到离线模式。";
+            if (PreferredMicrosoftAccount is { } selected && !SameAccount(selected, current))
+                return history + $"当前登录的是 {current.Name}，与所选账号不同。请重新登录所选账号，或确认使用当前账号；不同 UUID 可能对应不同背包和进度。";
+            return history + "所选账号已移除或尚未登录，请重新添加，或从列表选择其他账号。";
+        }
+    }
+
+    /// <summary>只有用户可编辑且当前登录了另一个账号时，才提供明确换号入口。</summary>
+    public bool CanUseCurrentMicrosoftAccount => CanEditLaunchSettings && UseMicrosoftAccount &&
+        PreferredMicrosoftAccount is { } selected && CurrentMicrosoftAccount() is { } current && !SameAccount(selected, current) &&
+        Accounts?.SavedAccounts.Any(account => SameAccount(account, selected)) != true;
+
+    /// <summary>从共享账号页取公开档案，不请求会话，也不复制任何令牌。</summary>
+    private MinecraftAccount? CurrentMicrosoftAccount() => Accounts is { } accounts &&
+        Guid.TryParse(accounts.AccountId, out var id) && id != Guid.Empty && !string.IsNullOrWhiteSpace(accounts.AccountName)
+            ? new(id.ToString("N"), accounts.AccountName) : null;
+
+    /// <summary>比较 UUID 而不是可更改的玩家名，兼容带或不带连字符的旧记录。</summary>
+    private static bool SameAccount(MinecraftAccount first, MinecraftAccount second) =>
+        Guid.TryParse(first.Id, out var left) && Guid.TryParse(second.Id, out var right) && left == right;
+
+    /// <summary>明确点击换号才替换已记住的正版选择；保存或实际启动之后才写入磁盘。</summary>
+    [RelayCommand(CanExecute = nameof(CanUseCurrentMicrosoftAccount))]
+    private void UseCurrentMicrosoftAccount()
+    {
+        if (!CanUseCurrentMicrosoftAccount) return;
+        PreferredMicrosoftAccount = CurrentMicrosoftAccount();
+        LaunchSettingsStatus = "已选择当前登录账号；启动后自动记住，也可以点击“保存设置”。";
+    }
+
+    /// <summary>账号加载、换名或退出只刷新显示，不覆盖实例已选择的正版身份。</summary>
+    private void OnLaunchAccountChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs change)
+    {
+        if (change.PropertyName is not (nameof(MinecraftAccountViewModel.AccountName) or nameof(MinecraftAccountViewModel.AccountId))) return;
+        RefreshLaunchAccountChoices();
+    }
+
+    /// <summary>列表添加、改名和移除后刷新两个入口，但不将选择改为默认账号。</summary>
+    private void OnAvailableLaunchAccountsChanged(object? sender, EventArgs args) => RefreshLaunchAccountChoices();
+
+    /// <summary>统一通知公开账号选择与可用性，不触发网络登录或会话刷新。</summary>
+    private void RefreshLaunchAccountChoices()
+    {
+        OnPropertyChanged(nameof(AvailableMicrosoftAccounts));
+        OnPropertyChanged(nameof(SelectedMicrosoftAccount));
+        OnPropertyChanged(nameof(SelectedMicrosoftPlayerName));
+        OnPropertyChanged(nameof(LaunchIdentityHint));
+        OnPropertyChanged(nameof(CanUseCurrentMicrosoftAccount));
+        UseCurrentMicrosoftAccountCommand.NotifyCanExecuteChanged();
+    }
     /// <summary>启动模式显示文本；设置文件仍使用旧的布尔字段，保持已有实例兼容。</summary>
     public IReadOnlyList<string> LaunchModes { get; } = ["离线模式", "正版模式"];
     /// <summary>将界面选择映射到现有正版开关，避免改变旧设置文件格式。</summary>
@@ -84,8 +188,8 @@ public partial class InstancesViewModel
     [ObservableProperty] private int? lastExitCode;
     [ObservableProperty] private string runningInstanceName = "";
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanEditLaunchSettings), nameof(CanEditOfflinePlayerName))]
-    [NotifyCanExecuteChangedFor(nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand))]
+    [NotifyPropertyChangedFor(nameof(CanEditLaunchSettings), nameof(CanEditOfflinePlayerName), nameof(CanUseCurrentMicrosoftAccount))]
+    [NotifyCanExecuteChangedFor(nameof(LaunchGameCommand), nameof(SaveLaunchSettingsCommand), nameof(UseCurrentMicrosoftAccountCommand))]
     private bool isLaunchSettingsLoaded;
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(ReloadLaunchSettingsCommand))]
@@ -129,9 +233,11 @@ public partial class InstancesViewModel
             MaxMemoryMbText = draft.MaxMemoryMb;
             AdditionalJvmArguments = draft.JvmArguments;
             LogEncoding = draft.LogEncoding;
+            PreferredMicrosoftAccount = draft.PreferredMicrosoftAccount;
+            LastLaunchIdentity = draft.LastLaunchIdentity;
             _loadedSettingsPath = instance.InstancePath;
             IsLaunchSettingsLoaded = true;
-            LaunchSettingsStatus = "已恢复本次编辑；两处启动模式同步，以最后选择为准。重启 EML 后保留偏好需点击“保存设置”。";
+            LaunchSettingsStatus = "已恢复本次编辑；两处启动模式同步。启动后自动记住账号与模式，其他参数需点击“保存设置”。";
             LaunchSettingsLoadTask = Task.CompletedTask;
             return;
         }
@@ -154,7 +260,7 @@ public partial class InstancesViewModel
             ApplyLaunchSettings(settings);
             _loadedSettingsPath = instancePath;
             IsLaunchSettingsLoaded = true;
-            LaunchSettingsStatus = "设置已加载；修改后点击“保存设置”，或直接使用当前输入启动。";
+            LaunchSettingsStatus = "设置已加载；启动后自动记住账号与模式，Java、内存和 JVM 参数仍需点击“保存设置”。";
             if (notifySuccess) _notifications.Success("启动设置读取完成", LaunchSettingsStatus, instancePath);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
@@ -187,11 +293,14 @@ public partial class InstancesViewModel
         MaxMemoryMbText = settings.MaxMemoryMb.ToString(CultureInfo.InvariantCulture);
         AdditionalJvmArguments = settings.AdditionalJvmArguments;
         LogEncoding = settings.LogEncoding;
+        PreferredMicrosoftAccount = settings.PreferredMicrosoftAccount;
+        LastLaunchIdentity = settings.LastLaunchIdentity;
     }
 
     /// <summary>在发送界面状态通知前冻结原始输入，保留尚未填完的文本和当前身份。</summary>
     private LaunchSettingsDraft CaptureLaunchSettingsDraft() => new(PlayerName, UseMicrosoftAccount, SelectedJavaPath,
-        MinMemoryMbText, MaxMemoryMbText, AdditionalJvmArguments, LogEncoding);
+        MinMemoryMbText, MaxMemoryMbText, AdditionalJvmArguments, LogEncoding,
+        UseMicrosoftAccount ? SelectedMicrosoftAccount : PreferredMicrosoftAccount, LastLaunchIdentity);
 
     /// <summary>实例删除或消失后同时作废读取与草稿，防止同名新实例继承旧身份。</summary>
     private void ForgetLaunchSettingsDraft(string instancePath)
@@ -233,6 +342,8 @@ public partial class InstancesViewModel
         {
             PlayerName = input.PlayerName.Trim(),
             UseMicrosoftAccount = input.UseMicrosoftAccount,
+            PreferredMicrosoftAccount = input.PreferredMicrosoftAccount,
+            LastLaunchIdentity = input.LastLaunchIdentity,
             JavaPath = string.IsNullOrWhiteSpace(input.JavaPath) ? null : input.JavaPath.Trim(),
             MinMemoryMb = minimum,
             MaxMemoryMb = maximum,
@@ -275,7 +386,11 @@ public partial class InstancesViewModel
             var settings = ReadLaunchSettings();
             IsBusy = true;
             await _launchSettingsStore!.SaveAsync(instancePath, settings);
-            if (revision == _settingsRevision) LaunchSettingsStatus = "已保存此实例的启动设置。";
+            if (revision == _settingsRevision)
+            {
+                PreferredMicrosoftAccount = settings.PreferredMicrosoftAccount;
+                LaunchSettingsStatus = "已保存此实例的启动设置。";
+            }
             _notifications.Success("启动设置已保存", "已保存此实例的玩家、内存、Java、JVM 和日志编码设置。", instancePath);
         }
         catch (Exception ex)
@@ -311,7 +426,7 @@ public partial class InstancesViewModel
         try
         {
             var settings = ReadLaunchSettings(input);
-            using var progress = new BoundedLaunchProgress(p => ApplyLaunchProgress(revision, p));
+            using var progress = new BoundedLaunchProgress(p => ApplyLaunchProgress(revision, instance.InstancePath, p));
             MinecraftLaunchResult result;
             try { result = await RunWithJavaRecoveryAsync(instance, settings, progress, cancellation.Token); }
             finally { progress.Complete(); }
@@ -448,12 +563,24 @@ public partial class InstancesViewModel
     }
 
     /// <summary>只接收当前进程的进度，退出后的迟到事件不能重新将界面标记为运行中。</summary>
-    private void ApplyLaunchProgress(int revision, MinecraftLaunchProgress progress)
+    private void ApplyLaunchProgress(int revision, string instancePath, MinecraftLaunchProgress progress)
     {
         if (revision != _launchRevision || _launchCancellation is null) return;
         if (progress.LogPath is { } path) LaunchLogPath = path;
         if (progress.Stage == MinecraftLaunchStage.Running)
         {
+            if (progress.Identity is { UseMicrosoftAccount: true } started)
+                Accounts?.UpdateKnownAccount(new(started.PlayerId, started.PlayerName));
+            if (progress.Identity is { } identity && progress.IdentityPersistenceWarning is null)
+                ApplyStartedIdentity(instancePath, identity);
+            if (progress.IdentityPersistenceWarning is { } warning && _identityWarningRevision != revision)
+            {
+                _identityWarningRevision = revision;
+                if (string.Equals(_loadedSettingsPath, instancePath, StringComparison.OrdinalIgnoreCase))
+                    LaunchSettingsStatus = warning;
+                _notifications.Warning("启动身份未能保存", warning, instancePath);
+                AppendLaunchLog(warning);
+            }
             IsPreparingLaunch = false;
             IsGameRunning = true;
             LaunchStatus = "游戏进程已启动，正在接收输出；请在游戏窗口确认加载结果。";
@@ -465,6 +592,27 @@ public partial class InstancesViewModel
             StatusText = LaunchStatus;
         }
         AppendLaunchLog((progress.StandardError ? "[stderr] " : "") + progress.Message);
+    }
+
+    /// <summary>仅接收执行层确认已记录的实际身份，不把迟到事件应用到另一个实例。</summary>
+    private void ApplyStartedIdentity(string instancePath, MinecraftLaunchIdentity identity)
+    {
+        if (string.Equals(_loadedSettingsPath, instancePath, StringComparison.OrdinalIgnoreCase))
+        {
+            LastLaunchIdentity = identity;
+            UseMicrosoftAccount = identity.UseMicrosoftAccount;
+            if (identity.UseMicrosoftAccount) PreferredMicrosoftAccount = new(identity.PlayerId, identity.PlayerName);
+            else PlayerName = identity.PlayerName;
+            LaunchSettingsStatus = "已记住本次启动的账号与模式；Java、内存和 JVM 参数未自动保存。";
+        }
+        else if (_launchSettingsDrafts.TryGetValue(instancePath, out var draft))
+            _launchSettingsDrafts[instancePath] = draft with
+            {
+                UseMicrosoftAccount = identity.UseMicrosoftAccount,
+                PlayerName = identity.UseMicrosoftAccount ? draft.PlayerName : identity.PlayerName,
+                PreferredMicrosoftAccount = identity.UseMicrosoftAccount ? new(identity.PlayerId, identity.PlayerName) : draft.PreferredMicrosoftAccount,
+                LastLaunchIdentity = identity
+            };
     }
 
     /// <summary>限制界面日志行数及单行长度，完整输出保留在磁盘日志中。</summary>
