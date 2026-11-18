@@ -2,13 +2,13 @@
 
 更新日期：2026-11-18。以下面向便携 ZIP 发布版；源码调试版本的实例可能位于解决方案根目录，操作前先核对实际路径。
 
-**EML 文件夹不只是程序，也可能包含你的存档、地图和备份。删除整个文件夹会一并删除其中的数据。** 升级不需要先卸载，升级请使用[发布与升级说明](release-rc1.md)。
+**EML 文件夹不只是程序，也可能包含你的存档、地图和备份。删除整个文件夹会一并删除其中的数据。** 升级不需要先卸载，升级请使用[发布与升级说明](release-rc2.md)。RC2 的程序文件位于 `app/`，玩家数据仍在根目录。
 
 ## 1. 先确认要保留的数据
 
 正常退出 Minecraft，结束 EML 的下载、导入、迁移等任务，再退出 EML。把需要保留的内容复制到 EML 目录之外，核对副本可以读取后再继续。最稳妥的备份是整个 EML 文件夹，包含隐藏目录；不要只保留一个导出的实例 ZIP。
 
-| 位置（相对于 EML.App.exe） | 内容与注意事项 |
+| 位置（相对于 RC2 的 EML.exe；RC1 为 EML.App.exe） | 内容与注意事项 |
 | --- | --- |
 | `instances/` | 实例、存档、地图、服务器列表、截图、模组和游戏设置 |
 | `instances/<实例>/.eml-runtime/` | 启动设置、文件来源与用户替换记录、模组管理记录、迁移备份；不是可随意清除的普通缓存 |
@@ -51,4 +51,4 @@ The portable EML folder may contain worlds, maps and migration backups, not just
 
 To remove one account, select it on EML's Microsoft account page and confirm removal; other accounts remain. Repeat for every account if you want to clear the list. If EML cannot run, close all EML/game processes and remove only `%LOCALAPPDATA%\EML\accounts\microsoft.dpapi` after verifying the path. Deleting this file clears the entire account collection shared by all EML copies under that Windows user. Public names, UUIDs and launch history remain in instance settings, without tokens. Removing credentials does not revoke browser sessions or Microsoft-side authorization.
 
-Remove the portable folder only after deciding what data to keep. Do not uninstall unrelated Java/.NET installations. See the [upgrade guide](release-rc1.md) if you are updating rather than uninstalling.
+Remove the portable folder only after deciding what data to keep. Do not uninstall unrelated Java/.NET installations. See the [upgrade guide](release-rc2.md) if you are updating rather than uninstalling.

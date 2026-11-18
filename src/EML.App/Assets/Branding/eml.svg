@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">EML Relay — refined mark</title>
+  <desc id="desc">An open cyan rail and a yellow turning rail form an abstract E. Wider underpass clearance and aligned horizontal terminals refine the selected Relay concept.</desc>
+  <defs>
+    <mask id="relay-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <rect width="256" height="256" fill="white"/>
+      <path d="M108 212V172C108 144 124 128 152 128H200" fill="none" stroke="black" stroke-width="52"/>
+    </mask>
+  </defs>
+  <g transform="translate(6 0)">
+    <path d="M200 60H120C84 60 60 84 60 120V136C60 172 84 196 120 196H200" fill="none" stroke="#00BFF3" stroke-width="32" mask="url(#relay-gap)"/>
+    <path d="M108 212V172C108 144 124 128 152 128H200" fill="none" stroke="#FFE45C" stroke-width="28"/>
+  </g>
+</svg>

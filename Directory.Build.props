@@ -1,12 +1,12 @@
 <Project>
   <!-- 发布身份的唯一来源：文件版本保持数字格式，产品版本明确标识候选测试版。 -->
   <PropertyGroup>
-    <Version>1.0.0-rc.1</Version>
+    <Version>1.0.0-rc.2</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
     <InformationalVersion>$(Version)</InformationalVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-    <EMLDisplayVersion>1.0-RC1</EMLDisplayVersion>
+    <EMLDisplayVersion>1.0-RC2</EMLDisplayVersion>
     <EMLReleaseRuntimeVersion>10.0.13</EMLReleaseRuntimeVersion>
     <Deterministic>true</Deterministic>
   </PropertyGroup>

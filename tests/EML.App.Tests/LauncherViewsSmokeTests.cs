@@ -59,6 +59,7 @@ public sealed class LauncherViewsSmokeTests
                 Source = new Uri("/EML.App;component/Themes/LauncherTheme.xaml", UriKind.Relative)
             });
             NavyThemeChecks.Run();
+            BrandingChecks.Run();
             WorkspaceAccessibilityChecks.Run();
             var host = new Border { Width = 720, Height = 520 };
             var selection = new WorkspaceSelection();

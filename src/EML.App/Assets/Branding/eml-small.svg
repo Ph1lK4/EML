@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">EML Relay — small-size optical variant</title>
+  <desc id="desc">Optical variant for 16, 20 and 24 pixel icons. Wider rails and a one-pixel-equivalent junction gap at 16 pixels preserve the two-rail silhouette.</desc>
+  <defs>
+    <mask id="relay-small-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <rect width="256" height="256" fill="white"/>
+      <path d="M112 208V176C112 144 128 128 160 128H208" fill="none" stroke="black" stroke-width="64"/>
+    </mask>
+  </defs>
+  <path d="M208 64H128C88 64 64 88 64 128V144C64 176 88 192 120 192H208" fill="none" stroke="#00BFF3" stroke-width="32" mask="url(#relay-small-gap)"/>
+  <path d="M112 208V176C112 144 128 128 160 128H208" fill="none" stroke="#FFE45C" stroke-width="32"/>
+</svg>

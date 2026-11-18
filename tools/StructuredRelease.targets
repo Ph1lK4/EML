@@ -1,0 +1,26 @@
+<Project>
+  <!-- 只在正式打包和 CI 显式开启；F5、测试、普通 publish 保持 SDK 默认行为。 -->
+  <ItemGroup Condition="'$(EMLStructuredRelease)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)release-assets\eml-layout.json" Link="eml-layout.json" CopyToPublishDirectory="Always" />
+  </ItemGroup>
+
+  <!-- 使用 SDK 官方 apphost task，不补丁 EXE 字节，也不添加需要额外运行时的转发进程。 -->
+  <Target Name="CreateEMLStructuredHost" AfterTargets="Publish"
+          DependsOnTargets="_GetAppHostPaths;_GetAppHostCreationConfiguration"
+          Condition="'$(EMLStructuredRelease)' == 'true'">
+    <Error Condition="'$(EMLReleasePackage)' != 'true' Or '$(EMLPackageDirectory)' == ''" Text="Structured publishing requires EMLReleasePackage and an explicit package directory." />
+    <PropertyGroup>
+      <_EMLExpectedAppDirectory>$([System.IO.Path]::GetFullPath('$(EMLPackageDirectory)/app/'))</_EMLExpectedAppDirectory>
+      <_EMLActualAppDirectory>$([System.IO.Path]::GetFullPath('$(PublishDir)/'))</_EMLActualAppDirectory>
+      <_EMLRootHost>$([System.IO.Path]::Combine('$(EMLPackageDirectory)', 'EML.exe'))</_EMLRootHost>
+    </PropertyGroup>
+    <Error Condition="'$(_EMLExpectedAppDirectory)' != '$(_EMLActualAppDirectory)'" Text="Structured publish output must be exactly the package app directory." />
+    <Error Condition="Exists('$(_EMLRootHost)')" Text="The package entry point already exists; use a new empty package directory." />
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)" AppHostDestinationPath="$(_EMLRootHost)"
+                   AppBinaryName="app/EML.App.dll" IntermediateAssembly="$(PublishDir)EML.App.dll"
+                   WindowsGraphicalUserInterface="true" DotNetSearchLocations="AppLocal"
+                   Retries="$(CopyRetryCount)" RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)" />
+    <!-- 只移动本次生成的默认入口到 obj；发布包只有根目录 EML.exe 一个 EML 入口。 -->
+    <Move SourceFiles="$(PublishDir)EML.App.exe" DestinationFiles="$(IntermediateOutputPath)EML-flat-publish.exe" />
+  </Target>
+</Project>

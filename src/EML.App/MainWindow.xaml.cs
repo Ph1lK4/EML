@@ -59,7 +59,8 @@ public partial class MainWindow : Window
         var locator = new LauncherRootMinecraftInstanceLocator(launcherRoot);
         var checker = new MinecraftInstanceChecker(launcherRoot);
         _javaRuntimes = new TemurinJavaRuntimeService(launcherRoot, _downloadCenter);
-        var javaLocator = new WindowsJavaLocator([_javaRuntimes.InstallationRoot]);
+        // RC2 的程序在 app/，仍扫描启动器根目录以兼容用户自行解压的 Java。
+        var javaLocator = new WindowsJavaLocator([_javaRuntimes.InstallationRoot, launcherRoot]);
         var java = new JavaSettingsViewModel(javaLocator, notifications: _operationNotifications, runtimes: _javaRuntimes);
         var localMods = new LocalModManager(launcherRoot);
         var onlineCatalog = new OnlineModCatalog(_modrinth, _curseForge);
@@ -262,14 +263,13 @@ public partial class MainWindow : Window
         await Task.WhenAll(javaTask, instancesTask, accountTask);
     }
 
-    /// <summary>Debug 开发时向上查找 EML.slnx 以读取项目测试包；Release 或找不到解决方案时使用 EXE 目录。</summary>
+    /// <summary>显式区分程序与玩家数据目录；同时兼容旧版平铺目录及源码调试。</summary>
     private static string GetLauncherRoot()
     {
 #if DEBUG
-        // 开发时读取解决方案旁的测试包；发布版本始终读取 EXE 旁的 instances。
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-            if (File.Exists(Path.Combine(directory.FullName, "EML.slnx"))) return directory.FullName;
+        return LauncherPaths.ResolveDataRoot(AppContext.BaseDirectory, developmentMode: true);
+#else
+        return LauncherPaths.ResolveDataRoot(AppContext.BaseDirectory);
 #endif
-        return AppContext.BaseDirectory;
     }
 }

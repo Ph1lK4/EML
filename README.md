@@ -1,5 +1,7 @@
 # EML Launcher
 
+<img src="src/EML.App/Assets/Branding/eml.png" alt="EML 接续标志" width="112" />
+
 简体中文 | [English](README.en.md)
 
 **面向中国 GT New Horizons（GTNH）玩家的 Windows 启动器。**
@@ -8,7 +10,7 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 
 除了 GTNH，EML 也支持常见整合包格式，以及 Modrinth、CurseForge 整合包和 Minecraft Java 版原版的下载安装。开发重点仍是中国 GTNH 玩家的长期游玩体验。
 
-当前为 **1.0-RC1 候选测试版**，不是已完成全部环境验收的正式版。使用和升级说明见 [RC1 发布指南](docs/release-rc1.md)。
+当前为 **1.0-RC2 候选测试版**，不是已完成全部环境验收的正式版。使用和升级说明见 [RC2 发布指南](docs/release-rc2.md)。新版使用 EML「接续」Logo，根目录运行 `EML.exe`，程序和运行库统一放在 `app/`，玩家数据仍留在根目录。原 RC1 下载与标签保留。
 
 ## 界面预览
 
@@ -77,16 +79,16 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 
 发布包面向 **Windows x64**，自带启动器所需的 .NET 运行时，不需要安装 Visual Studio 或 .NET SDK；Java 需要另行准备。
 
-1. 将测试包完整解压到自己有写入权限的目录，运行 `EML.App.exe`。不要在压缩软件中直接运行，也不要只复制 EXE。
+1. 将测试包完整解压到自己有写入权限的目录，运行根目录的 `EML.exe`。不要在压缩软件中直接运行，也不要只复制 EXE。
 2. 在“GTNH 专区”下载本体，或通过“下载实例”“导入实例”准备整合包，等待导入和自动补全结束。按结果提示处理仍缺少的文件。
 3. 在“Java 环境”检测或下载 Java；需要正版启动时，先到“微软账号”登录。随后在“启动设置”选择身份、Java、内存和 JVM 参数。
 4. 返回“本地实例”启动游戏；启动失败时查看原因和运行日志。
 
-升级或卸载前，先结束游戏与启动器任务，将需要保留的数据备份到 EML 目录之外。**EML 文件夹里可能有存档、地图和迁移备份，不要直接删除旧目录。** 实例 ZIP 导出不等于整个启动器目录的完整备份。参见 [升级指南](docs/release-rc1.md)和 [卸载与数据保留说明](docs/uninstall.md)。
+升级或卸载前，先结束游戏与启动器任务，将需要保留的数据备份到 EML 目录之外。**EML 文件夹里可能有存档、地图和迁移备份，不要直接删除旧目录。** 实例 ZIP 导出不等于整个启动器目录的完整备份。参见 [升级指南](docs/release-rc2.md)和 [卸载与数据保留说明](docs/uninstall.md)。
 
 ## 当前状态与限制
 
-- **仍在测试阶段**：已有自动化测试和制包验证，但干净电脑验收尚未完成，也没有覆盖所有整合包、账号和服务器组合。当前测试包未签名，已执行与待验证项目见 [RC1 验证记录](docs/release-rc1-verification.md)。
+- **仍在测试阶段**：已有自动化测试和制包验证，但干净电脑验收尚未完成，也没有覆盖所有整合包、账号和服务器组合。当前测试包未签名，测试边界与验收步骤见 [RC2 发布指南](docs/release-rc2.md)；历史测试记录见 [RC1 验证记录](docs/release-rc1-verification.md)。
 - **平台与运行条件**：并非所有 ZIP 或加载器都能自动补全，实例 ZIP 导出也不包含实例目录之外的共享依赖。正版启动需要相应游戏许可、服务权限和网络；离线模式不能替代正版认证。
 - **受限下载**：部分 CurseForge 模组没有可用的官方下载地址。EML 只尝试使用 SHA-1 和大小一致的 Modrinth 文件，匹配不到时需要手动处理，不按相似名称替换。
 - **推荐不等于兼容保证**：GTNH 推荐内容中部分项目只提供作者页面或手动下载入口，其前置依赖目前不自动补齐。资源包与光影安装后还需在游戏内启用。
@@ -101,7 +103,7 @@ GTNH 的一次游玩往往会跨越多个版本。EML 将下载整合包、准�
 - [Java 下载](docs/java-downloads.md) · [启动设置与日志](docs/launching.md) · [微软账号](docs/microsoft-login.md)
 - [文件完整性与游玩后的变化](docs/gameplay-file-policy.md) · [实例备份与恢复边界](docs/instance-backups.md)
 - [从其他启动器复制导入](docs/folder-import.md)
-- [RC1 发布与升级](docs/release-rc1.md) · [验证记录](docs/release-rc1-verification.md)
+- [RC2 发布与升级](docs/release-rc2.md) · [RC1 历史发布](docs/release-rc1.md) · [RC1 验证记录](docs/release-rc1-verification.md)
 
 ## 联系、隐私与安全
 
@@ -117,6 +119,6 @@ EML 采用 **GNU General Public License v3.0 或任何后续版本（`GPL-3.0-or
 
 ## Code signing policy
 
-当前 `1.0-RC1` 包**未签名**。本次 SignPath Foundation 申请未获批准，尚未接入签名服务。已有 GitHub Actions 构建与测试流程，但它不提供代码签名。
+当前 `1.0-RC2` 包及此前 RC1 包均**未签名**。本次 SignPath Foundation 申请未获批准，尚未接入签名服务。已有 GitHub Actions 构建与测试流程，但它不提供代码签名。
 
 代码审核与签名批准负责人为 **K4ssia**。账号安全配置和拟采用的审批流程见[代码签名政策](docs/code-signing.md)；本文不代表已经通过签名或安全认证。
