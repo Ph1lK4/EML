@@ -53,9 +53,12 @@ if ($UseEnvironmentKey) {
 }
 
 New-Item -ItemType Directory -Path $output -Force | Out-Null
-$buildRoot = Join-Path $output ('.rc1-build-' + [Guid]::NewGuid().ToString('N'))
+$buildRoot = Join-Path $output ('.release-build-' + [Guid]::NewGuid().ToString('N'))
 $payload = Join-Path $buildRoot $packageName
 New-Item -ItemType Directory -Path $payload | Out-Null
+$application = Join-Path $payload 'app'
+$documentation = Join-Path $payload 'docs'
+New-Item -ItemType Directory -Path $documentation | Out-Null
 $safeBuild = @('--nologo', '--tl:off', '-p:UseSharedCompilation=false', '-p:EmitCompilerGeneratedFiles=false',
     '-p:EmbedAllSources=false', '-p:EmbedUntrackedSources=false', '-p:DebugType=None', '-p:DebugSymbols=false') + $credentialArguments
 $publishArguments = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '-p:EMLReleasePackage=true') + $safeBuild
@@ -64,13 +67,13 @@ $project = Join-Path $projectRoot 'src/EML.App/EML.App.csproj'
 Push-Location $projectRoot
 try {
     if (-not $SkipTests) {
-        & dotnet test (Join-Path $projectRoot 'EML.slnx') -c Release --logger 'trx;LogFilePrefix=rc1' --results-directory (Join-Path $buildRoot 'test-results') @safeBuild
+        & dotnet test (Join-Path $projectRoot 'EML.slnx') -c Release --blame-hang-timeout 2min --blame-hang-dump-type none --logger "trx;LogFilePrefix=$displayVersion" --results-directory (Join-Path $buildRoot 'test-results') @safeBuild
         if ($LASTEXITCODE -ne 0) { throw 'Release tests failed; no package was created.' }
     }
     # Rebuild and publish use identical RID/runtime/credential options, avoiding stale authorization.
     & dotnet build $project @publishArguments -t:Rebuild
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed; no package was created.' }
-    & dotnet publish $project @publishArguments --no-build --no-restore -o $payload
+    & dotnet publish $project @publishArguments --no-build --no-restore -o $application -p:EMLStructuredRelease=true "-p:EMLPackageDirectory=$payload"
     if ($LASTEXITCODE -ne 0) { throw 'Self-contained publish failed; no package was created.' }
 
     foreach ($name in @('START-HERE.txt', 'UPGRADE.txt')) {
@@ -78,11 +81,15 @@ try {
     }
     # Keep EML's own license and user-facing policies alongside third-party notices.
     foreach ($name in @('LICENSE', 'PRIVACY.md', 'SECURITY.md')) {
-        Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination (Join-Path $payload $name)
+        Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination (Join-Path $documentation $name)
     }
-    New-Item -ItemType Directory -Path (Join-Path $payload 'docs') | Out-Null
-    foreach ($name in @('uninstall.md', 'code-signing.md', 'release-rc1.md')) {
+    foreach ($name in @('uninstall.md', 'code-signing.md', 'release-rc1.md', 'release-rc2.md')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot "docs/$name") -Destination (Join-Path $payload "docs/$name")
+    }
+    # 仓库根策略文件与 docs 合并打包后，仅修正这些已知本地文档链接，不改正文或外链。
+    foreach ($file in Get-ChildItem -LiteralPath $documentation -File -Filter '*.md') {
+        $text = [IO.File]::ReadAllText($file.FullName).Replace('(../PRIVACY.md)', '(PRIVACY.md)').Replace('(../SECURITY.md)', '(SECURITY.md)').Replace('(../LICENSE)', '(LICENSE)').Replace('(docs/uninstall.md)', '(uninstall.md)')
+        [IO.File]::WriteAllText($file.FullName, $text, [Text.UTF8Encoding]::new($false))
     }
     @(
         'EML Launcher - GPL-3.0-or-later',
@@ -100,7 +107,7 @@ try {
         'CurseForge developer authorization is not in the public source; source builds can use their own authorization.',
         'Public Microsoft application configuration is included. No user account credentials are shipped.',
         'Third-party components retain their own licenses; see LICENSE-DOTNET.txt, LICENSE-MVVM.txt and THIRD-PARTY-NOTICES.txt.'
-    ) -join "`r`n" | Set-Content -LiteralPath (Join-Path $payload 'SOURCE.txt') -Encoding utf8NoBOM
+    ) -join "`r`n" | Set-Content -LiteralPath (Join-Path $documentation 'SOURCE.txt') -Encoding utf8NoBOM
 
     # Preserve upstream notices from restored packages and the SDK selected by global.json.
     $assets = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'src/EML.App/obj/project.assets.json') | ConvertFrom-Json -AsHashtable
@@ -131,14 +138,14 @@ try {
     $mvvmNotices = Find-PackageText 'CommunityToolkit.Mvvm' $mvvmVersion @('ThirdPartyNotices.txt')
     @('Microsoft.NETCore.App:', (Get-Content -Raw -LiteralPath $runtimeLicense), 'Microsoft.WindowsDesktop.App:',
         (Get-Content -Raw -LiteralPath $desktopLicense)) -join "`r`n`r`n" |
-        Set-Content -LiteralPath (Join-Path $payload 'LICENSE-DOTNET.txt') -Encoding utf8NoBOM
+        Set-Content -LiteralPath (Join-Path $documentation 'LICENSE-DOTNET.txt') -Encoding utf8NoBOM
     @('Microsoft.NETCore.App:', (Get-Content -Raw -LiteralPath $runtimeNotices), 'Microsoft.NET.Sdk.WindowsDesktop:',
         (Get-Content -Raw -LiteralPath $desktopNotices), 'CommunityToolkit.Mvvm:',
         (Get-Content -Raw -LiteralPath $mvvmNotices)) -join "`r`n`r`n" |
-        Set-Content -LiteralPath (Join-Path $payload 'THIRD-PARTY-NOTICES.txt') -Encoding utf8NoBOM
-    Copy-Item -LiteralPath $mvvmLicense -Destination (Join-Path $payload 'LICENSE-MVVM.txt')
+        Set-Content -LiteralPath (Join-Path $documentation 'THIRD-PARTY-NOTICES.txt') -Encoding utf8NoBOM
+    Copy-Item -LiteralPath $mvvmLicense -Destination (Join-Path $documentation 'LICENSE-MVVM.txt')
 
-    $audit = Test-EmLReleaseLayout -Path $payload -Version $version -DisplayVersion $displayVersion -RuntimeVersion $runtimeVersion
+    $audit = Test-EmLReleaseLayout -Path $payload -Version $version -DisplayVersion $displayVersion -RuntimeVersion $runtimeVersion -Layout AppDirectory
     $entries = @(Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
         [ordered]@{
             path = [IO.Path]::GetRelativePath($payload, $_.FullName).Replace('\', '/')
@@ -148,6 +155,7 @@ try {
     })
     $manifest = [ordered]@{
         schemaVersion = 1; version = $version; displayVersion = $displayVersion; runtimeIdentifier = 'win-x64'
+        layout = 'app-directory'; entryPoint = 'EML.exe'; applicationDirectory = 'app'; dataDirectory = '.'
         selfContained = $true; runtimeVersion = $runtimeVersion; createdUtc = [DateTime]::UtcNow.ToString('O')
         sourceCommit = $sourceCommit; sourceRepository = $sourceRepository
         automatedTestsRun = -not $SkipTests; cleanMachineAcceptance = 'pending'; codeSigned = $false
@@ -155,7 +163,9 @@ try {
         files = $entries
     }
     $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $payload 'release-manifest.json') -Encoding utf8NoBOM
-    $audit = Test-EmLReleaseLayout -Path $payload -Version $version -DisplayVersion $displayVersion -RuntimeVersion $runtimeVersion
+    $audit = Test-EmLReleaseLayout -Path $payload -Version $version -DisplayVersion $displayVersion -RuntimeVersion $runtimeVersion -Layout AppDirectory
+    & (Join-Path $PSScriptRoot 'Test-ReleasePackage.Tests.ps1') -PackagePath $payload -Version $version -DisplayVersion $displayVersion -Layout AppDirectory
+    & (Join-Path $PSScriptRoot 'Test-ReleaseRuntime.ps1') -Path $payload -DisplayVersion $displayVersion
 
     # Building must not change the committed input while its hash is being stamped into the package.
     $finalCommit = & git -C $projectRoot rev-parse HEAD

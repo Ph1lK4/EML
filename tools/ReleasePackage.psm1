@@ -7,7 +7,8 @@ function Test-EmlReleasePath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $RelativePath,
-        [switch] $Directory
+        [switch] $Directory,
+        [ValidateSet('Flat', 'AppDirectory')][string] $Layout = 'Flat'
     )
     $path = $RelativePath.Replace('\', '/')
     if ([string]::IsNullOrWhiteSpace($path) -or $path -match '(^/|[:\x00-\x1f]|//|/$)' -or
@@ -20,23 +21,40 @@ function Test-EmlReleasePath {
             throw "Personal data or development directory is forbidden in a release: $path"
         }
     }
+    $culturePattern = '^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$'
+    $documents = @('LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md',
+        'LICENSE-DOTNET.txt', 'LICENSE-MVVM.txt', 'THIRD-PARTY-NOTICES.txt',
+        'uninstall.md', 'code-signing.md', 'release-rc1.md', 'release-rc2.md')
     if ($Directory) {
         if ($path -ceq 'docs') { return }
-        if ($parts.Count -ne 1 -or $parts[0] -cnotmatch '^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$') {
-            throw "Unexpected release directory: $path"
-        }
-        return
+        if ($Layout -eq 'AppDirectory') {
+            if ($path -ceq 'app') { return }
+            if ($parts.Count -eq 2 -and $parts[0] -ceq 'app' -and
+                $parts[1] -cnotin @('app', 'docs') -and $parts[1] -cmatch $culturePattern) { return }
+        } elseif ($parts.Count -eq 1 -and $parts[0] -cmatch $culturePattern) { return }
+        throw "Unexpected release directory: $path"
     }
     $name = $parts[-1]
     if ($name -imatch '(testhost|\.tests?\.|xunit|nunit|coverlet|testplatform|codecoverage)' -or
         $name -imatch '\.(pdb|log|binlog|dpapi|key|pfx|pem|cs|xaml|csproj|slnx|user|zip|jar|mrpack)$') {
         throw "Private or development file is forbidden in a release: $path"
     }
+    if ($Layout -eq 'AppDirectory') {
+        if ($parts.Count -eq 1 -and $name -cin @('EML.exe', 'START-HERE.txt', 'UPGRADE.txt', 'release-manifest.json')) { return }
+        if ($parts.Count -eq 2 -and $parts[0] -ceq 'docs' -and $name -cin $documents) { return }
+        if ($parts.Count -lt 2 -or $parts[0] -cne 'app') { throw "File is outside the structured release allow-list: $path" }
+        # Remove only the exact program prefix, after rejecting all private path segments.
+        $parts = @($parts | Select-Object -Skip 1)
+        if ($parts.Count -eq 1 -and $name -ceq 'eml-layout.json') { return }
+        if ($name -cin @('EML.App.exe', 'START-HERE.txt', 'UPGRADE.txt', 'release-manifest.json') -or $name -cin $documents) {
+            throw "File is in the wrong release directory: $path"
+        }
+    }
     if ($parts.Count -eq 2) {
-        if ($path -cin @('docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md')) { return }
-        if ($parts[0] -cnotmatch '^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$' -or
+        if ($Layout -eq 'Flat' -and $path -cin @('docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md')) { return }
+        if ($parts[0] -cin @('app', 'docs') -or $parts[0] -cnotmatch $culturePattern -or
             $name -cnotmatch '^(?:System\..+|Microsoft\..+|Presentation.+|WindowsBase|WindowsFormsIntegration|ReachFramework|UIAutomation.+|Accessibility)\.resources\.dll$') {
-            throw "Only runtime satellite assemblies are allowed below the release root: $path"
+            throw "Only runtime satellite assemblies are allowed below the program directory: $path"
         }
         return
     }
@@ -65,7 +83,11 @@ function Test-EmlReleasePath {
 # Walk only ordinary directories. A link is rejected before recursion, so a package
 # cannot silently pull content from a user's account or another part of the machine.
 function Get-EmlReleaseFiles {
-    param([Parameter(Mandatory)][string] $Path)
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [ValidateSet('Flat', 'AppDirectory')][string] $Layout = 'Flat'
+    )
     $root = [IO.Path]::GetFullPath($Path)
     $rootItem = Get-Item -Force -LiteralPath $root -ErrorAction Stop
     if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
@@ -79,7 +101,7 @@ function Get-EmlReleaseFiles {
             if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                 throw "Links are forbidden in a release: $relative"
             }
-            Test-EmlReleasePath -RelativePath $relative -Directory:$item.PSIsContainer
+            Test-EmlReleasePath -RelativePath $relative -Directory:$item.PSIsContainer -Layout $Layout
             if ($item.PSIsContainer) { $pending.Push($item.FullName) }
             else { $item }
         }
@@ -114,39 +136,78 @@ function Assert-EmlAmd64Executable {
     } finally { $reader.Dispose() }
 }
 
+# The marker is an exact layout declaration, not a configurable path redirect.
+# Inspect the JSON properties directly so duplicate or differently cased keys cannot be hidden.
+function Assert-EmlLayoutMarker {
+    param([Parameter(Mandatory)][string] $Path)
+    $file = Get-Item -LiteralPath $Path -ErrorAction Stop
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $file.Length -le 0 -or $file.Length -gt 1024) { throw 'Release layout marker has an invalid size or file type.' }
+    try { $document = [Text.Json.JsonDocument]::Parse([IO.File]::ReadAllText($Path)) }
+    catch { throw 'Release layout marker is malformed.' }
+    try {
+        $element = $document.RootElement
+        if ($element.ValueKind -ne [Text.Json.JsonValueKind]::Object) { throw 'Release layout marker must be an object.' }
+        $properties = @($element.EnumerateObject())
+        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($property in $properties) {
+            if (-not $names.Add($property.Name) -or $property.Name -cnotin @('schemaVersion', 'layout', 'dataDirectory')) {
+                throw 'Release layout marker contains unknown or duplicate fields.'
+            }
+        }
+        $schemaVersion = 0
+        if ($properties.Count -ne 3 -or
+            $element.GetProperty('schemaVersion').ValueKind -ne [Text.Json.JsonValueKind]::Number -or
+            -not $element.GetProperty('schemaVersion').TryGetInt32([ref]$schemaVersion) -or $schemaVersion -ne 1 -or
+            $element.GetProperty('layout').ValueKind -ne [Text.Json.JsonValueKind]::String -or
+            $element.GetProperty('layout').GetString() -cne 'app-directory' -or
+            $element.GetProperty('dataDirectory').ValueKind -ne [Text.Json.JsonValueKind]::String -or
+            $element.GetProperty('dataDirectory').GetString() -cne '..') {
+            throw 'Release layout marker does not match the app-directory layout.'
+        }
+    } finally { $document.Dispose() }
+}
+
 # Audit the complete fresh publish directory. Return only public build metadata;
 # never read credential stores or disclose tokens from a rejected file.
 function Test-EmlReleaseLayout {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string] $Path,
-        [string] $Version = '1.0.0-rc.1',
-        [string] $DisplayVersion = '1.0-RC1',
-        [string] $RuntimeVersion = '10.0.13'
+        [string] $Version = '1.0.0-rc.2',
+        [string] $DisplayVersion = '1.0-RC2',
+        [string] $RuntimeVersion = '10.0.13',
+        [ValidateSet('Flat', 'AppDirectory')][string] $Layout = 'AppDirectory'
     )
     $root = [IO.Path]::GetFullPath($Path)
-    $files = @(Get-EmlReleaseFiles -Path $root)
-    $required = @(
-        'EML.App.exe', 'EML.App.dll', 'EML.Core.dll', 'EML.Infrastructure.dll',
+    $files = @(Get-EmlReleaseFiles -Path $root -Layout $Layout)
+    $programPrefix = if ($Layout -eq 'AppDirectory') { 'app/' } else { '' }
+    $documentPrefix = if ($Layout -eq 'AppDirectory') { 'docs/' } else { '' }
+    $entryPoint = if ($Layout -eq 'AppDirectory') { 'EML.exe' } else { 'EML.App.exe' }
+    $required = @($entryPoint, 'START-HERE.txt', 'UPGRADE.txt', 'docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md')
+    $required += @(
+        'EML.App.dll', 'EML.Core.dll', 'EML.Infrastructure.dll',
         'CommunityToolkit.Mvvm.dll', 'EML.App.deps.json', 'EML.App.runtimeconfig.json',
         'microsoft-login.json', 'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll',
-        'PresentationFramework.dll', 'PresentationCore.dll', 'WindowsBase.dll',
-        'START-HERE.txt', 'UPGRADE.txt', 'LICENSE-DOTNET.txt', 'LICENSE-MVVM.txt', 'THIRD-PARTY-NOTICES.txt',
-        'LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md', 'docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md'
-    )
+        'PresentationFramework.dll', 'PresentationCore.dll', 'WindowsBase.dll'
+    ) | ForEach-Object { $programPrefix + $_ }
+    $required += @('LICENSE-DOTNET.txt', 'LICENSE-MVVM.txt', 'THIRD-PARTY-NOTICES.txt',
+        'LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md') | ForEach-Object { $documentPrefix + $_ }
+    if ($Layout -eq 'AppDirectory') { $required += @('app/eml-layout.json', 'docs/release-rc2.md') }
     foreach ($name in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $root $name) -PathType Leaf)) {
             throw "Required self-contained release file is missing: $name"
         }
     }
-    Assert-EmlAmd64Executable -Path (Join-Path $root 'EML.App.exe')
-    foreach ($name in @('EML.App.exe', 'EML.App.dll', 'EML.Core.dll', 'EML.Infrastructure.dll')) {
+    if ($Layout -eq 'AppDirectory') { Assert-EmlLayoutMarker -Path (Join-Path $root 'app/eml-layout.json') }
+    Assert-EmlAmd64Executable -Path (Join-Path $root $entryPoint)
+    foreach ($name in @($entryPoint, "${programPrefix}EML.App.dll", "${programPrefix}EML.Core.dll", "${programPrefix}EML.Infrastructure.dll")) {
         $information = [Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $root $name))
         if ($information.FileVersion -ne '1.0.0.0' -or $information.ProductVersion -ne $Version) {
             throw "Release version metadata is inconsistent: $name"
         }
     }
-    $runtime = Read-EmlReleaseJson -Path (Join-Path $root 'EML.App.runtimeconfig.json')
+    $runtime = Read-EmlReleaseJson -Path (Join-Path $root "${programPrefix}EML.App.runtimeconfig.json")
     if (-not $runtime.ContainsKey('runtimeOptions')) { throw 'Release runtime options are missing.' }
     $options = $runtime.runtimeOptions
     if ($options.ContainsKey('framework') -or $options.ContainsKey('frameworks') -or
@@ -157,11 +218,11 @@ function Test-EmlReleaseLayout {
         $frameworks = @($options.includedFrameworks | Where-Object { $_.name -eq $name -and $_.version -eq $RuntimeVersion })
         if ($frameworks.Count -ne 1) { throw "Bundled framework is missing or ambiguous: $name" }
     }
-    $dependencies = Read-EmlReleaseJson -Path (Join-Path $root 'EML.App.deps.json')
+    $dependencies = Read-EmlReleaseJson -Path (Join-Path $root "${programPrefix}EML.App.deps.json")
     if (-not $dependencies.ContainsKey('runtimeTarget') -or $dependencies.runtimeTarget.name -notmatch '/win-x64$') {
         throw 'Release dependency manifest does not target win-x64.'
     }
-    $login = Read-EmlReleaseJson -Path (Join-Path $root 'microsoft-login.json') -MaximumBytes 4096
+    $login = Read-EmlReleaseJson -Path (Join-Path $root "${programPrefix}microsoft-login.json") -MaximumBytes 4096
     if ($login.Count -ne 1 -or -not $login.ContainsKey('clientId')) {
         throw 'Microsoft login configuration must contain only the public clientId.'
     }
@@ -181,7 +242,19 @@ function Test-EmlReleaseLayout {
         if ($manifest.sourceCommit -cnotmatch '^[0-9a-f]{40}$' -or $manifest.sourceRepository -cne 'https://github.com/Ph1lK4/EML') {
             throw 'Release manifest requires the exact public source revision.'
         }
-        $sourceNotice = [IO.File]::ReadAllText((Join-Path $root 'SOURCE.txt'))
+        if ($Layout -eq 'AppDirectory') {
+            if ($manifest.layout -cne 'app-directory' -or $manifest.entryPoint -cne 'EML.exe' -or
+                $manifest.applicationDirectory -cne 'app' -or $manifest.dataDirectory -cne '.') {
+                throw 'Release manifest layout is inconsistent.'
+            }
+        } elseif ($manifest.ContainsKey('layout') -or $manifest.ContainsKey('entryPoint') -or
+            $manifest.ContainsKey('applicationDirectory') -or $manifest.ContainsKey('dataDirectory')) {
+            if ($manifest.layout -cne 'flat' -or $manifest.entryPoint -cne 'EML.App.exe' -or
+                $manifest.applicationDirectory -cne '.' -or $manifest.dataDirectory -cne '.') {
+                throw 'Release manifest layout is inconsistent.'
+            }
+        }
+        $sourceNotice = [IO.File]::ReadAllText((Join-Path $root "${documentPrefix}SOURCE.txt"))
         if (-not $sourceNotice.Contains("Source commit: $($manifest.sourceCommit)") -or
             -not $sourceNotice.Contains("$($manifest.sourceRepository)/archive/$($manifest.sourceCommit).zip") -or
             -not $sourceNotice.Contains('GPL-3.0-or-later')) {
@@ -194,7 +267,7 @@ function Test-EmlReleaseLayout {
         }
         $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
         foreach ($entry in $manifest.files) {
-            Test-EmlReleasePath -RelativePath $entry.path
+            Test-EmlReleasePath -RelativePath $entry.path -Layout $Layout
             if (-not $seen.Add($entry.path) -or -not $payloadFiles.ContainsKey($entry.path)) {
                 throw 'Release manifest has unexpected or duplicate entries.'
             }
@@ -211,6 +284,8 @@ function Test-EmlReleaseLayout {
         DisplayVersion = $DisplayVersion
         RuntimeIdentifier = 'win-x64'
         SelfContained = $true
+        Layout = $Layout
+        EntryPoint = $entryPoint
         FileCount = $files.Count
         TotalBytes = ($files | Measure-Object -Property Length -Sum).Sum
         Frameworks = @($options.includedFrameworks | ForEach-Object { [pscustomobject]@{ Name = $_.name; Version = $_.version } })

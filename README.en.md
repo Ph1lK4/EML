@@ -8,7 +8,7 @@ EML is a Windows launcher built for **GT New Horizons (GTNH) players in China**.
 
 A GTNH playthrough can last through several pack updates. EML brings pack installation, Java setup, mod management and player-data migration together, so moving to a newer instance doesn't mean sorting through your saves, maps and settings by hand. It also supports other common modpack formats, downloads from Modrinth and CurseForge, and vanilla Minecraft Java Edition.
 
-**Current version: 1.0-RC1, a release candidate.** Compatibility testing is ongoing. See the [release guide](docs/release-rc1.md) for package details and testing instructions.
+**Current version: 1.0-RC2, a release candidate.** Compatibility testing is ongoing. See the [release guide](docs/release-rc2.md) for package details and upgrade instructions. RC2 uses the Relay logo and a tidier layout: run `EML.exe` from the root, with application files and bundled .NET in `app/`. Player data stays in the root. The original RC1 download and tag remain available.
 
 ## Screenshots
 
@@ -76,16 +76,16 @@ EML leaves the old instance's game files intact and backs up destination files b
 
 ## Getting started
 
-1. Extract the Windows x64 package in full to a folder you can write to, then run `EML.App.exe`. Do not run it inside an archive viewer or copy only the EXE. The launcher includes its required .NET runtime; Visual Studio and the .NET SDK are not needed. Java is separate.
+1. Extract the Windows x64 package in full to a folder you can write to, then run `EML.exe` from the root. Do not run it inside an archive viewer or copy only the EXE. The launcher includes its required .NET runtime; Visual Studio and the .NET SDK are not needed. Java is separate.
 2. Download a pack from the GTNH hub or “Download instances,” or import a local archive. Wait for preparation to finish and resolve any files marked for manual handling.
 3. Detect or download Java on the Java page. For online mode, sign in on the Microsoft account page first. In launch settings, choose the identity, Java, memory and JVM options for the instance. Online play requires the relevant game entitlement, service access and a network connection; offline mode does not replace that authentication.
 4. Launch the game. If it fails, check the reported reason and runtime logs before changing files.
 
-Before upgrading or uninstalling EML, stop the game and launcher tasks, close EML, and back up the data you need **outside the application folder**. That folder may contain worlds, maps and migration backups. An exported instance ZIP is not a replacement for a full launcher-folder backup. Follow the [upgrade guide](docs/release-rc1.md) or [uninstallation guide](docs/uninstall.md).
+Before upgrading or uninstalling EML, stop the game and launcher tasks, close EML, and back up the data you need **outside the application folder**. That folder may contain worlds, maps and migration backups. An exported instance ZIP is not a replacement for a full launcher-folder backup. Follow the [upgrade guide](docs/release-rc2.md) or [uninstallation guide](docs/uninstall.md).
 
 ## Current status and limits
 
-- RC1 is a test release, not a promise that every pack and PC works. Automated and package checks are recorded in the [verification notes](docs/release-rc1-verification.md); clean-machine and full end-to-end testing are not complete.
+- RC2 is a test release, not a promise that every pack and PC works. See the [RC2 release guide](docs/release-rc2.md) for testing boundaries and acceptance steps, and the [RC1 verification notes](docs/release-rc1-verification.md) for historical results. Clean-machine and full end-to-end testing are not complete.
 - Some platform files require manual handling. For eligible CurseForge mod files without a direct download, EML tries a Modrinth file with the same official SHA-1 and size, not a similarly named mod or a different version.
 - The GTNH catalog is not a guarantee of compatibility or automatic installation. Some entries open an author page, and recommended-project dependencies are not installed automatically. Resource packs and shaders still need to be enabled in-game.
 - GTNH mirror archives currently have no official-hash verification. See the [GTNH hub guide](docs/gtnh-hub.md) for the checks that are performed.
@@ -102,7 +102,7 @@ Feature guides are currently in Chinese:
 - [Java downloads](docs/java-downloads.md) · [Launch settings](docs/launching.md) · [Microsoft sign-in](docs/microsoft-login.md)
 - [File integrity](docs/gameplay-file-policy.md) · [Instance backups](docs/instance-backups.md)
 - [Importing folders from other launchers](docs/folder-import.md)
-- [RC1 release and upgrades](docs/release-rc1.md) · [Verification record](docs/release-rc1-verification.md)
+- [RC2 release and upgrades](docs/release-rc2.md) · [RC1 historical release](docs/release-rc1.md) · [RC1 verification record](docs/release-rc1-verification.md)
 
 ## Contact, privacy and security
 
@@ -120,4 +120,4 @@ Minecraft, modpacks, mods, resource packs, Java and other third-party components
 
 ## Code signing policy
 
-The current `1.0-RC1` package is **unsigned**. The SignPath Foundation application was not approved, and no signing service is active. GitHub Actions runs build and test checks, not code signing. **K4ssia** is responsible for code review and signing approval; see the [code signing policy](docs/code-signing.md) for the current status and planned controls.
+The current `1.0-RC2` package and earlier RC1 packages are **unsigned**. The SignPath Foundation application was not approved, and no signing service is active. GitHub Actions runs build and test checks, not code signing. **K4ssia** is responsible for code review and signing approval; see the [code signing policy](docs/code-signing.md) for the current status and planned controls.

@@ -44,4 +44,5 @@
            Text="EML 发布包必须包含本地 .NET 运行时和 apphost，且不能使用单文件或裁剪模式。" />
   </Target>
 
+  <Import Project="..\..\tools\StructuredRelease.targets" />
 </Project>

@@ -51,6 +51,7 @@ public sealed class WindowsJavaLocatorStagingTests : IDisposable
 
     /// <summary>非保留位置、非 GUID 名称及正式发布目录，不会因同名前缀被误排除。</summary>
     [Theory]
+    [InlineData("jdk-21/bin")]
     [InlineData("user-java/.install-0123456789abcdef0123456789abcdef/bin")]
     [InlineData("runtimes/java/.install-personal/bin")]
     [InlineData("runtimes/java/temurin-21-x64-published/bin")]
