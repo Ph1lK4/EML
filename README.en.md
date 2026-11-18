@@ -1,5 +1,7 @@
 # EML Launcher
 
+<img src="src/EML.App/Assets/Branding/eml.png" alt="EML Relay logo" width="112" />
+
 [简体中文](README.md) | English
 
 EML is a Windows launcher built for **GT New Horizons (GTNH) players in China**.

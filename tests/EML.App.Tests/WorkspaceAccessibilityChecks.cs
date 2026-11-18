@@ -169,7 +169,7 @@ internal static class WorkspaceAccessibilityChecks
         root.Name = preview + nameof(WorkspaceAccessibilityShell);
         root.Add(new XAttribute(XNamespace.Xmlns + "preview", preview.NamespaceName));
         root.Attribute(xaml + "Class")?.Remove();
-        foreach (var name in new[] { "Title", "WindowStartupLocation", "MinWidth", "MinHeight" }) root.Attribute(name)?.Remove();
+        foreach (var name in new[] { "Title", "Icon", "WindowStartupLocation", "MinWidth", "MinHeight" }) root.Attribute(name)?.Remove();
         root.SetAttributeValue("Width", 1280);
         root.SetAttributeValue("Height", 820);
         foreach (var element in root.DescendantsAndSelf())

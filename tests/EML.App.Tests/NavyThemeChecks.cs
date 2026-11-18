@@ -245,7 +245,7 @@ internal static class NavyThemeChecks
         root.Name = preview + nameof(NavyShellHost);
         root.Add(new XAttribute(XNamespace.Xmlns + "preview", preview.NamespaceName));
         root.Attribute(xaml + "Class")?.Remove();
-        foreach (var name in new[] { "Title", "WindowStartupLocation", "MinWidth", "MinHeight" }) root.Attribute(name)?.Remove();
+        foreach (var name in new[] { "Title", "Icon", "WindowStartupLocation", "MinWidth", "MinHeight" }) root.Attribute(name)?.Remove();
         root.SetAttributeValue("Width", width);
         root.SetAttributeValue("Height", height);
         foreach (var element in root.DescendantsAndSelf())

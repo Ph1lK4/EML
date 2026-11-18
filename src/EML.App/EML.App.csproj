@@ -9,6 +9,8 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <None Update="microsoft-login.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <InternalsVisibleTo Include="EML.App.Tests" />
+    <Resource Include="Assets\Branding\eml.ico" />
+    <Resource Include="Assets\Branding\eml.png" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -17,6 +19,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\Branding\eml.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!-- 正式打包入口显式开启；不影响日常 F5、单元测试或普通源码构建。 -->

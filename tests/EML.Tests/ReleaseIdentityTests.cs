@@ -10,8 +10,8 @@ public sealed class ReleaseIdentityTests
     [Fact]
     public void ReleaseCandidateIdentityIsConsistent()
     {
-        Assert.Equal("1.0.0-rc.1", ReleaseIdentity.Version);
-        Assert.Equal("1.0-RC1", ReleaseIdentity.DisplayVersion);
+        Assert.Equal("1.0.0-rc.1.logo.1", ReleaseIdentity.Version);
+        Assert.Equal("1.0-RC1-Logo1", ReleaseIdentity.DisplayVersion);
         Assert.Contains(ReleaseIdentity.DisplayVersion, ReleaseIdentity.WindowTitle);
     }
 

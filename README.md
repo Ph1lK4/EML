@@ -1,5 +1,7 @@
 # EML Launcher
 
+<img src="src/EML.App/Assets/Branding/eml.png" alt="EML 接续标志" width="112" />
+
 简体中文 | [English](README.en.md)
 
 **面向中国 GT New Horizons（GTNH）玩家的 Windows 启动器。**
