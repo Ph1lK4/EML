@@ -157,6 +157,8 @@ public sealed class MinecraftInstanceDownloader : IMinecraftInstanceDownloader
     /// <summary>给无法自动补全的文件说明真实原因，避免把 Prism 或 CurseForge 引用伪装成可用 URL。</summary>
     private static string MissingSourceReason(InstanceFileRequirement file) => file.Source switch
     {
+        InstanceFileSource.Embedded when file.Origin == InstanceFileOrigin.LocalFolderImport =>
+            "文件来自本地文件夹副本，需要用户重新提供或从 EML 备份恢复；不会自动读取旧实例或按名称下载替代文件。",
         InstanceFileSource.Embedded => "文件来自原整合包，需要从原压缩包恢复；当前清单没有下载来源。",
         InstanceFileSource.CurseForge => "需要先通过 CurseForge 项目和文件 ID 解析下载信息。",
         _ when file.Hashes.Count == 0 => "没有校验值，本次实例补全不自动下载。",

@@ -117,10 +117,17 @@ public sealed partial class MinecraftLaunchPlanner
         if (settings.UseMicrosoftAccount)
         {
             progress?.Report(new(MinecraftLaunchStage.Preparing, "正在验证微软账号会话……"));
-            session = await (_accounts ?? throw new MinecraftAuthenticationException("未配置微软账号服务。"))
-                .GetSessionAsync(token).ConfigureAwait(false);
+            var accounts = _accounts ?? throw new MinecraftAuthenticationException("未配置微软账号服务。");
+            // 每个实例按自己的 UUID 获取会话，不为启动一个账号而改变全局默认账号。
+            session = settings.PreferredMicrosoftAccount is { } chosen && accounts is IMinecraftAccountManager manager
+                ? await manager.GetSessionForAccountAsync(chosen.Id, token).ConfigureAwait(false)
+                : await accounts.GetSessionAsync(token).ConfigureAwait(false);
             if (session.ExpiresAt <= DateTimeOffset.UtcNow || string.IsNullOrWhiteSpace(session.AccessToken))
                 throw new MinecraftAuthenticationException("正版登录会话已过期，请重新登录。");
+            if (settings.PreferredMicrosoftAccount is { } expected &&
+                !MinecraftLaunchValidation.SamePlayerId(expected.Id, session.Account.Id))
+                throw new MinecraftAuthenticationException($"此实例选择的正版账号是 {expected.Name}，当前登录的是 {session.Account.Name}。" +
+                    "请重新登录原账号，或在启动界面明确选择“使用当前登录账号”；为避免进入错误的玩家存档，本次未启动。");
         }
         var playerName = session?.Account.Name ?? settings.PlayerName;
         var playerId = session?.Account.Id ?? OfflineUuid(settings.PlayerName);
@@ -162,7 +169,10 @@ public sealed partial class MinecraftLaunchPlanner
         CheckCriticalFiles(root, runtime, state, sourceSnapshot.Requirements, profile, classPaths, token);
         progress?.Report(new(MinecraftLaunchStage.Preparing, $"启动准备完成；Java {javaMajor}，玩家 {playerName}（{(session is null ? "离线" : "正版")}），最大内存 {settings.MaxMemoryMb} MB。"));
         return new(root, game, java.ExecutablePath, javaMajor, arguments.ToArray())
-        { NativesDirectory = natives, SensitiveValues = session is null ? [] : [accessToken], LogEncoding = settings.LogEncoding };
+        {
+            NativesDirectory = natives, SensitiveValues = session is null ? [] : [accessToken], LogEncoding = settings.LogEncoding,
+            Identity = new(session is not null, playerName, playerId, default)
+        };
     }
 
     /// <summary>缺少组件元数据或加载器尚不支持时明确失败，不降级到其他启动入口。</summary>

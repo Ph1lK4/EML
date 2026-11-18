@@ -15,6 +15,7 @@ using EML.App.ViewModels;
 using EML.App.Views;
 using EML.Core.Downloads;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft.Catalog;
 using EML.Core.Minecraft.Gtnh;
 using EML.Core.Minecraft.Migration;
@@ -410,8 +411,8 @@ public sealed class LauncherViewsSmokeTests
         var secondMode = Assert.IsType<ComboBox>(second.FindName("ModeSelector"));
         var firstOffline = Assert.IsType<TextBox>(first.FindName("PlayerNameInput"));
         var secondOffline = Assert.IsType<TextBox>(second.FindName("PlayerNameInput"));
-        var firstOnline = Assert.IsType<TextBox>(first.FindName("MicrosoftPlayerName"));
-        var secondOnline = Assert.IsType<TextBox>(second.FindName("MicrosoftPlayerName"));
+        var firstOnline = Assert.IsType<ComboBox>(first.FindName("MicrosoftAccountSelector"));
+        var secondOnline = Assert.IsType<ComboBox>(second.FindName("MicrosoftAccountSelector"));
         firstOffline.Text = "Offline_Player";
         Layout(host);
         Assert.Equal(firstOffline.Text, secondOffline.Text);
@@ -423,21 +424,21 @@ public sealed class LauncherViewsSmokeTests
         Assert.False(IsLocallyVisible(firstOffline, first));
         Assert.False(IsLocallyVisible(secondOffline, second));
         Assert.True(IsLocallyVisible(firstOnline, first));
-        Assert.True(secondOnline.IsReadOnly);
-        Assert.Equal("尚未登录", firstOnline.Text);
+        Assert.False(secondOnline.IsEditable);
+        Assert.Null(firstOnline.SelectedItem);
         model.Accounts.AccountName = "Online_Player_123";
         Layout(host);
-        Assert.Equal("Online_Player_123", firstOnline.Text);
-        Assert.Equal("Online_Player_123", secondOnline.Text);
-        Assert.True(MeasureSingleLineVisibility(firstOnline, "正版玩家名").Visible);
+        Assert.Equal("Online_Player_123", Assert.IsType<MinecraftAccount>(firstOnline.SelectedItem).Name);
+        Assert.Equal("Online_Player_123", Assert.IsType<MinecraftAccount>(secondOnline.SelectedItem).Name);
+        Assert.Contains(VisualDescendants(firstOnline).OfType<TextBlock>(), text => text.Text == "Online_Player_123" && text.ActualHeight > 0);
         WriteTextPreview(panel, "launch-mode-microsoft.png");
 
         model.Accounts.AccountName = "AnotherPlayer";
         Layout(host);
-        Assert.Equal("AnotherPlayer", secondOnline.Text);
+        Assert.Equal("AnotherPlayer", Assert.IsType<MinecraftAccount>(secondOnline.SelectedItem).Name);
         model.Accounts.AccountName = "尚未登录";
         Layout(host);
-        Assert.Equal("尚未登录", firstOnline.Text);
+        Assert.Null(firstOnline.SelectedItem);
         Assert.Equal("正版模式", firstMode.SelectedItem);
 
         secondMode.SelectedItem = "离线模式";
@@ -470,6 +471,12 @@ public sealed class LauncherViewsSmokeTests
         public bool CanEditOfflinePlayerName => !Busy && !UseMicrosoftAccount;
         public IReadOnlyList<string> LaunchModes { get; } = ["离线模式", "正版模式"];
         public AccountNamePreview Accounts { get; } = new();
+        public string SelectedMicrosoftPlayerName => Accounts.AccountName;
+        public IReadOnlyList<MinecraftAccount> AvailableMicrosoftAccounts => Accounts.AccountName == "尚未登录"
+            ? [] : [new("11111111222233334444555555555555", Accounts.AccountName)];
+        public MinecraftAccount? SelectedMicrosoftAccount { get => AvailableMicrosoftAccounts.FirstOrDefault(); set { } }
+        public string LaunchIdentityHint => "启动后自动记住本实例的账号与模式。";
+        public bool CanUseCurrentMicrosoftAccount => false;
         public string SelectedLaunchMode
         {
             get => UseMicrosoftAccount ? "正版模式" : "离线模式";
@@ -513,7 +520,16 @@ public sealed class LauncherViewsSmokeTests
         }
 
         /// <summary>固定初始目标，后续通过页面双向绑定选择第二个虚拟实例。</summary>
-        public LaunchSettingsPreview() => SelectedInstance = Instances[0];
+        public LaunchSettingsPreview()
+        {
+            SelectedInstance = Instances[0];
+            Accounts.PropertyChanged += (_, _) =>
+            {
+                PropertyChanged?.Invoke(this, new(nameof(SelectedMicrosoftPlayerName)));
+                PropertyChanged?.Invoke(this, new(nameof(AvailableMicrosoftAccounts)));
+                PropertyChanged?.Invoke(this, new(nameof(SelectedMicrosoftAccount)));
+            };
+        }
     }
 
     /// <summary>模拟账号页公开名称变化，不提供凭据或真实账号。</summary>

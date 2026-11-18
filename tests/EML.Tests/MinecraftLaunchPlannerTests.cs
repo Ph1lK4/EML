@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using EML.Core.Java;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Accounts;
 using EML.Core.Minecraft.Launching;
 using EML.Infrastructure.Minecraft.Importing;
 using EML.Infrastructure.Minecraft.Launching;
@@ -496,6 +497,118 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
         return fixture;
     }
 
+    /// <summary>实例明确选中的 UUID 走定向会话入口，不查询默认账号；服务错误返回另一身份时仍拒绝。</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SelectedAccountUsesTargetedSessionAndRejectsWrongIdentity(bool wrongIdentity)
+    {
+        var accounts = new MultipleAccountStub { WrongIdentity = wrongIdentity };
+        var fixture = await CreateAsync(accounts: accounts);
+        var settings = new MinecraftLaunchSettings
+        { UseMicrosoftAccount = true, PreferredMicrosoftAccount = new(MicrosoftMinecraftAuthTests.PlayerId, "PreviousName") };
+
+        if (wrongIdentity)
+            await Assert.ThrowsAsync<MinecraftAuthenticationException>(() => fixture.Planner.PrepareAsync(fixture.Instance, settings));
+        else
+        {
+            var plan = await fixture.Planner.PrepareAsync(fixture.Instance, settings);
+            Assert.Equal(MicrosoftMinecraftAuthTests.PlayerId, plan.Identity!.PlayerId);
+            Assert.Contains("SelectedPlayer", plan.Arguments);
+            Assert.DoesNotContain("OnlineAlex", plan.Arguments);
+        }
+        Assert.Equal(MicrosoftMinecraftAuthTests.PlayerId, Assert.Single(accounts.RequestedIds));
+        Assert.Equal(0, accounts.Calls);
+    }
+
+    /// <summary>定向获取已移除账号失败后不请求默认会话，也不回退为离线启动。</summary>
+    [Fact]
+    public async Task RemovedSelectedAccountDoesNotFallBackToDefaultSession()
+    {
+        var accounts = new MultipleAccountStub { Missing = true };
+        var fixture = await CreateAsync(accounts: accounts);
+
+        await Assert.ThrowsAsync<MinecraftAuthenticationException>(() => fixture.Planner.PrepareAsync(fixture.Instance,
+            new() { UseMicrosoftAccount = true, PreferredMicrosoftAccount = new(MicrosoftMinecraftAuthTests.PlayerId, "RemovedPlayer") }));
+
+        Assert.Single(accounts.RequestedIds);
+        Assert.Equal(0, accounts.Calls);
+    }
+
+    /// <summary>记住的正版 UUID 与当前会话不同时必须拒绝，不能悄悄使用另一个存档身份。</summary>
+    [Fact]
+    public async Task RememberedOnlineAccountMismatchRejectsLaunch()
+    {
+        var accounts = new OnlineAccountStub();
+        var fixture = await CreateAsync(accounts: accounts);
+        var selected = new EML.Core.Minecraft.Accounts.MinecraftAccount("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "PreviousUser");
+
+        var error = await Assert.ThrowsAsync<EML.Core.Minecraft.Accounts.MinecraftAuthenticationException>(() =>
+            fixture.Planner.PrepareAsync(fixture.Instance, new() { UseMicrosoftAccount = true, PreferredMicrosoftAccount = selected }));
+
+        Assert.Contains("账号", error.Message);
+        Assert.DoesNotContain("online-secret", error.Message);
+        Assert.Equal(1, accounts.Calls);
+        Assert.False(File.Exists(Path.Combine(fixture.Instance, MinecraftLaunchSettingsStore.RelativePath)));
+    }
+
+    /// <summary>同一 UUID 改名后使用服务端新姓名；连字符与大小写不构成不同账号。</summary>
+    [Fact]
+    public async Task RememberedAccountRenameUsesActualSessionIdentity()
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub());
+        var preferred = new EML.Core.Minecraft.Accounts.MinecraftAccount(
+            Guid.Parse(MicrosoftMinecraftAuthTests.PlayerId).ToString("D").ToUpperInvariant(), "OldName");
+
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance,
+            new() { UseMicrosoftAccount = true, PreferredMicrosoftAccount = preferred });
+
+        var identity = Assert.IsType<MinecraftLaunchIdentity>(plan.Identity);
+        Assert.True(identity.UseMicrosoftAccount);
+        Assert.Equal("OnlineAlex", identity.PlayerName);
+        Assert.Equal(Guid.Parse(MicrosoftMinecraftAuthTests.PlayerId), Guid.Parse(identity.PlayerId));
+        Assert.Contains("OnlineAlex", plan.Arguments);
+        Assert.DoesNotContain("OldName", plan.Arguments);
+        Assert.DoesNotContain("online-secret", JsonSerializer.Serialize(identity));
+    }
+
+    /// <summary>离线启动不查询微软会话，旧正版偏好不能改变此次离线 UUID。</summary>
+    [Fact]
+    public async Task OfflinePlanUsesItsOwnIdentityWithoutReadingOnlineSession()
+    {
+        var accounts = new OnlineAccountStub { Fail = true };
+        var fixture = await CreateAsync(accounts: accounts);
+
+        var plan = await fixture.Planner.PrepareAsync(fixture.Instance, new()
+        {
+            PlayerName = "OfflinePlayer", UseMicrosoftAccount = false,
+            PreferredMicrosoftAccount = new(MicrosoftMinecraftAuthTests.PlayerId, "OnlineAlex")
+        });
+
+        var identity = Assert.IsType<MinecraftLaunchIdentity>(plan.Identity);
+        Assert.False(identity.UseMicrosoftAccount);
+        Assert.Equal("OfflinePlayer", identity.PlayerName);
+        Assert.Equal(MinecraftLaunchPlanner.OfflineUuid("OfflinePlayer"), identity.PlayerId);
+        Assert.Equal(0, accounts.Calls);
+    }
+
+    /// <summary>只准备参数不是实际启动，不能覆盖已经记录的玩家或创建新的历史文件。</summary>
+    [Fact]
+    public async Task PreparationDoesNotRewriteLastLaunchIdentity()
+    {
+        var fixture = await CreateAsync(accounts: new OnlineAccountStub());
+        var store = new MinecraftLaunchSettingsStore(_root);
+        await store.RememberAsync(fixture.Instance, new(false, "PreviousUser",
+            MinecraftLaunchPlanner.OfflineUuid("PreviousUser"), DateTimeOffset.UtcNow.AddDays(-1)));
+        var path = Path.Combine(fixture.Instance, MinecraftLaunchSettingsStore.RelativePath);
+        var before = await File.ReadAllBytesAsync(path);
+
+        await fixture.Planner.PrepareAsync(fixture.Instance, new() { UseMicrosoftAccount = true });
+
+        Assert.Equal(before, await File.ReadAllBytesAsync(path));
+        Assert.Equal("PreviousUser", (await store.LoadAsync(fixture.Instance)).LastLaunchIdentity!.PlayerName);
+    }
+
     /// <summary>正版身份在不同整合包格式中共用，不能仍使用离线名或占位令牌。</summary>
     [Theory]
     [InlineData("Prism")]
@@ -724,7 +837,7 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
         Assert.DoesNotContain("token", File.ReadAllText(Path.Combine(fixture.Instance, MinecraftLaunchSettingsStore.RelativePath)), StringComparison.OrdinalIgnoreCase);
     }
 
-    private sealed class OnlineAccountStub : EML.Core.Minecraft.Accounts.IMinecraftAccountService
+    private class OnlineAccountStub : EML.Core.Minecraft.Accounts.IMinecraftAccountService
     {
         internal bool Fail;
         internal int Calls;
@@ -739,6 +852,29 @@ public sealed class MinecraftLaunchPlannerTests : IDisposable
         public Task<EML.Core.Minecraft.Accounts.MinecraftAccount?> LoadAccountAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<EML.Core.Minecraft.Accounts.MinecraftAccount> SignInAsync(IProgress<EML.Core.Minecraft.Accounts.MinecraftLoginPrompt>? progress = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task SignOutAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    /// <summary>区分默认和定向入口，启动计划不得为选定账号隐式切换全局默认。</summary>
+    private sealed class MultipleAccountStub : OnlineAccountStub, IMinecraftAccountManager
+    {
+        public bool Missing { get; init; }
+        public bool WrongIdentity { get; init; }
+        public List<string> RequestedIds { get; } = [];
+        /// <summary>返回指定账号的测试会话，也可以模拟已移除或错误 UUID。</summary>
+        public Task<MinecraftAccountSession> GetSessionForAccountAsync(string accountId, CancellationToken cancellationToken = default)
+        {
+            RequestedIds.Add(accountId);
+            if (Missing) throw new MinecraftAuthenticationException("所选账号已移除。");
+            return Task.FromResult(new MinecraftAccountSession(
+                new(WrongIdentity ? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" : accountId, "SelectedPlayer"),
+                "selected-test-secret", DateTimeOffset.UtcNow.AddHours(1), MicrosoftMinecraftAuthTests.ClientId, "123"));
+        }
+        /// <summary>启动不得加载整个账号列表。</summary>
+        public Task<MinecraftAccountCollection> LoadAccountsAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        /// <summary>启动不得改变默认账号。</summary>
+        public Task<MinecraftAccount> SelectAccountAsync(string accountId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        /// <summary>启动不得删除账号。</summary>
+        public Task RemoveAccountAsync(string accountId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     /// <summary>为测试文件保存已知的生成基线，不用检查器伪造完整检查结果。</summary>

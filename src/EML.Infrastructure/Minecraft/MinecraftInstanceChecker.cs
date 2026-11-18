@@ -95,7 +95,7 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
             reporter.Report(results.Count, fileName);
             var result = await CheckFileAsync(root, requirement, mode, reporter, results.Count, token).ConfigureAwait(false);
             var allowsMissing = !isRuntime && InstanceFileChangePolicy.AllowsMissing(requirement, manifest.GameDirectory, manifest.SourceFormat);
-            if (result.State == InstanceFileState.Missing && allowsMissing)
+            if (result.State is InstanceFileState.Missing or InstanceFileState.MissingEmbeddedFile && allowsMissing)
                 result = result with { State = InstanceFileState.Consumed, Message = requirement.Origin == InstanceFileOrigin.MigratedPlayerData
                     ? "迁入玩家数据已移除，保留迁移记录，不从旧实例自动恢复。"
                     : "原包空更新标记允许被游戏消耗；保留原始依据，不自动恢复。" };
@@ -251,11 +251,11 @@ public sealed class MinecraftInstanceChecker : IMinecraftInstanceChecker
         }
         catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            var missingState = requirement.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport
+            var missingState = requirement.Origin is InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport or InstanceFileOrigin.LocalFolderImport
                 ? InstanceFileState.MissingEmbeddedFile : InstanceFileState.Missing;
             return new(requirement, opened ? InstanceFileState.ChangedDuringCheck : missingState,
                 opened ? "文件在检查过程中消失，请重新检查。" : missingState == InstanceFileState.MissingEmbeddedFile
-                    ? "包内覆盖或用户选择的文件缺失，不能用同路径官方文件替代。" : "清单声明的文件不存在。");
+                    ? "包内覆盖或本地导入的文件缺失，不能用同路径官方文件替代。" : "清单声明的文件不存在。");
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.SecurityException)
         {

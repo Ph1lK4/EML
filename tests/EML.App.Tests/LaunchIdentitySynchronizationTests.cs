@@ -31,12 +31,143 @@ internal static class LaunchIdentitySynchronizationTests
             VerifyReturningToInstanceRestoresUnsavedIdentity(host);
             VerifyRefreshPreservesDraftUntilExplicitReload(host);
             VerifyLateReadCannotReplaceRestoredDraft(host);
+            VerifyRememberedAccountAndExplicitSwitch(host);
+            VerifyMultipleAccountChoicesStaySynchronized(host);
+            VerifyAccountManagementPage(host);
         }
         finally
         {
             host.Child = null;
             SynchronizationContext.SetSynchronizationContext(previousContext);
         }
+    }
+
+    /// <summary>账号页真实列表与命令绑定能添加展示、切换默认和确认移除，不隐式选择剩余账号。</summary>
+    private static void VerifyAccountManagementPage(Border host)
+    {
+        var first = new MinecraftAccount("11111111222233334444555555555555", "FirstPlayer");
+        var second = new MinecraftAccount("aaaaaaaa222233334444555555555555", "SecondPlayer");
+        var service = new PublicAccountService { Accounts = [first, second], ActiveId = first.Id };
+        var accounts = new MinecraftAccountViewModel(service, confirmRemove: _ => true);
+        Wait(accounts.LoadCommand.ExecuteAsync(null));
+        var page = new AccountsView { DataContext = accounts };
+        host.Child = page;
+        Flush(host);
+        var list = Assert.IsType<ListBox>(page.FindName("SavedAccountList"));
+        Assert.Equal(2, list.Items.Count);
+        Assert.Equal(first, list.SelectedItem);
+        Assert.Equal(BindingStatus.Active, BindingOperations.GetBindingExpression(list, Selector.SelectedItemProperty)!.Status);
+        var buttons = FindButtons(page).ToArray();
+        var select = Assert.Single(buttons, button => ReferenceEquals(button.Command, accounts.SelectAccountCommand));
+        var remove = Assert.Single(buttons, button => ReferenceEquals(button.Command, accounts.RemoveAccountCommand));
+        Assert.False(select.IsEnabled);
+        Assert.True(remove.IsEnabled);
+        list.SetCurrentValue(Selector.SelectedItemProperty, second);
+        Flush(host);
+        Assert.Equal(first.Id, accounts.AccountId);
+        Assert.True(select.IsEnabled);
+        Wait(accounts.SelectAccountCommand.ExecuteAsync(null));
+        Flush(host);
+        Assert.Equal(second.Id, accounts.AccountId);
+        Assert.False(select.IsEnabled);
+        Wait(accounts.RemoveAccountCommand.ExecuteAsync(null));
+        Flush(host);
+        Assert.Single(list.Items);
+        Assert.Null(list.SelectedItem);
+        Assert.Equal("", accounts.AccountId);
+        Assert.False(remove.IsEnabled);
+    }
+
+    /// <summary>遍历生产视觉树以核对按钮是否确实绑定到账号命令。</summary>
+    private static IEnumerable<Button> FindButtons(DependencyObject root)
+    {
+        for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, index);
+            if (child is Button button) yield return button;
+            foreach (var nested in FindButtons(child)) yield return nested;
+        }
+    }
+
+    /// <summary>两个真实下拉框共用实例选择，默认切换、改名、移除和列表刷新不能偷偷替换 UUID。</summary>
+    private static void VerifyMultipleAccountChoicesStaySynchronized(Border host)
+    {
+        var first = new MinecraftAccount("11111111222233334444555555555555", "FirstPlayer");
+        var second = new MinecraftAccount("aaaaaaaa222233334444555555555555", "SecondPlayer");
+        var service = new PublicAccountService { Accounts = [first, second], ActiveId = second.Id };
+        using var fixture = new Fixture(host, service);
+        var model = fixture.Model;
+        var accounts = model.Accounts!;
+        fixture.Store.LoadOverride = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+        { UseMicrosoftAccount = true, PreferredMicrosoftAccount = first });
+        Wait(model.ReloadLaunchSettingsCommand.ExecuteAsync(null));
+        Flush(host);
+        var instanceChoice = Assert.IsType<ComboBox>(fixture.InstanceIdentity.FindName("MicrosoftAccountSelector"));
+        var settingsChoice = Assert.IsType<ComboBox>(fixture.SettingsIdentity.FindName("MicrosoftAccountSelector"));
+        Assert.Equal(first, instanceChoice.SelectedItem);
+        Assert.Equal(first, settingsChoice.SelectedItem);
+        Assert.Equal(second.Id, accounts.AccountId);
+
+        accounts.SelectedAccount = first;
+        Wait(accounts.SelectAccountCommand.ExecuteAsync(null));
+        Flush(host);
+        Assert.Equal(first, instanceChoice.SelectedItem);
+        instanceChoice.SetCurrentValue(Selector.SelectedItemProperty, second);
+        Flush(host);
+        Assert.Equal(second, settingsChoice.SelectedItem);
+        Assert.Equal(first.Id, accounts.AccountId);
+        fixture.ShowSettings(true);
+        Wait(model.LaunchGameCommand.ExecuteAsync(null));
+        Assert.Equal(second.Id, Assert.Single(fixture.Launcher.Calls).Settings.PreferredMicrosoftAccount!.Id);
+
+        var renamed = second with { Name = "RenamedSecond" };
+        accounts.UpdateKnownAccount(renamed);
+        Flush(host);
+        Assert.Equal(renamed, instanceChoice.SelectedItem);
+        Assert.Equal(renamed, settingsChoice.SelectedItem);
+        accounts.SelectedAccount = renamed;
+        Wait(accounts.RemoveAccountCommand.ExecuteAsync(null));
+        Flush(host);
+        Assert.Equal(second.Id, Assert.IsType<MinecraftAccount>(instanceChoice.SelectedItem).Id);
+        Assert.Equal(second.Id, Assert.IsType<MinecraftAccount>(settingsChoice.SelectedItem).Id);
+        Assert.DoesNotContain(accounts.SavedAccounts, account => account.Id == second.Id);
+        Assert.Equal(first.Id, accounts.AccountId);
+        Assert.True(model.CanUseCurrentMicrosoftAccount);
+        settingsChoice.SetCurrentValue(Selector.SelectedItemProperty, first);
+        Flush(host);
+        Assert.Equal(first, instanceChoice.SelectedItem);
+        Assert.False(model.CanUseCurrentMicrosoftAccount);
+    }
+
+    /// <summary>真实的两个入口共同展示记住的账号与换号提示，按钮确认后同时改用当前档案。</summary>
+    private static void VerifyRememberedAccountAndExplicitSwitch(Border host)
+    {
+        using var fixture = new Fixture(host);
+        fixture.Store.LoadOverride = (_, _) => Task.FromResult(new MinecraftLaunchSettings
+        {
+            UseMicrosoftAccount = true,
+            PreferredMicrosoftAccount = new("aaaaaaaa222233334444555555555555", "PreviousPlayer"),
+            LastLaunchIdentity = new(true, "PreviousPlayer", "aaaaaaaa222233334444555555555555", DateTimeOffset.UtcNow)
+        });
+        Wait(fixture.Model.ReloadLaunchSettingsCommand.ExecuteAsync(null));
+        fixture.AssertMode(true);
+        foreach (var view in new[] { fixture.InstanceIdentity, fixture.SettingsIdentity })
+        {
+            Assert.Equal("PreviousPlayer", Assert.IsType<MinecraftAccount>(Assert.IsType<ComboBox>(view.FindName("MicrosoftAccountSelector")).SelectedItem).Name);
+            Assert.Contains("与所选账号不同", Assert.IsType<TextBlock>(view.FindName("IdentityHint")).Text);
+            Assert.Equal(Visibility.Visible, Assert.IsType<Button>(view.FindName("UseCurrentAccountButton")).Visibility);
+        }
+        var button = Assert.IsType<Button>(fixture.InstanceIdentity.FindName("UseCurrentAccountButton"));
+        Assert.True(button.Command.CanExecute(null));
+        button.Command.Execute(null);
+        Flush(host);
+        foreach (var view in new[] { fixture.InstanceIdentity, fixture.SettingsIdentity })
+        {
+            Assert.Equal("OnlinePlayer", Assert.IsType<MinecraftAccount>(Assert.IsType<ComboBox>(view.FindName("MicrosoftAccountSelector")).SelectedItem).Name);
+            Assert.Equal(Visibility.Collapsed, Assert.IsType<Button>(view.FindName("UseCurrentAccountButton")).Visibility);
+        }
+        Assert.Equal("PreviousPlayer", fixture.Model.LastLaunchIdentity!.PlayerName);
+        Assert.Empty(fixture.Store.Saved);
     }
 
     /// <summary>从任一入口选择模式，隐藏另一个页面，再验证保存与直接启动使用同一身份快照。</summary>
@@ -327,12 +458,12 @@ internal static class LaunchIdentitySynchronizationTests
         public ListBox InstanceList { get; } = new();
 
         /// <summary>在内存中选择实例并加载假账号，控件通过真实绑定继承同一实例模型。</summary>
-        public Fixture(Border host)
+        public Fixture(Border host, PublicAccountService? accountService = null)
         {
             _host = host;
             var services = new ForbiddenServices();
             var java = new JavaSettingsViewModel(services);
-            var accounts = new MinecraftAccountViewModel(new PublicAccountService());
+            var accounts = new MinecraftAccountViewModel(accountService ?? new PublicAccountService(), confirmRemove: _ => true);
             Wait(accounts.LoadCommand.ExecuteAsync(null));
             Locator.Result = [First, Other];
             Model = new(Locator, services, services, services, @"C:\EML-test-only\instances",
@@ -392,9 +523,9 @@ internal static class LaunchIdentitySynchronizationTests
             }
             foreach (var identity in new[] { InstanceIdentity, SettingsIdentity })
             {
-                var account = Assert.IsType<TextBox>(identity.FindName("MicrosoftPlayerName"));
-                Assert.Equal("OnlinePlayer", account.Text);
-                Assert.True(account.IsReadOnly);
+                var account = Assert.IsType<ComboBox>(identity.FindName("MicrosoftAccountSelector"));
+                Assert.Equal(Model.SelectedMicrosoftPlayerName, Assert.IsType<MinecraftAccount>(account.SelectedItem).Name);
+                Assert.False(account.IsEditable);
                 var offline = Assert.IsType<TextBox>(identity.FindName("PlayerNameInput"));
                 Assert.Equal(Model.PlayerName, offline.Text);
                 Assert.Equal(!microsoft && Model.CanEditLaunchSettings, offline.IsEnabled);
@@ -468,12 +599,34 @@ internal static class LaunchIdentitySynchronizationTests
     }
 
     /// <summary>提供公开显示档案；任何请求真实会话的 UI 代码都会使测试失败。</summary>
-    private sealed class PublicAccountService : IMinecraftAccountService
+    private sealed class PublicAccountService : IMinecraftAccountManager
     {
         public bool IsConfigured => true;
+        public List<MinecraftAccount> Accounts { get; set; } = [new("11111111222233334444555555555555", "OnlinePlayer")];
+        public string? ActiveId { get; set; } = "11111111222233334444555555555555";
         /// <summary>返回纯测试玩家名，不访问本机加密凭据。</summary>
         public Task<MinecraftAccount?> LoadAccountAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult<MinecraftAccount?>(new("11111111222233334444555555555555", "OnlinePlayer"));
+            Task.FromResult(Accounts.FirstOrDefault(account => account.Id == ActiveId));
+        /// <summary>返回内存公开列表，供真实下拉框验证多账号选择。</summary>
+        public Task<MinecraftAccountCollection> LoadAccountsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new MinecraftAccountCollection(Accounts.ToArray(), ActiveId));
+        /// <summary>只改变测试默认值，用来确认实例选择不跟随全局默认。</summary>
+        public Task<MinecraftAccount> SelectAccountAsync(string accountId, CancellationToken cancellationToken = default)
+        {
+            var account = Accounts.Single(account => account.Id == accountId);
+            ActiveId = account.Id;
+            return Task.FromResult(account);
+        }
+        /// <summary>只移除指定测试条目，默认身份被移除时不自动选择别人。</summary>
+        public Task RemoveAccountAsync(string accountId, CancellationToken cancellationToken = default)
+        {
+            Accounts.RemoveAll(account => account.Id == accountId);
+            if (ActiveId == accountId) ActiveId = null;
+            return Task.CompletedTask;
+        }
+        /// <summary>界面同步不应访问指定账号的令牌。</summary>
+        public Task<MinecraftAccountSession> GetSessionForAccountAsync(string accountId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
         /// <summary>页面同步测试不得启动网页授权。</summary>
         public Task<MinecraftAccount> SignInAsync(IProgress<MinecraftLoginPrompt>? progress = null,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();

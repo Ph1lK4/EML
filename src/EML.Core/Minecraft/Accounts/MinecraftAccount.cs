@@ -30,5 +30,17 @@ public interface IMinecraftAccountService
     Task SignOutAsync(CancellationToken cancellationToken = default);
 }
 
+/// <summary>公开账号列表和默认选择，不包含加密凭证或游戏会话。</summary>
+public sealed record MinecraftAccountCollection(IReadOnlyList<MinecraftAccount> Accounts, string? ActiveAccountId);
+
+/// <summary>多个正版账号独立保存；实例可按 UUID 请求会话，不必改变其他实例的默认账号。</summary>
+public interface IMinecraftAccountManager : IMinecraftAccountService
+{
+    Task<MinecraftAccountCollection> LoadAccountsAsync(CancellationToken cancellationToken = default);
+    Task<MinecraftAccount> SelectAccountAsync(string accountId, CancellationToken cancellationToken = default);
+    Task RemoveAccountAsync(string accountId, CancellationToken cancellationToken = default);
+    Task<MinecraftAccountSession> GetSessionForAccountAsync(string accountId, CancellationToken cancellationToken = default);
+}
+
 /// <summary>仅包含可安全展示的诊断，不附带认证响应正文或带令牌的内部异常。</summary>
 public sealed class MinecraftAuthenticationException(string message) : Exception(message);

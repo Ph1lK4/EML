@@ -53,7 +53,7 @@ public sealed record InstanceComponentRequirement(string Id, string Version)
 public enum InstanceFileSource { Embedded, DirectDownload, CurseForge }
 
 /// <summary>实际采用的内容来源；与旧 Source 的获取方式分开，旧清单未声明时继续按原规则读取。</summary>
-public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport, MigratedPlayerData, GithubReleaseDownload }
+public enum InstanceFileOrigin { EmbeddedOverride, CurseForgeDownload, ModrinthDownload, UserLocalImport, MigratedPlayerData, GithubReleaseDownload, LocalFolderImport }
 
 /// <summary>文件用途独立于内容来源；可变配置和启动器状态不会改变原来源摘要的含义。</summary>
 public enum InstanceFileRole { Content, UserConfiguration, LauncherMetadata, DerivedState, UserData, ConsumableMarker }

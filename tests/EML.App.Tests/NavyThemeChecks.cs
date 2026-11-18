@@ -15,6 +15,7 @@ using System.Xml.Linq;
 using CommunityToolkit.Mvvm.Input;
 using EML.App.Views;
 using EML.Core.Minecraft;
+using EML.Core.Minecraft.Accounts;
 
 namespace EML.App.Tests;
 
@@ -40,7 +41,8 @@ internal static class NavyThemeChecks
             model.Instances.UseMicrosoftAccount = true;
             Layout(shell);
             var identity = Assert.IsType<LaunchIdentitySelector>(shell.FindName("InstanceLaunchIdentity"));
-            Assert.Equal("K4ssia", Assert.IsType<TextBox>(identity.FindName("MicrosoftPlayerName")).Text);
+            var accountSelector = Assert.IsType<ComboBox>(identity.FindName("MicrosoftAccountSelector"));
+            Assert.Equal("K4ssia", Assert.IsType<MinecraftAccount>(accountSelector.SelectedItem).Name);
             if (width == 1000) WritePreview(shell, $"navy-online-{viewport}-{(int)(96 * scale)}dpi.png", scale);
             model.Instances.Instances.Clear();
             model.Instances.SelectedInstance = null;
@@ -434,6 +436,11 @@ internal static class NavyThemeChecks
         public bool UseMicrosoftAccount { get => _microsoft; set { _microsoft = value; Changed(); } }
         public string PlayerName { get => _playerName; set { _playerName = value; Changed(); } }
         public object Accounts { get; } = new { AccountName = "K4ssia" };
+        public IReadOnlyList<MinecraftAccount> AvailableMicrosoftAccounts { get; } = [new("11111111222233334444555555555555", "K4ssia")];
+        public MinecraftAccount SelectedMicrosoftAccount { get => AvailableMicrosoftAccounts[0]; set { } }
+        public string LaunchIdentityHint => "启动后自动记住本实例的玩家名与模式。";
+        public bool CanUseCurrentMicrosoftAccount => false;
+        public IRelayCommand UseCurrentMicrosoftAccountCommand { get; } = new RelayCommand(() => { });
         public bool IsGameRunning => IsBusy;
         public int TransferPercent { get; set; }
         public string TransferStatus => "";
@@ -441,11 +448,13 @@ internal static class NavyThemeChecks
         public int SelectedDetailTab { get; set; } = -1;
         public IAsyncRelayCommand LaunchGameCommand { get; }
         public IAsyncRelayCommand ImportCommand { get; } = new AsyncRelayCommand(() => Task.CompletedTask);
+        public IAsyncRelayCommand ImportFolderCommand { get; } = new AsyncRelayCommand(() => Task.CompletedTask);
         public IAsyncRelayCommand ExportCommand { get; } = new AsyncRelayCommand(() => Task.CompletedTask);
         public IRelayCommand RefreshCommand { get; } = new RelayCommand(() => { });
         public IRelayCommand DeleteCommand { get; } = new RelayCommand(() => { });
         public IRelayCommand StopGameCommand { get; } = new RelayCommand(() => { });
         public IRelayCommand ImportCancelCommand { get; } = new RelayCommand(() => { });
+        public IRelayCommand ImportFolderCancelCommand { get; } = new RelayCommand(() => { });
         public IRelayCommand ExportCancelCommand { get; } = new RelayCommand(() => { });
         public IRelayCommand CancelLaunchPreparationCommand { get; } = new RelayCommand(() => { });
         private void Changed() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(null));

@@ -13,6 +13,112 @@ public sealed class MinecraftGameLauncherTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "EML-launch-process-" + Guid.NewGuid().ToString("N"));
 
+    /// <summary>实际创建进程后立即记忆身份，运行通知抵达时已持久化，不等待游戏退出。</summary>
+    [Fact]
+    public async Task StartedIdentityIsRecordedBeforeRunningNotificationAndSurvivesCancellation()
+    {
+        var plan = PowerShellPlan("Start-Sleep -Seconds 120") with { Identity = Identity("RememberMe") };
+        var store = new RecordingIdentityStore();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(25));
+        MinecraftLaunchProgress? running = null;
+        var rememberedCountAtRunning = 0;
+        var before = DateTimeOffset.UtcNow;
+        var progress = new InlineProgress(value =>
+        {
+            if (value.Stage != MinecraftLaunchStage.Running) return;
+            rememberedCountAtRunning = store.Calls.Count;
+            running = value;
+            cancellation.Cancel();
+        });
+
+        var result = await new MinecraftGameLauncher(_root, identityStore: store)
+            .RunPreparedAsync(plan, progress, cancellation.Token);
+
+        Assert.NotNull(running);
+        Assert.Equal(1, rememberedCountAtRunning);
+        var saved = Assert.Single(store.Calls);
+        Assert.Equal(plan.InstancePath, saved.Path);
+        Assert.Equal("RememberMe", saved.Identity.PlayerName);
+        Assert.Equal(saved.Identity, running.Identity);
+        Assert.InRange(saved.Identity.StartedAtUtc, before, DateTimeOffset.UtcNow);
+        Assert.True(result.Started);
+        Assert.True(result.IsCanceled);
+    }
+
+    /// <summary>即使进程很快退出，也记录实际启动身份；这里不把退出零误认为游戏已经加载。</summary>
+    [Fact]
+    public async Task ImmediateExitStillPersistsIdentityUsingProductionStore()
+    {
+        var plan = PowerShellPlan("exit 0") with { Identity = Identity("QuickPlayer") };
+        var store = new MinecraftLaunchSettingsStore(_root);
+        await store.SaveAsync(plan.InstancePath, new() { PlayerName = "SavedName", MaxMemoryMb = 4096 });
+
+        var result = await new MinecraftGameLauncher(_root).RunPreparedAsync(plan);
+        var restored = await store.LoadAsync(plan.InstancePath);
+
+        Assert.True(result.Started);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("QuickPlayer", restored.PlayerName);
+        Assert.False(restored.UseMicrosoftAccount);
+        Assert.Equal(4096, restored.MaxMemoryMb);
+        Assert.Equal("QuickPlayer", restored.LastLaunchIdentity!.PlayerName);
+    }
+
+    /// <summary>操作系统拒绝创建进程时不记忆这次身份，保留上次真实启动信息。</summary>
+    [Fact]
+    public async Task FailedProcessCreationDoesNotRecordIdentity()
+    {
+        var plan = PowerShellPlan("exit 0") with
+        {
+            JavaPath = Path.Combine(_root, "missing-java.exe"), Identity = Identity("NeverStarted")
+        };
+        var store = new RecordingIdentityStore();
+
+        await Assert.ThrowsAsync<Win32Exception>(() => new MinecraftGameLauncher(_root, identityStore: store).RunPreparedAsync(plan));
+
+        Assert.Empty(store.Calls);
+    }
+
+    /// <summary>准备阶段就取消的操作不能被记录为本次游玩身份。</summary>
+    [Fact]
+    public async Task PreCanceledProcessDoesNotRecordIdentity()
+    {
+        var plan = PowerShellPlan("exit 0") with { Identity = Identity("NeverStarted") };
+        var store = new RecordingIdentityStore();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new MinecraftGameLauncher(_root, identityStore: store)
+            .RunPreparedAsync(plan, token: new(true)));
+
+        Assert.Empty(store.Calls);
+    }
+
+    /// <summary>自动记忆失败只产生安全警告；仍消费输出、取得退出码并管理已创建的进程。</summary>
+    [Fact]
+    public async Task IdentityPersistenceFailureDoesNotTerminateOrMisreportProcess()
+    {
+        const string secret = "do-not-show-identity-store-secret";
+        var plan = PowerShellPlan("[Console]::Out.WriteLine('still-running'); exit 7") with { Identity = Identity("RememberMe") };
+        var store = new RecordingIdentityStore { Failure = new IOException(secret) };
+        var seen = new ConcurrentQueue<MinecraftLaunchProgress>();
+
+        var result = await new MinecraftGameLauncher(_root, identityStore: store)
+            .RunPreparedAsync(plan, new InlineProgress(seen.Enqueue));
+
+        Assert.True(result.Started);
+        Assert.False(result.IsCanceled);
+        Assert.Equal(7, result.ExitCode);
+        var running = Assert.Single(seen, item => item.Stage == MinecraftLaunchStage.Running);
+        Assert.NotNull(running.IdentityPersistenceWarning);
+        Assert.NotNull(running.Identity);
+        Assert.Contains(seen, item => item.Message == "still-running");
+        Assert.All(seen, item =>
+        {
+            Assert.DoesNotContain(secret, item.Message);
+            Assert.DoesNotContain(secret, item.IdentityPersistenceWarning ?? "");
+        });
+        Assert.DoesNotContain(secret, await File.ReadAllTextAsync(result.LogPath!));
+    }
+
     /// <summary>同时读取大量 stdout/stderr，保留退出码及日志，不被管道容量限制卡住。</summary>
     [Fact]
     public async Task ProcessDrainsBothStreamsAndPreservesExitCode()
@@ -274,6 +380,24 @@ public sealed class MinecraftGameLauncherTests : IDisposable
         {
             NativesDirectory = Path.Combine(game, "natives")
         };
+    }
+
+    /// <summary>准备时的身份没有启动时刻，执行层应在创建进程后填写真实时间。</summary>
+    private static MinecraftLaunchIdentity Identity(string name) =>
+        new(false, name, MinecraftLaunchPlanner.OfflineUuid(name), default);
+
+    /// <summary>记录公开身份持久化调用；可模拟磁盘失败而不读取真实凭据。</summary>
+    private sealed class RecordingIdentityStore : IMinecraftLaunchIdentityStore
+    {
+        public List<(string Path, MinecraftLaunchIdentity Identity)> Calls { get; } = [];
+        public Exception? Failure { get; init; }
+
+        /// <summary>同步记下调用，使 Running 回调可以验证记忆已经完成。</summary>
+        public Task RememberAsync(string instancePath, MinecraftLaunchIdentity identity, CancellationToken cancellationToken = default)
+        {
+            Calls.Add((instancePath, identity));
+            return Failure is null ? Task.CompletedTask : Task.FromException(Failure);
+        }
     }
 
     /// <summary>检查本次测试记录的进程是否已经退出，进程回收也视为退出。</summary>

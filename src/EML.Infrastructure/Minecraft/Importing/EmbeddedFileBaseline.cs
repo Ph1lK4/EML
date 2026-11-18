@@ -26,7 +26,7 @@ internal static class EmbeddedFileBaseline
         var baseline = manifest.Files.SingleOrDefault(file =>
             string.Equals(file.Path, path, StringComparison.OrdinalIgnoreCase));
         if (baseline is null || baseline.Source != InstanceFileSource.Embedded ||
-            baseline.Origin is not (null or InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport) || baseline.Size is null or < 0 ||
+            baseline.Origin is not (null or InstanceFileOrigin.EmbeddedOverride or InstanceFileOrigin.UserLocalImport or InstanceFileOrigin.LocalFolderImport) || baseline.Size is null or < 0 ||
             !baseline.Hashes.TryGetValue("sha256", out var hash) || hash.Length != 64 || !hash.All(Uri.IsHexDigit))
             throw new InvalidDataException("文件没有可信的原包大小和 SHA-256 记录：" + path);
         return baseline;
