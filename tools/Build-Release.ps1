@@ -20,6 +20,12 @@ if ($version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?$' -or $displayVersion 
     throw 'Invalid release identity in Directory.Build.props.'
 }
 if (-not $IsWindows) { throw 'Build the Windows desktop release on Windows.' }
+# A public package must identify the exact committed source, not an unrecorded working-tree draft.
+$sourceCommit = & git -C $projectRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $sourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'A Git checkout with a committed source revision is required.' }
+$sourceChanges = & git -C $projectRoot status --porcelain --untracked-files=normal
+if ($LASTEXITCODE -ne 0 -or $sourceChanges) { throw 'Commit the reviewed source before creating a release package.' }
+$sourceRepository = 'https://github.com/Ph1lK4/EML'
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot 'artifacts/releases' }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
 $packageName = "EML-$displayVersion-win-x64"
@@ -70,6 +76,31 @@ try {
     foreach ($name in @('START-HERE.txt', 'UPGRADE.txt')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "release-assets/$name") -Destination (Join-Path $payload $name)
     }
+    # Keep EML's own license and user-facing policies alongside third-party notices.
+    foreach ($name in @('LICENSE', 'PRIVACY.md', 'SECURITY.md')) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination (Join-Path $payload $name)
+    }
+    New-Item -ItemType Directory -Path (Join-Path $payload 'docs') | Out-Null
+    foreach ($name in @('uninstall.md', 'code-signing.md', 'release-rc1.md')) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot "docs/$name") -Destination (Join-Path $payload "docs/$name")
+    }
+    @(
+        'EML Launcher - GPL-3.0-or-later',
+        'Copyright (C) 2026 K4ssia and contributors.',
+        'This program is distributed WITHOUT ANY WARRANTY. See LICENSE for the full terms.',
+        "Version: $version", "Source commit: $sourceCommit", "Repository: $sourceRepository",
+        "Exact source: $sourceRepository/tree/$sourceCommit",
+        "Source archive: $sourceRepository/archive/$sourceCommit.zip", '',
+        'Build from the source archive on Windows with the SDK selected by global.json and PowerShell 7:',
+        '  dotnet restore EML.slnx',
+        '  dotnet build EML.slnx -c Release',
+        '  dotnet run --project src/EML.App/EML.App.csproj -c Release',
+        '  dotnet test EML.slnx -c Release',
+        'The source includes tools/Build-Release.ps1 and the credential-free tools/Test-CI.ps1.',
+        'CurseForge developer authorization is not in the public source; source builds can use their own authorization.',
+        'Public Microsoft application configuration is included. No user account credentials are shipped.',
+        'Third-party components retain their own licenses; see LICENSE-DOTNET.txt, LICENSE-MVVM.txt and THIRD-PARTY-NOTICES.txt.'
+    ) -join "`r`n" | Set-Content -LiteralPath (Join-Path $payload 'SOURCE.txt') -Encoding utf8NoBOM
 
     # Preserve upstream notices from restored packages and the SDK selected by global.json.
     $assets = Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'src/EML.App/obj/project.assets.json') | ConvertFrom-Json -AsHashtable
@@ -118,12 +149,19 @@ try {
     $manifest = [ordered]@{
         schemaVersion = 1; version = $version; displayVersion = $displayVersion; runtimeIdentifier = 'win-x64'
         selfContained = $true; runtimeVersion = $runtimeVersion; createdUtc = [DateTime]::UtcNow.ToString('O')
+        sourceCommit = $sourceCommit; sourceRepository = $sourceRepository
         automatedTestsRun = -not $SkipTests; cleanMachineAcceptance = 'pending'; codeSigned = $false
         authorization = 'CurseForge credential intentionally embedded; extractable from a desktop application.'
         files = $entries
     }
     $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $payload 'release-manifest.json') -Encoding utf8NoBOM
     $audit = Test-EmLReleaseLayout -Path $payload -Version $version -DisplayVersion $displayVersion -RuntimeVersion $runtimeVersion
+
+    # Building must not change the committed input while its hash is being stamped into the package.
+    $finalCommit = & git -C $projectRoot rev-parse HEAD
+    if ($LASTEXITCODE -ne 0 -or $finalCommit -ne $sourceCommit) { throw 'Source revision changed during the release build.' }
+    $finalChanges = & git -C $projectRoot status --porcelain --untracked-files=normal
+    if ($LASTEXITCODE -ne 0 -or $finalChanges) { throw 'Source files changed during the release build.' }
 
     $temporaryZip = Join-Path $buildRoot ($packageName + '.zip')
     [IO.Compression.ZipFile]::CreateFromDirectory($payload, $temporaryZip, [IO.Compression.CompressionLevel]::Optimal, $true)

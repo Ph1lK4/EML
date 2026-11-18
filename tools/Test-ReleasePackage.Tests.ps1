@@ -18,13 +18,13 @@ function Assert-Rejected([string] $Name, [scriptblock] $Action) {
     $script:checks++
 }
 
-foreach ($name in @('EML.App.exe', 'EML.Core.dll', 'Microsoft.CSharp.dll', 'System.Private.CoreLib.dll', 'System.dll', 'netstandard.dll', 'mscorlib.dll', 'msquic.dll', 'coreclr.dll', 'START-HERE.txt', 'microsoft-login.json', 'zh-Hans/PresentationFramework.resources.dll')) {
+foreach ($name in @('EML.App.exe', 'EML.Core.dll', 'Microsoft.CSharp.dll', 'System.Private.CoreLib.dll', 'System.dll', 'netstandard.dll', 'mscorlib.dll', 'msquic.dll', 'coreclr.dll', 'START-HERE.txt', 'microsoft-login.json', 'zh-Hans/PresentationFramework.resources.dll', 'LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md', 'docs/uninstall.md', 'docs/code-signing.md', 'docs/release-rc1.md')) {
     Assert-Accepted $name { Test-EmlReleasePath -RelativePath $name }
 }
 foreach ($name in @('instances', 'settings', 'runtimes', 'cache', '.eml-runtime', '.eml-build', 'accounts', 'tests', '.git', 'bin', 'obj')) {
     Assert-Rejected $name { Test-EmlReleasePath -RelativePath $name -Directory }
 }
-foreach ($name in @('private.log', 'session.dpapi', 'curseforge.key', 'trace.binlog', 'EML.App.pdb', 'EML.Tests.dll', 'xunit.assert.dll', 'credentials.json', 'settings.json', 'Program.cs', 'private.txt', 'third-party.exe', 'user-data.dll', '../EML.App.dll', 'C:/EML.App.dll', 'zh-Hans/private.txt', 'zh-Hans/subdir/System.resources.dll')) {
+foreach ($name in @('private.log', 'session.dpapi', 'curseforge.key', 'trace.binlog', 'EML.App.pdb', 'EML.Tests.dll', 'xunit.assert.dll', 'credentials.json', 'settings.json', 'Program.cs', 'private.txt', 'third-party.exe', 'user-data.dll', '../EML.App.dll', 'C:/EML.App.dll', 'zh-Hans/private.txt', 'zh-Hans/subdir/System.resources.dll', 'docs/private.txt', 'docs/nested/uninstall.md')) {
     Assert-Rejected $name { Test-EmlReleasePath -RelativePath $name }
 }
 
@@ -68,6 +68,13 @@ if (-not [string]::IsNullOrWhiteSpace($PackagePath)) {
     Move-Item -LiteralPath $native -Destination $heldNative
     try { Assert-Rejected 'missing native host' { Test-EmlReleaseLayout -Path $fixture } }
     finally { Move-Item -LiteralPath $heldNative -Destination $native }
+    foreach ($requiredNotice in @('LICENSE', 'SOURCE.txt', 'PRIVACY.md', 'SECURITY.md', 'docs/uninstall.md')) {
+        $noticePath = Join-Path $fixture $requiredNotice
+        $heldNotice = Join-Path $temporary ('held-' + [IO.Path]::GetFileName($requiredNotice))
+        Move-Item -LiteralPath $noticePath -Destination $heldNotice
+        try { Assert-Rejected "missing $requiredNotice" { Test-EmlReleaseLayout -Path $fixture } }
+        finally { Move-Item -LiteralPath $heldNotice -Destination $noticePath }
+    }
     $notice = Join-Path $fixture 'THIRD-PARTY-NOTICES.txt'
     $noticeText = [IO.File]::ReadAllText($notice)
     try {
@@ -90,6 +97,13 @@ if (-not [string]::IsNullOrWhiteSpace($PackagePath)) {
         $manifest.files = @($manifest.files | Select-Object -Skip 1)
         [IO.File]::WriteAllText($manifestFile, ($manifest | ConvertTo-Json -Depth 10))
         Assert-Rejected 'incomplete manifest' { Test-EmlReleaseLayout -Path $fixture }
+        $manifest = $manifestText | ConvertFrom-Json -AsHashtable
+        $manifest.sourceCommit = 'not-a-source-revision'
+        [IO.File]::WriteAllText($manifestFile, ($manifest | ConvertTo-Json -Depth 10))
+        Assert-Rejected 'invalid source revision' { Test-EmlReleaseLayout -Path $fixture }
+        $manifest.sourceCommit = '0' * 40
+        [IO.File]::WriteAllText($manifestFile, ($manifest | ConvertTo-Json -Depth 10))
+        Assert-Rejected 'source notice mismatch' { Test-EmlReleaseLayout -Path $fixture }
     } finally { [IO.File]::WriteAllText($manifestFile, $manifestText) }
     Assert-Accepted 'restored fixture' { Test-EmlReleaseLayout -Path $fixture | Out-Null }
 
