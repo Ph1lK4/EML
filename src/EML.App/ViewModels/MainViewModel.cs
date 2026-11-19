@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EML.App.Services;
 
 namespace EML.App.ViewModels;
 
@@ -13,11 +14,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>组合已有功能，并让实例面板与在线模组主页面分别管理可见状态。</summary>
     public MainViewModel(JavaSettingsViewModel java, InstancesViewModel instances, MinecraftAccountViewModel? accounts = null,
-        InstanceDownloadsViewModel? downloads = null, DownloadCenterViewModel? transferCenter = null)
+        InstanceDownloadsViewModel? downloads = null, DownloadCenterViewModel? transferCenter = null,
+        IAppearanceViewModel? appearance = null)
     {
         Java = java; Instances = instances; Accounts = accounts;
         Downloads = downloads;
         TransferCenter = transferCenter;
+        Appearance = appearance;
         Instances.SelectedDetailTab = -1;
         Instances.OnlineMods?.SetActive(false);
         Instances.PropertyChanged += OnInstancesChanged;
@@ -29,6 +32,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public GtnhHubViewModel? Gtnh => Instances.Gtnh;
     public InstanceDownloadsViewModel? Downloads { get; }
     public DownloadCenterViewModel? TransferCenter { get; }
+    public IAppearanceViewModel? Appearance { get; }
 
     /// <summary>独立主页面保留既有索引，启动设置使用单独页面而不依赖菜单位置。</summary>
     public int SelectedPage
@@ -36,7 +40,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         get => _selectedPage;
         set
         {
-            if (_disposed || value is < 0 or > 7 || !SetProperty(ref _selectedPage, value)) return;
+            if (_disposed || value is < 0 or > 8 || !SetProperty(ref _selectedPage, value)) return;
             if (value != 0) CloseInstanceWorkspace();
             Instances.OnlineMods?.SetActive(value == 1);
             Gtnh?.SetActive(value == 4);
@@ -47,6 +51,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(IsLaunchSettingsPage));
             OnPropertyChanged(nameof(IsDownloadsPage));
             OnPropertyChanged(nameof(IsDownloadCenterPage));
+            OnPropertyChanged(nameof(IsAppearancePage));
             OnPropertyChanged(nameof(IsWorkspaceVisible));
         }
     }
@@ -59,6 +64,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool IsLaunchSettingsPage => SelectedPage == 5;
     public bool IsDownloadsPage => SelectedPage == 6;
     public bool IsDownloadCenterPage => SelectedPage == 7;
+    public bool IsAppearancePage => SelectedPage == 8;
 
     /// <summary>工作区可以保留后台任务产生的结果，但只在本地实例页面显示。</summary>
     public bool InstanceWorkspaceOpen
@@ -156,6 +162,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Gtnh?.Dispose();
         Downloads?.SetActive(false);
         TransferCenter?.Dispose();
+        Appearance?.Dispose();
         OpenInstanceSectionCommand.NotifyCanExecuteChanged();
     }
 }

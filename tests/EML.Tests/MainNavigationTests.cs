@@ -180,6 +180,50 @@ public sealed class MainNavigationTests
         Assert.True(app.Main.IsLaunchSettingsPage);
     }
 
+    /// <summary>外观页只改变展示，保留目标实例和启动草稿，也不触发隐藏的在线搜索。</summary>
+    [Fact]
+    public async Task AppearancePageUsesIndependentModelWithoutChangingInstance()
+    {
+        var appearance = new AppearanceLifetime();
+        await using var app = new Harness(appearance);
+        var selected = app.Instances.SelectedInstance;
+        app.Instances.PlayerName = "PendingPlayer";
+        app.Main.OpenInstanceSectionCommand.Execute("details");
+        var changed = new List<string?>();
+        app.Main.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        app.Main.SelectedPage = 8;
+        app.Online.SearchText = "hidden while viewing appearance";
+        await app.Online.SearchTask;
+
+        Assert.Same(appearance, app.Main.Appearance);
+        Assert.True(app.Main.IsAppearancePage);
+        Assert.False(app.Main.IsInstancePage);
+        Assert.False(app.Main.IsWorkspaceVisible);
+        Assert.False(app.Main.InstanceWorkspaceOpen);
+        Assert.Equal(-1, app.Instances.SelectedDetailTab);
+        Assert.Same(selected, app.Instances.SelectedInstance);
+        Assert.Equal("PendingPlayer", app.Instances.PlayerName);
+        Assert.Equal(0, app.Catalog.Searches);
+        Assert.Contains(nameof(MainViewModel.IsAppearancePage), changed);
+        app.Main.SelectedPage = 3;
+        Assert.False(app.Main.IsAppearancePage);
+        Assert.True(app.Main.IsJavaPage);
+        Assert.Equal(0, appearance.DisposeCount);
+    }
+
+    /// <summary>通过无 WPF 接口释放外观对象；重复关闭主模型不能重复释放。</summary>
+    [Fact]
+    public async Task MainDisposesAppearanceExactlyOnce()
+    {
+        var appearance = new AppearanceLifetime();
+        await using var app = new Harness(appearance);
+        Assert.Same(appearance, app.Main.Appearance);
+        app.Main.Dispose();
+        app.Main.Dispose();
+        Assert.Equal(1, appearance.DisposeCount);
+    }
+
     /// <summary>关闭模组面板后切换实例不扫描，重新打开时只读取新的目标实例。</summary>
     [Fact]
     public async Task ReopenedModWorkspaceLoadsCurrentInstanceOnly()
@@ -291,11 +335,11 @@ public sealed class MainNavigationTests
         public MainViewModel Main { get; }
         public OnlineModsViewModel Online => Instances.OnlineMods!;
 
-        public Harness()
+        public Harness(IAppearanceViewModel? appearance = null)
         {
             Instances = new(Services, Services, Services, Services, "C:\\navigation-test", Services, Services,
                 localMods: Services, onlineCatalog: Catalog, onlineInstaller: Installer);
-            Main = new(new JavaSettingsViewModel(Services), Instances);
+            Main = new(new JavaSettingsViewModel(Services), Instances, appearance: appearance);
             Instances.SelectedInstance = Instance();
         }
 
@@ -306,6 +350,13 @@ public sealed class MainNavigationTests
             await Instances.StopModListLoadingAsync();
             Main.Dispose();
         }
+    }
+
+    /// <summary>记录外观对象的释放次数，不引入 WPF 或磁盘服务。</summary>
+    private sealed class AppearanceLifetime : IAppearanceViewModel
+    {
+        public int DisposeCount { get; private set; }
+        public void Dispose() => DisposeCount++;
     }
 
     /// <summary>目录查询立即返回固定身份，不包含任何外部平台访问。</summary>

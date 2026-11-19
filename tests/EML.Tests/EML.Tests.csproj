@@ -26,6 +26,7 @@
     <Compile Include="..\..\src\EML.App\ViewModels\InstancesViewModel.FolderImport.cs" Link="App\InstancesViewModel.FolderImport.cs" />
     <Compile Include="..\..\src\EML.App\Services\IExternalInstanceDialogs.cs" Link="App\IExternalInstanceDialogs.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\MainViewModel.cs" Link="App\MainViewModel.cs" />
+    <Compile Include="..\..\src\EML.App\Services\IAppearanceViewModel.cs" Link="App\IAppearanceViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\InstanceDownloadsViewModel.cs" Link="App\InstanceDownloadsViewModel.cs" />
     <Compile Include="..\..\src\EML.App\ViewModels\DownloadCenterViewModel.cs" Link="App\DownloadCenterViewModel.cs" />
     <Compile Include="..\..\src\EML.App\Services\InstanceCatalogDisplayText.cs" Link="App\InstanceCatalogDisplayText.cs" />

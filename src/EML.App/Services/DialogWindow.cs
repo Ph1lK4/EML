@@ -1,8 +1,10 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Shell;
+using System.Windows.Media;
 using EML.App.Views;
 
 namespace EML.App.Services;
@@ -12,6 +14,8 @@ internal enum DialogTone { Information, Success, Warning, Danger }
 /// <summary>统一模态窗口外观；系统仍负责移动、缩放和模态所有权，按钮只返回用户选择。</summary>
 internal class DialogWindow : Window
 {
+    private readonly ResourceDictionary _highContrastResources = new();
+    private bool _watchingSystemColors;
     internal DialogSurface Surface { get; }
     internal StackPanel Body => Surface.BodyPanel;
     internal WrapPanel Actions => Surface.FooterActions;
@@ -41,45 +45,26 @@ internal class DialogWindow : Window
         Surface.HeadingText.Text = title;
         Surface.SubtitleText.Text = subtitle;
         Surface.SubtitleText.Visibility = subtitle.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        RefreshHighContrastResources();
         ConfigureTone(tone);
         Content = Surface;
         Surface.CloseRequested += (_, _) => Close();
         CancelButton = new Button { Content = "取消", IsCancel = true, IsDefault = true, MinWidth = 88, Margin = new(0, 0, 8, 0) };
         Actions.Children.Add(CancelButton);
         FocusTarget = CancelButton;
+        // 位移仅属于对话框内容；系统窗口、标题栏和模态确认不等待动画。
+        Surface.RenderTransform = new TranslateTransform();
+        UiMotion.SetEnterDistance(Surface, 8);
         UiMotion.SetEnter(Surface, true);
         ContentRendered += OnContentRendered;
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
         Closed += OnClosed;
     }
 
     /// <summary>设置文字和图标的强调色；危险状态同时用明确按钮文案表达，不只依赖颜色。</summary>
     private void ConfigureTone(DialogTone tone)
     {
-        if (SystemParameters.HighContrast)
-        {
-            Surface.Resources["SurfaceBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["WindowBackgroundBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["TextBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["MutedTextBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["BorderBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["AccentBrush"] = SystemColors.HighlightBrush;
-            Surface.Resources["AccentForegroundBrush"] = SystemColors.HighlightTextBrush;
-            Surface.Resources["AccentSoftBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["RaisedSurfaceBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["SelectionBorderBrush"] = SystemColors.HighlightBrush;
-            Surface.Resources["SecondaryAccentBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["HoverBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["FocusSoftBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["DangerBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["DangerSoftBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["DangerBorderBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["SuccessBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["SuccessSoftBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["WarningBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["WarningSoftBrush"] = SystemColors.WindowBrush;
-            Surface.Resources["WarningBorderBrush"] = SystemColors.WindowTextBrush;
-            Surface.Resources["InfoSoftBrush"] = SystemColors.WindowBrush;
-        }
         Surface.ToneIcon.Text = tone switch
         {
             DialogTone.Success => "\uE73E", DialogTone.Danger => "\uEA39", DialogTone.Warning => "\uE7BA", _ => "\uE946"
@@ -94,6 +79,52 @@ internal class DialogWindow : Window
         };
         Surface.ToneTile.SetResourceReference(Border.BackgroundProperty, background);
         Surface.ToneIcon.SetResourceReference(TextBlock.ForegroundProperty, foreground);
+    }
+
+    /// <summary>高对比度仅临时覆盖独立资源字典，退出后重新继承当前的全局主题。</summary>
+    private void RefreshHighContrastResources()
+    {
+        if (!SystemParameters.HighContrast)
+        {
+            Surface.Resources.MergedDictionaries.Remove(_highContrastResources);
+            _highContrastResources.Clear();
+            return;
+        }
+        foreach (var (key, color) in AppearancePalette.Create(false, highContrast: true))
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            _highContrastResources[key] = brush;
+        }
+        _highContrastResources["WallpaperPanelBrush"] = SystemColors.WindowBrush;
+        if (!Surface.Resources.MergedDictionaries.Contains(_highContrastResources))
+            Surface.Resources.MergedDictionaries.Add(_highContrastResources);
+    }
+
+    /// <summary>只在弹窗显示期间监听静态系统事件，未显示的临时弹窗不会被事件长期引用。</summary>
+    private void OnLoaded(object sender, RoutedEventArgs args)
+    {
+        if (!_watchingSystemColors)
+        {
+            SystemParameters.StaticPropertyChanged += OnSystemColorsChanged;
+            _watchingSystemColors = true;
+        }
+        RefreshHighContrastResources();
+    }
+
+    /// <summary>卸载或关闭时对称解除静态监听，重新显示时由 Loaded 恢复。</summary>
+    private void OnUnloaded(object sender, RoutedEventArgs args)
+    {
+        if (!_watchingSystemColors) return;
+        SystemParameters.StaticPropertyChanged -= OnSystemColorsChanged;
+        _watchingSystemColors = false;
+    }
+
+    /// <summary>系统通知可能来自其他线程，已开弹窗在自己的 UI 线程切换高对比度。</summary>
+    private void OnSystemColorsChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName != nameof(SystemParameters.HighContrast) || Dispatcher.HasShutdownStarted) return;
+        _ = Dispatcher.BeginInvoke(new Action(() => { if (_watchingSystemColors) RefreshHighContrastResources(); }));
     }
 
     /// <summary>仅输入类确认显式使用 Enter；其余确认保留取消作为默认操作。</summary>
@@ -118,6 +149,9 @@ internal class DialogWindow : Window
     /// <summary>关闭时停止短动画，确认结果不依赖动画完成事件。</summary>
     private void OnClosed(object? sender, EventArgs args)
     {
+        OnUnloaded(this, new RoutedEventArgs());
+        Loaded -= OnLoaded;
+        Unloaded -= OnUnloaded;
         ContentRendered -= OnContentRendered;
         UiMotion.SetEnter(Surface, false);
     }

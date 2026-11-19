@@ -1,12 +1,12 @@
 # 界面与导航
 
-左侧按任务分组，保留八个主页面：
+左侧按任务分组，提供九个主页面：
 
 - 游玩：本地实例、GTNH 专区。
 - 发现与下载：下载实例、在线模组、下载中心。
-- 环境与设置：微软账号、Java 环境、启动设置。
+- 环境与设置：微软账号、Java 环境、启动设置、外观设置。
 
-左上角使用 EML 文字标识，不使用 GTNH 图标。整体底色为 `#0C111C`，面板与输入框分层使用深蓝色；金色主按钮搭配深色文字，辅助信息为蓝青色，成功、警告、危险各有独立语义色。页面标题 26 号、正文 14 号、辅助文字至少 12 号。
+左上角使用 EML 标识，不使用 GTNH 图标。默认底色为 `#0C111C`，面板与输入框分层使用深蓝色；金色主按钮搭配深色文字，辅助信息为蓝青色，成功、警告、危险各有独立语义色。外观设置支持亮色、跟随系统、自定义颜色和静态壁纸，所有页面共享语义资源；详见 [外观设置](appearance.md)。页面标题 26 号、正文 14 号、辅助文字至少 12 号。
 
 本地实例首页保留导入、刷新和启动。右键某个实例，会先选中该实例，再显示其操作菜单。启动按钮旁的“···”提供相同入口，也可使用键盘菜单键。
 
@@ -38,7 +38,8 @@ GTNH 专区包含“下载本体”“推荐模组”“资源包”“光影”
 
 - `Themes/LauncherTheme.xaml`：共享颜色、卡片和控件样式。
 - `Services/UiMotion.cs`：按钮悬停、按压约 120ms，导航选中约 150ms，页面淡入约 180ms。尊重 Windows 关闭动画和高对比度设置，不改变命令执行规则。
-- `Services/WindowAppearance.cs`：支持的 Windows 系统上让标题栏跟随共享深色配色；保留原生窗口按钮、拖动、缩放与贴靠，不支持时保留系统外观。
+- `Services/AppearanceService.cs`、`AppearancePalette.cs`、`AppearanceSettingsStore.cs`：全局主题资源、可读性保护和本地外观持久化。
+- `Services/WindowAppearance.cs`：支持的 Windows 系统上让标题栏跟随当前配色；保留原生窗口按钮、拖动、缩放与贴靠，不支持时保留系统外观。
 - `MainWindow.xaml`：侧栏、实例列表、右键菜单与面板外壳。
 - `Views/InstanceWorkspaceView.xaml`：实例详情、检查、补全、启动、日志、本地模组和重命名；旧迁移索引保留跳转入口。
 - `Views/OnlineModsView.xaml`、`AccountsView.xaml`、`JavaEnvironmentView.xaml`、`GtnhHubView.xaml`：独立功能页面。

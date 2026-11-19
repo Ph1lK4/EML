@@ -271,12 +271,12 @@ internal static class NavyThemeChecks
         return shell;
     }
 
-    /// <summary>验证八个原页面仍可导航、已选实例正确显示、主动作和身份输入在最小窗口内可见。</summary>
+    /// <summary>验证原页面与新增外观入口仍可导航，主动作和身份输入在最小窗口内可见。</summary>
     private static void VerifyShell(NavyShellHost shell, ShellModel model)
     {
         var navigation = Assert.IsType<ListBox>(shell.FindName("NavigationList"));
         var pages = navigation.Items.OfType<ListBoxItem>().Where(item => item.Tag is int).ToArray();
-        Assert.Equal(new[] { 0, 4, 6, 1, 7, 2, 3, 5 }, pages.Select(item => (int)item.Tag).ToArray());
+        Assert.Equal(new[] { 0, 4, 6, 1, 7, 2, 3, 5, 8 }, pages.Select(item => (int)item.Tag).ToArray());
         foreach (var page in pages) AssertInside(page, navigation, $"导航：{page.Tag}");
         navigation.SetCurrentValue(Selector.SelectedValueProperty, 3);
         Assert.Equal(3, model.SelectedPage);
@@ -286,11 +286,22 @@ internal static class NavyThemeChecks
         var list = Assert.IsType<ListBox>(shell.FindName("InstanceList"));
         Assert.Same(model.Instances.SelectedInstance, list.SelectedItem);
         Assert.True(list.ActualHeight >= 110, "最小窗口仍应至少容纳实例行，不能被固定头部挤掉。");
-        var launch = Descendants(shell).OfType<Button>().Single(button =>
-            BindingOperations.GetBinding(button, Button.CommandProperty)?.Path.Path == "Instances.LaunchGameCommand");
+        var launch = Assert.IsType<Button>(shell.FindName("LaunchGameButton"));
+        Assert.Same(model.Instances, launch.DataContext);
+        Assert.Same(model.Instances.LaunchGameCommand, launch.Command);
+        Assert.Equal("▶  启动游戏", launch.Content);
         AssertInside(launch, shell, "启动游戏");
         Assert.True(launch.IsEnabled);
         Assert.True(Contrast(((SolidColorBrush)launch.Foreground).Color, ((SolidColorBrush)launch.Background).Color) >= 4.5);
+        model.Instances.IsPreparingLaunch = true;
+        Assert.Equal("正在准备…", launch.Content);
+        model.Instances.IsPreparingLaunch = false;
+        model.Instances.IsBusy = true;
+        Assert.Equal("进程运行中", launch.Content);
+        Assert.False(launch.IsEnabled);
+        Assert.Equal(Brush("TextBrush").Color, ((SolidColorBrush)launch.Foreground).Color);
+        model.Instances.IsBusy = false;
+        Assert.Equal("▶  启动游戏", launch.Content);
         var identity = Assert.IsType<LaunchIdentitySelector>(shell.FindName("InstanceLaunchIdentity"));
         var player = Assert.IsType<TextBox>(identity.FindName("PlayerNameInput"));
         Assert.Equal("Steve", player.Text);
@@ -387,6 +398,7 @@ internal static class NavyThemeChecks
         public object? Gtnh => null;
         public object? Downloads => null;
         public object? TransferCenter => null;
+        public object? Appearance => null;
         public bool IsWorkspaceVisible => false;
         public IRelayCommand OpenInstanceSectionCommand { get; } = new RelayCommand(() => { });
         public IRelayCommand CloseInstanceWorkspaceCommand { get; } = new RelayCommand(() => { });
@@ -403,6 +415,7 @@ internal static class NavyThemeChecks
         public bool IsLaunchSettingsPage => SelectedPage == 5;
         public bool IsDownloadsPage => SelectedPage == 6;
         public bool IsDownloadCenterPage => SelectedPage == 7;
+        public bool IsAppearancePage => SelectedPage == 8;
     }
 
     /// <summary>提供真实实例模型及内存身份偏好；命令只用于验证状态和绑定，不执行副作用。</summary>
@@ -411,6 +424,7 @@ internal static class NavyThemeChecks
         private MinecraftInstance? _selected;
         private bool _microsoft;
         private bool _isBusy;
+        private bool _isPreparingLaunch;
         private string _playerName = "Steve";
         public event PropertyChangedEventHandler? PropertyChanged;
         public ObservableCollection<MinecraftInstance> Instances { get; } =
@@ -442,6 +456,8 @@ internal static class NavyThemeChecks
         public bool CanUseCurrentMicrosoftAccount => false;
         public IRelayCommand UseCurrentMicrosoftAccountCommand { get; } = new RelayCommand(() => { });
         public bool IsGameRunning => IsBusy;
+        public bool IsPreparingLaunch { get => _isPreparingLaunch; set { _isPreparingLaunch = value; Changed(); } }
+        public string LaunchStatus => IsGameRunning ? "游戏进程已启动，请在游戏窗口确认加载结果。" : "正在准备启动配置与 Java……";
         public int TransferPercent { get; set; }
         public string TransferStatus => "";
         public string StatusText => IsGameRunning ? "游戏正在运行，退出游戏后可继续管理实例。" : $"已找到 {Instances.Count} 个本地实例。";
