@@ -117,7 +117,7 @@
                 <Style.Triggers><DataTrigger Binding="{Binding Projects.Count}" Value="0"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
               </Style>
             </StackPanel.Style>
-            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" Margin="0,0,0,14"/>
+            <TextBlock Text="&#xE721;" FontFamily="Segoe MDL2 Assets" FontSize="28" Foreground="{DynamicResource AccentTextBrush}" HorizontalAlignment="Center" Margin="0,0,0,14"/>
             <TextBlock Text="寻找你的下一个模组" FontSize="15" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"/>
             <TextBlock Text="输入中文或英文关键词，&#x0a;也可以调整版本和分类。" Foreground="{DynamicResource MutedTextBrush}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,8,0,0" LineHeight="22"/>
           </StackPanel>
@@ -135,7 +135,7 @@
             </StackPanel.Style>
             <TextBlock Text="选择一个模组" FontSize="20" FontWeight="SemiBold" TextAlignment="Center"/>
             <TextBlock Text="在这里查看介绍、选择兼容版本，&#x0a;并预览需要下载的文件和依赖。" Foreground="{DynamicResource MutedTextBrush}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,10,0,0" LineHeight="24"/>
-            <TextBlock Text="{Binding TargetText}" Foreground="{DynamicResource AccentBrush}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,20,0,0"/>
+            <TextBlock Text="{Binding TargetText}" Foreground="{DynamicResource AccentTextBrush}" TextAlignment="Center" TextWrapping="Wrap" Margin="0,20,0,0"/>
           </StackPanel>
           <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,6,0">
             <ScrollViewer.Style>
@@ -202,7 +202,7 @@
           </WrapPanel>
           <Border Background="{DynamicResource AccentSoftBrush}" Padding="14" Margin="0,4,0,16" CornerRadius="10">
             <StackPanel>
-              <TextBlock Text="安装清单" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" Margin="0,0,0,8"/>
+              <TextBlock Text="安装清单" FontWeight="SemiBold" Foreground="{DynamicResource AccentTextBrush}" Margin="0,0,0,8"/>
               <TextBlock Text="{Binding PlanSummary}" TextWrapping="Wrap"/>
               <TextBox Text="{Binding PlanDetails, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" MaxHeight="200" VerticalScrollBarVisibility="Auto" Margin="0,6,0,0"/>
               <TextBlock Text="更改版本、文件或依赖选择后，需要重新生成清单。原包文件不会被自动替换。" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" Margin="0,6,0,0"/>

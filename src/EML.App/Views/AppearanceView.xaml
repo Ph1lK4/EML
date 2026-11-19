@@ -1,0 +1,75 @@
+<UserControl x:Class="EML.App.Views.AppearanceView" Style="{StaticResource {x:Type UserControl}}"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:services="clr-namespace:EML.App.Services">
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel Margin="0,0,0,20">
+   <Button DockPanel.Dock="Right" Content="恢复默认" Command="{Binding ResetCommand}" Style="{StaticResource QuietButton}" VerticalAlignment="Top" Margin="16,0,0,0"/>
+   <StackPanel><TextBlock Text="外观设置" Style="{StaticResource PageTitle}"/><TextBlock Text="选一种舒服的配色，让 EML 更像你的启动器。" Style="{StaticResource PageSubtitle}"/></StackPanel>
+  </DockPanel>
+  <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="0,0,8,0">
+   <StackPanel IsEnabled="{Binding CanInteract}">
+    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+     <StackPanel>
+      <TextBlock Text="界面主题" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
+      <TextBlock Text="页面、菜单、输入框和弹窗会一起切换。" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14"/>
+      <ComboBox x:Name="ThemeSelector" ItemsSource="{Binding ThemeModes}" SelectedIndex="{Binding ThemeIndex}" MaxWidth="320" HorizontalAlignment="Left" MinWidth="240" AutomationProperties.Name="界面主题"/>
+     </StackPanel>
+    </Border>
+    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+     <StackPanel>
+      <TextBlock Text="配色" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
+      <TextBlock Text="强调色用于主按钮和选中状态；背景色留空则跟随主题。文字会自动搭配。" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14"/>
+      <WrapPanel>
+       <StackPanel Width="230" Margin="0,0,20,12"><TextBlock Text="强调色" Margin="0,0,0,6"/>
+        <TextBox x:Name="AccentInput" Text="{Binding AccentText, UpdateSourceTrigger=PropertyChanged}" MaxLength="7" AutomationProperties.Name="强调色色值" ToolTip="输入 #RRGGBB，例如 #F0C94D"/>
+       </StackPanel>
+       <StackPanel Width="230" Margin="0,0,0,12"><TextBlock Text="背景色（可选）" Margin="0,0,0,6"/>
+        <TextBox x:Name="BackgroundInput" Text="{Binding BackgroundText, UpdateSourceTrigger=PropertyChanged}" MaxLength="7" AutomationProperties.Name="自定义背景色色值" ToolTip="留空则使用当前主题默认背景"/>
+       </StackPanel>
+      </WrapPanel>
+      <WrapPanel Margin="0,0,0,12">
+       <Button Content="金色" Command="{Binding SelectAccentCommand}" CommandParameter="#F0C94D" Margin="0,0,8,8"/>
+       <Button Content="蓝色" Command="{Binding SelectAccentCommand}" CommandParameter="#4285F4" Margin="0,0,8,8"/>
+       <Button Content="青绿" Command="{Binding SelectAccentCommand}" CommandParameter="#32BCA4" Margin="0,0,8,8"/>
+       <Button Content="紫色" Command="{Binding SelectAccentCommand}" CommandParameter="#A78BFA" Margin="0,0,8,8"/>
+       <Button Content="珊瑚" Command="{Binding SelectAccentCommand}" CommandParameter="#F08080" Margin="0,0,8,8"/>
+      </WrapPanel>
+      <TextBlock Text="{Binding ColorStatusText}" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,0,0,10" AutomationProperties.LiveSetting="Polite"/>
+      <Button x:Name="ApplyColorsButton" Content="应用配色" Command="{Binding ApplyColorsCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left"/>
+     </StackPanel>
+    </Border>
+    <Border Style="{StaticResource CardBorder}" Margin="0,0,0,8">
+     <StackPanel>
+      <TextBlock Text="静态壁纸" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,6"/>
+      <TextBlock Text="支持 PNG、JPG，最大 25 MB。导入后保存独立副本，不修改原图。" Style="{StaticResource PageSubtitle}" Margin="0,0,0,14"/>
+      <Border Height="128" CornerRadius="8" ClipToBounds="True" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" Margin="0,0,0,12">
+       <Grid Background="{DynamicResource WindowBackgroundBrush}">
+        <Border Background="{DynamicResource WallpaperBrush}"/>
+        <Border Background="{DynamicResource BackgroundOverlayBrush}"/>
+        <Border Background="{DynamicResource SurfaceBrush}" CornerRadius="6" Padding="16,10" HorizontalAlignment="Center" VerticalAlignment="Center">
+         <StackPanel Orientation="Horizontal"><Border Width="6" CornerRadius="3" Background="{DynamicResource AccentBrush}" Margin="0,0,12,0"/><StackPanel><TextBlock Text="EML" FontWeight="SemiBold"/><TextBlock Text="{Binding WallpaperName}" Foreground="{DynamicResource MutedTextBrush}" Margin="0,3,0,0"/></StackPanel></StackPanel>
+        </Border>
+       </Grid>
+      </Border>
+      <WrapPanel Margin="0,0,0,16">
+       <Button x:Name="ChooseWallpaperButton" Content="选择图片…" Command="{Binding ChooseWallpaperCommand}" Margin="0,0,8,8"/>
+       <Button Content="移除壁纸" Command="{Binding RemoveWallpaperCommand}" Style="{StaticResource QuietButton}" Margin="0,0,0,8" IsEnabled="{Binding HasWallpaper}"/>
+      </WrapPanel>
+      <TextBlock Text="显示方式" Margin="0,0,0,6"/>
+      <ComboBox x:Name="WallpaperFitSelector" ItemsSource="{Binding FitModes}" SelectedIndex="{Binding FitIndex}" HorizontalAlignment="Left" MinWidth="240" Margin="0,0,0,16" AutomationProperties.Name="壁纸显示方式"/>
+      <DockPanel><TextBlock DockPanel.Dock="Right" Text="{Binding OverlayPercent, StringFormat={}{0:0}%}" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock Text="背景遮罩强度（最低值）"/></DockPanel>
+      <Slider x:Name="OverlaySlider" Minimum="35" Maximum="90" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding OverlayPercent}" Margin="0,8,0,14" AutomationProperties.Name="背景遮罩强度" Thumb.DragCompleted="OnSliderCommitted" PreviewKeyUp="OnSliderKeyUp" LostKeyboardFocus="OnSliderLostFocus"/>
+      <DockPanel><TextBlock DockPanel.Dock="Right" Text="{Binding PanelPercent, StringFormat={}{0:0}%}" Foreground="{DynamicResource MutedTextBrush}"/><TextBlock Text="侧栏与卡片不透明度"/></DockPanel>
+      <Slider x:Name="PanelSlider" Minimum="88" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding PanelPercent}" Margin="0,8,0,12" AutomationProperties.Name="侧栏与卡片不透明度" Thumb.DragCompleted="OnSliderCommitted" PreviewKeyUp="OnSliderKeyUp" LostKeyboardFocus="OnSliderLostFocus"/>
+      <TextBlock Text="遮罩会按配色自动加强以保证文字清晰；输入框、菜单和弹窗保持实色。系统高对比度模式下不显示壁纸。" Style="{StaticResource PageSubtitle}"/>
+     </StackPanel>
+    </Border>
+   </StackPanel>
+  </ScrollViewer>
+  <Border Grid.Row="2" Background="{DynamicResource SurfaceBrush}" CornerRadius="8" Padding="12" Margin="0,12,0,0">
+   <TextBlock x:Name="AppearanceStatus" Text="{Binding StatusText}" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" AutomationProperties.LiveSetting="Polite"/>
+  </Border>
+ </Grid>
+</UserControl>

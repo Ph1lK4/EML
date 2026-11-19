@@ -32,7 +32,7 @@
                   <Grid Margin="8,10">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="42"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <Border Width="30" Height="30" CornerRadius="8" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Top">
-                      <TextBlock Text="J" FontWeight="SemiBold" FontSize="17" Foreground="{DynamicResource AccentBrush}"
+                      <TextBlock Text="J" FontWeight="SemiBold" FontSize="17" Foreground="{DynamicResource AccentTextBrush}"
                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                     <StackPanel Grid.Column="1">

@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private readonly InstanceCatalog _instanceCatalog;
     private readonly WpfOperationNotifications _notifications;
     private readonly ScopedOperationNotifications _operationNotifications;
+    private readonly AppearanceService _appearance;
     private bool _waitingForCleanup;
     private bool _closingAfterCleanup;
     /// <summary>创建页面依赖、设置绑定对象，并注册首次显示事件。</summary>
@@ -49,6 +50,10 @@ public partial class MainWindow : Window
         _notifications = new WpfOperationNotifications(this);
         _operationNotifications = new ScopedOperationNotifications(_notifications);
         var launcherRoot = GetLauncherRoot();
+        // 外观初始化只更新资源，不弹窗，也不访问实例或账号。
+        _appearance = new AppearanceService(launcherRoot);
+        var appearance = new AppearanceViewModel(_appearance, ChooseWallpaper,
+            Path.Combine(launcherRoot, "settings", "appearance.json"), _operationNotifications);
         var bandwidth = new DownloadBandwidthLimiter();
         _fileDownloader = new HttpFileDownloader(new FileDownloadOptions
         {
@@ -98,7 +103,7 @@ public partial class MainWindow : Window
         var transferCenter = _operationNotifications.RunInitialization(() => new DownloadCenterViewModel(_downloadCenter,
             new System.Windows.Threading.DispatcherSynchronizationContext(Dispatcher), notifications: _operationNotifications,
             settingsPath: Path.Combine(launcherRoot, "settings", "downloads.json")));
-        DataContext = new MainViewModel(java, instances, accounts, downloads, transferCenter);
+        DataContext = new MainViewModel(java, instances, accounts, downloads, transferCenter, appearance);
         ContentRendered += OnFirstContentRendered;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
@@ -169,6 +174,7 @@ public partial class MainWindow : Window
     {
         _notifications.Dispose();
         if (DataContext is MainViewModel viewModel) viewModel.Dispose();
+        _appearance.Dispose();
         _javaRuntimes.Dispose(); _instanceCatalog.Dispose(); _gtnhPacks.Dispose(); _gtnhAddons.Dispose(); _fileDownloader.Dispose(); _accountService.Dispose(); _modrinth.Dispose(); _curseForge.Dispose(); _modIcons.Dispose();
     }
 
@@ -208,6 +214,17 @@ public partial class MainWindow : Window
     private void OnOpenDownloads(object sender, RoutedEventArgs e)
     {
         if (DataContext is MainViewModel viewModel) viewModel.SelectedPage = 6;
+    }
+
+    /// <summary>仅选择本地静态图片；格式、尺寸和内容仍由壁纸服务校验。</summary>
+    private string? ChooseWallpaper()
+    {
+        var picker = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择 EML 壁纸", Filter = "静态图片 (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg",
+            CheckFileExists = true, Multiselect = false
+        };
+        return picker.ShowDialog(this) == true ? picker.FileName : null;
     }
 
     /// <summary>点击遮罩收起面板；面板内的点击不会被当成关闭操作。</summary>

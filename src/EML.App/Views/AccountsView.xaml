@@ -11,7 +11,7 @@
           <Grid.ColumnDefinitions><ColumnDefinition Width="72"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
           <Border Width="52" Height="52" CornerRadius="16" Background="{DynamicResource AccentSoftBrush}" VerticalAlignment="Top">
             <TextBlock Text="&#xE77B;" FontFamily="Segoe MDL2 Assets" FontSize="24"
-                       Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                       Foreground="{DynamicResource AccentTextBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
           </Border>
           <StackPanel Grid.Column="1">
             <TextBlock Text="默认正版账号" Foreground="{DynamicResource MutedTextBrush}" Margin="0,0,0,4"/>

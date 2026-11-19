@@ -45,7 +45,7 @@ public sealed class LauncherViewsSmokeTests
         }) { IsBackground = true, Name = "EML view smoke test" };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await completion.Task.WaitAsync(TimeSpan.FromSeconds(60));
     }
 
     /// <summary>整项测试只创建一个 Application，不运行 App 启动入口，不构造业务服务。</summary>
@@ -62,6 +62,7 @@ public sealed class LauncherViewsSmokeTests
             BrandingChecks.Run();
             WorkspaceAccessibilityChecks.Run();
             var host = new Border { Width = 720, Height = 520 };
+            UiMotionChecks.Run(host);
             var selection = new WorkspaceSelection();
             var workspace = new InstanceWorkspaceView { DataContext = selection, Visibility = Visibility.Collapsed };
             host.Child = workspace;
@@ -79,7 +80,7 @@ public sealed class LauncherViewsSmokeTests
                 Assert.Contains(VisualDescendants(workspace), item => ReferenceEquals(item, content));
             }
 
-            foreach (var page in new UserControl[] { new OnlineModsView(), new AccountsView(), new JavaEnvironmentView(), new LaunchSettingsView(), new InstanceDownloadsView(), new DownloadCenterView(), new GtnhHubView() })
+            foreach (var page in new UserControl[] { new OnlineModsView(), new AccountsView(), new JavaEnvironmentView(), new LaunchSettingsView(), new InstanceDownloadsView(), new DownloadCenterView(), new GtnhHubView(), new AppearanceView() })
             {
                 host.Child = page;
                 LayoutAndVerify(host, page);
@@ -98,6 +99,8 @@ public sealed class LauncherViewsSmokeTests
             VerifyDownloadCenterPage(host);
             host.Child = null;
             DialogAppearanceChecks.Run();
+            // 主题回归会建立独立资源宿主，避免已关闭的测试窗口影响后续离屏页面继承。
+            AppearanceChecks.Run(new Border { Width = 720, Height = 520 });
             Assert.Empty(application.Windows.Cast<Window>());
         }
         finally { application.Shutdown(); }

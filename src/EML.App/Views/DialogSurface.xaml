@@ -12,7 +12,7 @@
    <Grid Margin="18,0,8,0">
     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" IsHitTestVisible="False">
      <Border Background="{DynamicResource AccentSoftBrush}" CornerRadius="6" Width="24" Height="24" Margin="0,0,8,0">
-      <TextBlock Text="E" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      <TextBlock Text="E" Foreground="{DynamicResource AccentTextBrush}" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
      </Border>
      <TextBlock Text="EML" Foreground="{DynamicResource MutedTextBrush}" FontSize="12" VerticalAlignment="Center"/>
     </StackPanel>
