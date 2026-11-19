@@ -5,7 +5,7 @@ using EML.App.Services;
 namespace EML.App.ViewModels;
 
 /// <summary>管理外观页的输入、即时预览和持久化；不接触游戏实例与登录状态。</summary>
-public sealed partial class AppearanceViewModel : ObservableObject, IDisposable
+public sealed partial class AppearanceViewModel : ObservableObject, IAppearanceViewModel
 {
     private readonly AppearanceService _service;
     private readonly Func<string?> _chooseWallpaper;

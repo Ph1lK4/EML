@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
+using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using EML.App.Services;
@@ -28,6 +29,7 @@ internal static class AppearanceChecks
             VerifyRuntimeResources(host, directory);
             VerifyPersistenceAndWallpaper(directory);
             VerifyViewModel(Path.Combine(directory, "view-model"));
+            VerifyInterfaceBinding(Path.Combine(directory, "interface-binding"));
             VerifyBusinessViewThemes(Path.Combine(directory, "business-views"));
             VerifyAppearanceView(Path.Combine(directory, "view-preview"));
         }
@@ -221,6 +223,40 @@ internal static class AppearanceChecks
         Assert.False(File.Exists(Path.Combine(failedDirectory, "settings", "appearance.json")));
     }
 
+    /// <summary>接口属性仍把真实外观对象交给 WPF，主题选项、双向输入和命令不能失去绑定。</summary>
+    private static void VerifyInterfaceBinding(string directory)
+    {
+        using var service = new AppearanceService(directory, watchSystemTheme: false);
+        using var model = new AppearanceViewModel(service, () => null,
+            Path.Combine(directory, "settings", "appearance.json"));
+        Assert.Equal(typeof(IAppearanceViewModel), typeof(MainViewModel).GetProperty(nameof(MainViewModel.Appearance))!.PropertyType);
+        var view = new AppearanceView();
+        var host = new Border { Width = 1000, Height = 760, Child = view };
+        using var owner = new WindowLifetime(new Window { Content = host });
+        view.SetBinding(FrameworkElement.DataContextProperty, new Binding(nameof(MainViewModel.Appearance))
+        {
+            Source = new AppearanceBindingHost(model)
+        });
+        Layout(host);
+        Assert.Same(model, view.DataContext);
+        var selector = Assert.IsType<ComboBox>(view.FindName("ThemeSelector"));
+        Assert.Same(model.ThemeModes, selector.ItemsSource);
+        selector.SetCurrentValue(Selector.SelectedIndexProperty, (int)AppearanceThemeMode.Light);
+        selector.GetBindingExpression(Selector.SelectedIndexProperty)!.UpdateSource();
+        Assert.Equal(AppearanceThemeMode.Light, service.Settings.ThemeMode);
+        var input = Assert.IsType<TextBox>(view.FindName("AccentInput"));
+        input.SetCurrentValue(TextBox.TextProperty, "#32BCA4");
+        input.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+        Assert.Equal("#32BCA4", model.AccentText);
+        var apply = Assert.IsType<Button>(view.FindName("ApplyColorsButton"));
+        Assert.Same(model.ApplyColorsCommand, apply.Command);
+        Assert.True(apply.Command.CanExecute(null));
+        apply.Command.Execute(null);
+        Layout(host);
+        Assert.Equal("#32BCA4", service.Settings.AccentHex);
+        Assert.False(model.HasPendingColors);
+    }
+
     /// <summary>业务页共用同一应用色板，深浅模式均加载所有主页面与八个实例工作区。</summary>
     private static void VerifyBusinessViewThemes(string directory)
     {
@@ -411,6 +447,9 @@ internal static class AppearanceChecks
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var output = File.Create(Path.Combine(directory, filename)); encoder.Save(output);
     }
+
+    /// <summary>模拟主模型的接口属性，绑定继续按实际运行时外观对象解析。</summary>
+    private sealed record AppearanceBindingHost(IAppearanceViewModel Appearance);
 
     /// <summary>保证即使断言失败，也会关闭未显示菜单的临时弹出状态。</summary>
     private sealed class MenuLifetime(ContextMenu menu) : IDisposable

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EML.App.Services;
 
 namespace EML.App.ViewModels;
 
@@ -14,7 +15,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>组合已有功能，并让实例面板与在线模组主页面分别管理可见状态。</summary>
     public MainViewModel(JavaSettingsViewModel java, InstancesViewModel instances, MinecraftAccountViewModel? accounts = null,
         InstanceDownloadsViewModel? downloads = null, DownloadCenterViewModel? transferCenter = null,
-        AppearanceViewModel? appearance = null)
+        IAppearanceViewModel? appearance = null)
     {
         Java = java; Instances = instances; Accounts = accounts;
         Downloads = downloads;
@@ -31,7 +32,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public GtnhHubViewModel? Gtnh => Instances.Gtnh;
     public InstanceDownloadsViewModel? Downloads { get; }
     public DownloadCenterViewModel? TransferCenter { get; }
-    public AppearanceViewModel? Appearance { get; }
+    public IAppearanceViewModel? Appearance { get; }
 
     /// <summary>独立主页面保留既有索引，启动设置使用单独页面而不依赖菜单位置。</summary>
     public int SelectedPage
